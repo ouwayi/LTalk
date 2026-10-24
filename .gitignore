@@ -1,0 +1,28 @@
+# Java build outputs and caches
+target/
+build/
+out/
+.gradle/
+*.class
+
+# Local IDE settings
+.idea/
+*.iml
+
+# Logs and temporary files
+logs/
+*.log
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local secrets (keep only sanitized examples in Git)
+.env
+.env.*
+!.env.example
+!.env.sample
+*.key
+*.pem
+*.p12
+*.pfx
