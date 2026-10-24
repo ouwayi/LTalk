@@ -1,0 +1,117 @@
+# LTalk 局域网聊天室
+
+按《局域网聊天项目任务拆解》实现的 Java 课程项目 MVP。一个 TCP 服务端、多个 Swing 桌面客户端，无数据库、无需配置账号。
+
+已实现：多人群聊（含发送者回显）、服务端中转私聊（只发双方）、在线列表、唯一名称登录、输入与协议校验、主动退出、异常断线清理、手动重连。网络连接、收发均在后台，界面在 Swing EDT 更新。私聊对象离线时保留草稿并禁用发送，必须明确重新选择目标。
+
+## 环境与构建
+
+- **JDK 17 或更高版本**，须包含 `java`、`javac`；客户端需要图形桌面环境。
+- **Maven 3.9.x**（Windows 可使用下面的脚本自动下载固定的 3.9.9）。
+- 固定依赖：Gson **2.11.0**、JUnit Jupiter **5.11.4**（仅测试）。
+- 实际验证环境：Windows、JDK **25.0.4**、Maven **3.9.9**，以 `--release 17` 编译；没有在 JDK 17 运行时实测。
+
+在项目根目录运行：
+
+```powershell
+# Windows PowerShell：自动准备 Maven，构建并执行所有测试
+powershell -NoProfile -File .\build.ps1
+
+# 只运行测试
+powershell -NoProfile -File .\build.ps1 test
+```
+
+脚本首次运行需要联网，将校验过的 Maven 和所有依赖放在 `.tools/`；不会将工具、缓存、JAR 提交到 Git。如果本机脚本执行策略阻止运行，可使用已安装 Maven 的通用命令：
+
+```sh
+mvn clean package
+mvn test
+```
+
+构建产物 `target/ltalk-1.0.0.jar` **已包含运行依赖**。复制这个 JAR 到其他装有 Java 17+ 的设备即可运行，无需再安装 Maven。不要使用 `original-ltalk-1.0.0.jar`。
+
+## 启动与操作
+
+先启动服务端：
+
+```sh
+java -jar target/ltalk-1.0.0.jar
+# 可选参数：端口、监听 IP、最大连接数（包含未登录连接）
+java -jar target/ltalk-1.0.0.jar 9000 0.0.0.0 20
+```
+
+默认监听所有网卡的 TCP **9000** 端口、最多 **20** 个连接；按 Ctrl+C 关闭。未完成登录的连接在 **10 秒**绝对期限后关闭，正常登录用户不会因聊天空闲被断开。
+
+如需显示接受连接、请求类型和路由错误等调试日志（不记录聊天正文）：
+
+```sh
+java -Djava.util.logging.config.file=docs/logging.properties -jar target/ltalk-1.0.0.jar
+```
+
+分别在三个终端启动客户端，也可只启动一个后手动填写连接信息：
+
+```sh
+java -cp target/ltalk-1.0.0.jar cn.ltalk.client.ChatWindow 127.0.0.1 9000 alice
+java -cp target/ltalk-1.0.0.jar cn.ltalk.client.ChatWindow 127.0.0.1 9000 bob
+java -cp target/ltalk-1.0.0.jar cn.ltalk.client.ChatWindow 127.0.0.1 9000 carol
+```
+
+1. 输入 IP、端口和用户标识，点击「连接」；收到登录成功后才启用发送。
+2. 默认发送到群聊；输入纯文本后点击「发送」或按 **Ctrl+Enter**，Enter 可换行。
+3. 在右侧选择其他用户进入私聊；发送目标标签会显示用户名称。点击「切回群聊」明确切回公共聊天室。
+4. 成功提交发送队列后清空输入；正式聊天记录只显示服务端回显的一份消息。队列提交不等于已确认送达，错误会显示在状态区和消息区，不自动重发。
+5. 点击「断开」或关闭窗口退出；检测到服务端停止/连接故障后可手动重新连接。
+
+名称去首尾空白后为 1～20 位英文字母、数字或下划线，区分大小写；重名拒绝新连接。正文不能全为空白，最长 2000 个 Java `char` 单元（常见 emoji 占两个）；帧同时受 16 KiB UTF-8 限制。
+
+## 局域网使用
+
+服务端用 `0.0.0.0` 或本机网卡地址监听。在服务端运行 `ipconfig`，找到同一局域网的 IPv4，例如 `192.168.1.20`。**其他设备的客户端填服务端 IPv4，不能填 `127.0.0.1` 或 `0.0.0.0`。**
+
+仅在需要的网络配置下允许 Java 或指定 TCP 端口入站；无需关闭整机防火墙。确认设备接入同一可互访网络、无线 AP 未启用客户端隔离。远端设备可用 Windows `Test-NetConnection <服务端IP> -Port 9000` 排查连通性。
+
+本次实现没有可控制的第二台局域网设备，**多机局域网实测仍为「未验证」**；请按 [测试记录与验收清单](docs/test-report.md) 完成 Q16 和 Q17 后再作为完整课程验收交付。
+
+## 测试
+
+```powershell
+# Windows：10 个真实 Socket 客户端持续 10 分钟
+powershell -NoProfile -File .\build.ps1 '-Dtest=LoadTest' '-Dltalk.soak.seconds=600' test
+```
+
+```sh
+# 已安装 Maven 的等价命令
+mvn -Dtest=LoadTest -Dltalk.soak.seconds=600 test
+```
+
+常规测试包含 2 秒的 10 客户端短回归；上面的命令单独执行 10 分钟观察。JUnit 报告位于 `target/surefire-reports/`（后续运行会覆盖）。该测试使用独立测试进程中的临时端口，只验证本机 TCP，不代替多机测试。源码覆盖帧边界、中文/emoji/换行、错误类型、身份绑定、并发注册、群聊回显、私聊隔离、退出/重连、登录期限、连接上限、旧回调和列表版本。
+
+## 文档与结构
+
+```text
+src/main/java/cn/ltalk/
+  common/   消息模型、Gson JSON 编解码、有限长读取、公共校验
+  server/   监听、连接会话、注册表、消息路由
+  client/   异步网络客户端、事件接口、会话目标状态、Swing 窗口
+src/test/java/cn/ltalk/  单元测试、真实 TCP 集成测试、负载观察
+docs/                   需求、协议、设计、测试与演示
+```
+
+- [需求与用户流程](docs/requirements.md)
+- [通信协议与错误码](docs/protocol.md)
+- [架构、线程与关键设计](docs/design.md)
+- [测试结果、证据与待验收项](docs/test-report.md)
+- [课程报告与演示脚本](docs/course-report.md)
+
+## 常见问题与边界
+
+| 现象 | 处理 |
+| --- | --- |
+| 服务端启动失败/Address already in use | 检查端口占用，或换端口并同步修改客户端配置 |
+| 连接被拒绝或超时 | 确认服务端已启动、IP/端口正确；检查防火墙和设备互访 |
+| USER_EXISTS | 更换名称，或等待旧连接被服务端检测清理后重试 |
+| USER_OFFLINE | 目标已离线，重新选择当前在线用户 |
+| 超过连接上限后立即断开 | 默认包含未登录连接共 20 个，退出部分连接或调整启动参数 |
+| 桌面客户端启动失败 | 需要图形桌面；服务器无桌面时仅运行服务端 |
+
+这是可信课程局域网的演示实现：无身份认证、无 TLS、无聊天历史、无离线消息、无自动重连或已读回执。服务端生成发送者和时间，不采信请求伪造的 `from`。未实现心跳，静默断网可能长期无 EOF/异常；不承诺固定秒数发现拔网线。同步广播对不读取数据的慢客户端可能发生写入等待，未实现恶意慢客户端淘汰；目标规模为 5～10 个正常客户端。

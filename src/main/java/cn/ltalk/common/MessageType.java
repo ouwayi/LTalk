@@ -1,0 +1,6 @@
+package cn.ltalk.common;
+
+public enum MessageType {
+    LOGIN, LOGIN_OK, GROUP_SEND, GROUP_MESSAGE, PRIVATE_SEND, PRIVATE_MESSAGE,
+    USER_LIST, SYSTEM, ERROR, LOGOUT
+}

@@ -4,9 +4,11 @@ build/
 out/
 .gradle/
 *.class
+/.tools/
 
 # Local IDE settings
 .idea/
+/.vscode/
 *.iml
 
 # Logs and temporary files
