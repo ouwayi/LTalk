@@ -2,14 +2,16 @@
 
 ## 环境与总体结果
 
-- 自动化构建日期：**2026-10-24（Asia/Shanghai）**；后续人工验收由用户执行并反馈，具体测试时间未提供。
+- 初始 MVP 自动化构建日期：**2026-10-24（Asia/Shanghai）**；UI 改造回归：**2026-10-25**。宿主机＋虚拟机人工验收由用户执行并反馈，具体测试时间未提供。
 - 系统：Windows；JDK **25.0.4**，Maven **3.9.9**，源码/目标兼容 **Java 17**。
 - 网络：自动化使用 `127.0.0.1` 和系统分配的临时 TCP 端口；后续用户完成宿主机＋虚拟机跨系统人工测试，宿主机运行服务端和 alice，虚拟机运行 bob、carol。
-- 最终完整构建：**28 tests, 0 failures, 0 errors, 0 skipped，BUILD SUCCESS**。
+- 初始 MVP 完整构建：**28 tests, 0 failures, 0 errors, 0 skipped**；当前 UI 改造后的完整构建：**35 tests, 0 failures, 0 errors, 0 skipped，BUILD SUCCESS**。
 - 10 客户端独立长测：**600 轮，600.49 秒，6,000 次群聊投递、1,200 次私聊投递，0 失败**。
 - Swing 自有组件树在 EDT 上验证通过，并生成组件渲染预览；用户随后反馈已完成待人工验收项目，除静默断网检测限制外均可正常运作。人工结果来源为用户反馈，未附截图或收包日志；不将此记录写成双物理设备测试。
 
-最终构建实际命令：
+## 初始 MVP 构建证据（2026-10-24）
+
+初始构建实际命令：
 
 ```powershell
 powershell -NoProfile -File .\build.ps1
@@ -41,7 +43,47 @@ Total time: 7.344 s
 
 附加交付验证：在新的临时目录下载 Maven 3.9.9、核对固定 SHA-512 并启动成功；构建脚本的零参数默认 package、单参数 `-v` 和多参数模式均已检查。最终 JAR 通过独立子进程启动验证，监听 `0.0.0.0`、LOGIN_OK 首帧、中文/emoji 群聊回显及 LOGOUT 后 EOF 均通过（`PACKAGED_SMOKE_PASS`），不依赖 Maven 测试类路径。
 
-## 10 分钟观察
+## 桌面 UI 回归（2026-10-25）
+
+本次仅更新 Swing 展示和本地会话状态。差异检查确认 `server/`、`common/`、ChatClient、ClientEventListener 与 pom.xml 没有变化，后端接口及 TCP 协议保持不变。原有网络与协议测试全部保留。
+
+最终命令：`powershell -NoProfile -File .\build.ps1 -o package`（依赖已缓存）。本地完整输出位于 `.tools/ui-final-build.log`，最近一次 JUnit 报告位于 `target/surefire-reports/`。
+
+```text
+Tests run: 35, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+| 测试类 | 当前测试数 | 改造后的验证内容 |
+| --- | ---: | --- |
+| MessageCodecTest / ChatServerTest / ChatClientTest | 6 / 12 / 6 | 原有编解码、身份、并发、收件人、私聊隔离、超时与重连回归 |
+| ConversationSelectionTest | 2 | 保留既有离线目标保护回归 |
+| ChatWindowTest | 2 | 实际 Socket＋EDT：会话分组、原有错误与离线保护、草稿切换、Enter/Shift+Enter、搜索、未读、窄屏导航、工具占位与预览 |
+| ConversationStoreTest | 4 | 群聊/私聊与回显分组、后台未读、离线后必须重选、草稿及登录身份隔离、搜索 |
+| MessageTimelineTest | 2 | HTML 字面值保持纯文本、长单词换行、消息可选择、滚动到最新位置、相同内容事件不丢失及身份切换 |
+| LoadTest | 1 | 原有 10 客户端短回归，2 秒；本次没有重跑前一天的 10 分钟观察 |
+
+发现并修正富文本消息的连续长单词可能水平溢出的问题：允许字形视图在气泡宽度内换行。新增测试保留 1900 字符连续英文串与中文、emoji、换行和 HTML 字面文本，检查正文未被解释、气泡宽度受限、正文高度增长和滚动位置，没有删除或跳过断言。
+
+组件预览已逐张检查：`target/ui-preview/ui-desktop.png`（1200×780）、`ui-narrow-chat.png`（420×760）、`ui-narrow-list.png`（420×760）。均为自动化测试数据渲染，生成物不纳入 Git。
+
+### 真实 Windows 窗口验收
+
+使用 computer-use 技能在独立本机测试端口 39003 启动服务端、bob/carol 测试参与者和新版 alice 窗口；未接入用户原有聊天室。窗口访问成功，本次没有遇到先前的授权超时。
+
+| 操作 | 实际结果 |
+| --- | --- |
+| 点击连接 | 连接配置折叠；三人在线，消息按群聊和 carol 私聊分别显示 |
+| 群聊输入并按 Enter | `UI-CUA-001` 只产生一份右侧气泡，输入清空；bob、carol 收包记录均有 GROUP_MESSAGE |
+| 打开 carol 私聊 | 未读徽标清零，群聊历史不进入该私聊 |
+| Shift+Enter 多行，再 Enter 发送 | `UI-CUA-002` 显示为一条多行气泡；只有 carol 的测试收包记录包含此 PRIVATE_MESSAGE |
+| 将窗口从桌面宽度拖窄至约 469 像素 | 右侧改为全宽单列聊天，显示返回按钮，气泡和输入区没有水平溢出 |
+| 点击返回、触发一条群聊新消息 | 显示全宽会话列表，公共聊天室出现未读红点与数字徽标 |
+| 打开 bob 私聊并输入草稿，再关闭测试 bob 连接 | 当前页仍为 bob；显示离线重选提示，发送按钮禁用，`UI-CUA-003` 草稿保留，未变为群聊发送 |
+
+测试收包和服务端日志分别位于 `.tools/ui-demo-frames.log`、`.tools/ui-demo-server.log`；测试 UI 的错误输出日志为空。原生窗口观察用于补充组件测试，不将本次本机运行写成新一轮虚拟机断网或双物理设备测试。
+
+## 10 分钟观察（初始 MVP，2026-10-24）
 
 运行时间：**21:10:16～21:20:17**。10 个轻量 TCP 客户端 `load0`～`load9`，每秒轮换一个用户发一条群聊及一条私聊；每轮检查群聊全部收件人、私聊双方及在线数量；收到的私聊帧必须以本用户为发送者或接收者。独立测试 JVM 内启动服务端。
 

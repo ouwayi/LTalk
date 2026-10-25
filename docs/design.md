@@ -41,7 +41,9 @@ ClientSession 用 AtomicBoolean 保证清理一次。先关闭 Socket（不等�
 
 主动断开直接关闭 TCP，服务端通过 EOF 完成退出；协议同样支持显式 LOGOUT。窗口关闭调用 client.close，释放 Socket、发送执行器和计时器。客户端线程设为 daemon 作为进程退出兜底；测试验证重复连接后线程结束。
 
-在线列表按版本单调更新并在重连时重置。ConversationSelection 独立保存目标与“必须重新选择”状态：原私聊对象离线后 target 清空但禁止发送，重新上线也不自动选择，必须点击群聊或选择在线用户。文本通过 JTextArea 纯文本显示，原样保留换行，不解释 HTML。
+在线列表仍由 ChatClient 按版本单调更新并在重连时重置。界面改造后，ConversationStore 在 EDT 保存分会话历史、草稿、未读数与“必须重新选择”状态：原私聊对象离线后仍显示该会话和草稿，但禁止发送；重新上线也不自动恢复发送许可，必须明确重新选择联系人或公共聊天室。原 ConversationSelection 类及其回归测试保留，网络接口不变。
+
+ChatWindow 只组装界面与调用原有网络入口；client/ui 下的 ConversationList、MessageTimeline、ConnectionPanel 等组件分开管理展示。消息用纯文本 StyledDocument 渲染为左右气泡，字体回退支持 emoji，不解释 HTML，也不新增消息类型。ResponsiveShell 将双栏界面在小于 760 像素时转换为会话列表/聊天页单列导航。具体组件与扩展点见 [UI 设计说明](ui-design.md)。
 
 ## 取舍
 

@@ -1,6 +1,8 @@
 package cn.ltalk.client;
 
 import cn.ltalk.common.MessageType;
+import cn.ltalk.common.Message;
+import cn.ltalk.client.ui.*;
 import cn.ltalk.server.ChatServer;
 import cn.ltalk.support.Peer;
 import org.junit.jupiter.api.Test;
@@ -37,28 +39,31 @@ class ChatWindowTest {
                 awaitEdt(() -> button(window, "send").isEnabled() && list(window).getModel().getSize() == 2);
                 onEdt(() -> {
                     assertFalse(text(window, "host").isEnabled());
-                    list(window).setSelectedValue("bob", true);
+                    selectPeer(window, "bob");
                     assertTrue(label(window, "recipient").getText().contains("私聊 bob"));
                     area(window, "input").setText("UI-P-001"); button(window, "send").doClick();
                     assertEquals("", area(window, "input").getText());
                 });
                 assertEquals("UI-P-001", bob.type(MessageType.PRIVATE_MESSAGE).content());
-                awaitEdt(() -> area(window, "transcript").getText().contains("UI-P-001"));
+                awaitEdt(() -> history(window).contains("UI-P-001"));
                 onEdt(() -> area(window, "input").setText("保留的私聊草稿"));
                 bob.close();
-                awaitEdt(() -> list(window).getModel().getSize() == 1 && !button(window, "send").isEnabled());
+                awaitEdt(() -> !button(window, "send").isEnabled() && label(window, "recipient").getText().contains("重新选择"));
                 onEdt(() -> {
                     assertEquals("保留的私聊草稿", area(window, "input").getText());
                     assertTrue(label(window, "recipient").getText().contains("重新选择"));
                     button(window, "group").doClick(); assertTrue(button(window, "send").isEnabled());
                     area(window, "input").setText("UI-G-001 中文🙂\n<html><b>纯文本</b>"); button(window, "send").doClick();
                 });
-                awaitEdt(() -> area(window, "transcript").getText().contains("UI-G-001"));
+                awaitEdt(() -> history(window).contains("UI-G-001"));
                 onEdt(() -> {
-                    String history = area(window, "transcript").getText();
+                    String history = history(window);
                     assertEquals(1, history.split("UI-G-001", -1).length - 1);
                     assertTrue(history.contains("<html><b>纯文本</b>"));
-                    assertTrue(history.contains("[私聊 alice → bob]"));
+                    assertFalse(history.contains("UI-P-001"), "Private history must not leak into the public conversation");
+                    selectPeer(window, "bob"); assertTrue(history(window).contains("UI-P-001"));
+                    assertTrue(label(window, "recipient").getText().contains("私聊 bob"));
+                    button(window, "group").doClick();
                     renderComponentPreview(window);
                     button(window, "disconnect").doClick();
                 });
@@ -68,6 +73,86 @@ class ChatWindowTest {
         } finally {
             if (windowRef.get() != null) onEdt(() -> windowRef.get().dispatchEvent(new WindowEvent(windowRef.get(), WindowEvent.WINDOW_CLOSING)));
         }
+    }
+
+    @Test @Timeout(25)
+    void unreadSearchDraftKeyboardAndNarrowNavigationUseExistingNetworkApi() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start();
+            try (Peer bob = Peer.login(server.port(), "bob"); Peer carol = Peer.login(server.port(), "carol")) {
+                onEdt(() -> { ChatTheme.install(); ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice")); button(ref.get(), "connect").doClick(); });
+                ChatWindow window = ref.get();
+                awaitEdt(() -> button(window, "send").isEnabled() && list(window).getModel().getSize() == 3);
+                bob.group("你好，欢迎来到 LTalk 👋");
+                awaitEdt(() -> history(window).contains("欢迎来到"));
+                bob.privateTo("alice", "私聊未读消息");
+                awaitEdt(() -> summary(window, "bob").unread() == 1);
+                onEdt(() -> {
+                    assertFalse(history(window).contains("私聊未读消息"));
+                    area(window, "input").setText("公共草稿"); selectPeer(window, "bob");
+                    assertEquals(0, summary(window, "bob").unread()); assertTrue(history(window).contains("私聊未读消息"));
+                    area(window, "input").setText("第一行");
+                    JTextArea editor = area(window, "input"); editor.setCaretPosition(editor.getDocument().getLength());
+                    invokeKey(editor, java.awt.event.KeyEvent.VK_ENTER, java.awt.event.InputEvent.SHIFT_DOWN_MASK);
+                    editor.append("第二行"); assertEquals("第一行\n第二行", editor.getText());
+                    button(window, "group").doClick(); assertEquals("公共草稿", editor.getText());
+                    selectPeer(window, "bob"); assertEquals("第一行\n第二行", editor.getText());
+                    invokeKey(editor, java.awt.event.KeyEvent.VK_ENTER, 0); assertEquals("", editor.getText());
+                });
+                assertEquals("第一行\n第二行", bob.await(m -> m.type() == MessageType.PRIVATE_MESSAGE && "alice".equals(m.from()) && "bob".equals(m.to())).content());
+                awaitEdt(() -> history(window).contains("第二行"));
+                onEdt(() -> {
+                    text(window, "conversationSearch").setText("no-such-person"); assertEquals(0, list(window).getModel().getSize());
+                    assertEquals("bob", label(window, "conversationTitle").getText(), "Filtering must not change the send target");
+                    text(window, "conversationSearch").setText("BOB");
+                    assertEquals(2, list(window).getModel().getSize(), "Matches bob's private conversation and the public preview sent by bob");
+                    assertEquals("bob", summary(window, "bob").title());
+                    text(window, "conversationSearch").setText(""); button(window, "group").doClick();
+                    area(window, "input").setText("很高兴见到大家，我们可以开始讨论项目了。"); button(window, "send").doClick();
+                });
+                awaitEdt(() -> history(window).contains("讨论项目"));
+                carol.group("群聊消息会显示在这里，私聊记录则保留在各自的会话里。");
+                carol.privateTo("alice", "记得看一下今天的演示安排。");
+                awaitEdt(() -> summary(window, "carol").unread() == 1 && history(window).contains("私聊记录"));
+                onEdt(() -> {
+                    render(window, 1200, 780, "ui-desktop.png");
+                    render(window, 420, 760, "ui-narrow-chat.png");
+                    assertTrue(find(window, "back").isVisible()); assertFalse(find(window, "sidebar").isVisible());
+                    button(window, "attach").doClick(); assertTrue(label(window, "status").getText().contains("尚未接入"));
+                    assertTrue(label(window, "composerHint").getText().contains("尚未接入"));
+                    button(window, "emoji").doClick(); assertTrue(label(window, "status").getText().contains("表情"));
+                    assertTrue(label(window, "composerHint").getText().contains("表情"), "Narrow chat must show feedback outside the hidden sidebar");
+                    button(window, "back").doClick(); layout(window.getContentPane());
+                    assertTrue(find(window, "sidebar").isVisible()); assertFalse(find(window, "chatPane").isVisible());
+                    render(window, 420, 760, "ui-narrow-list.png");
+                    button(window, "group").doClick(); layout(window.getContentPane()); assertTrue(find(window, "chatPane").isVisible());
+                    assertTrue(history(window).contains("讨论项目"));
+                    text(window, "messageSearch").setText("欢迎"); assertTrue(history(window).contains("欢迎")); assertFalse(history(window).contains("讨论项目"));
+                    text(window, "messageSearch").setText("");
+                    area(window, "input").setText("\n "); button(window, "send").doClick();
+                    assertEquals("\n ", area(window, "input").getText()); assertTrue(label(window, "status").getText().contains("空白"));
+                });
+                carol.assertNo(m -> m.type() == MessageType.PRIVATE_MESSAGE
+                        && ("bob".equals(m.from()) || "bob".equals(m.to())), 100);
+            }
+        } finally { if (ref.get() != null) onEdt(() -> ref.get().dispatchEvent(new WindowEvent(ref.get(), WindowEvent.WINDOW_CLOSING))); }
+    }
+
+    private static void invokeKey(JTextArea editor, int key, int modifiers) {
+        Object binding = editor.getInputMap().get(KeyStroke.getKeyStroke(key, modifiers));
+        editor.getActionMap().get(binding).actionPerformed(new java.awt.event.ActionEvent(editor, 0, binding.toString()));
+    }
+    private static String history(ChatWindow window) { return ((MessageTimeline) find(window, "timeline")).renderedText(); }
+    private static ConversationStore.Summary summary(ChatWindow window, String peer) {
+        for (int i = 0; i < list(window).getModel().getSize(); i++) {
+            ConversationStore.Summary summary = list(window).getModel().getElementAt(i);
+            if (summary.id().equals(ConversationId.privateWith(peer))) return summary;
+        }
+        throw new AssertionError("Missing conversation: " + peer);
+    }
+    private static void selectPeer(ChatWindow window, String peer) {
+        list(window).setSelectedValue(summary(window, peer), true);
     }
 
     private static void onEdt(Runnable task) throws Exception { SwingUtilities.invokeAndWait(task); }
@@ -89,15 +174,18 @@ class ChatWindowTest {
     private static JTextField text(ChatWindow window, String name) { return (JTextField) find(window, name); }
     private static JTextArea area(ChatWindow window, String name) { return (JTextArea) find(window, name); }
     private static JLabel label(ChatWindow window, String name) { return (JLabel) find(window, name); }
-    @SuppressWarnings("unchecked") private static JList<String> list(ChatWindow window) { return (JList<String>) find(window, "online"); }
+    @SuppressWarnings("unchecked") private static JList<ConversationStore.Summary> list(ChatWindow window) { return (JList<ConversationStore.Summary>) find(window, "conversations"); }
 
     private static void renderComponentPreview(ChatWindow window) {
+        render(window, 960, 680, "chat-window.png");
+    }
+    private static void render(ChatWindow window, int width, int height, String filename) {
         try {
-            Container root = window.getContentPane(); root.setSize(960, 680); layout(root);
-            BufferedImage image = new BufferedImage(960, 680, BufferedImage.TYPE_INT_RGB);
+            Container root = window.getContentPane(); root.setSize(width, height); layout(root);
+            BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
             Graphics2D graphics = image.createGraphics(); root.printAll(graphics); graphics.dispose();
             Path directory = Path.of("target", "ui-preview"); Files.createDirectories(directory);
-            ImageIO.write(image, "png", directory.resolve("chat-window.png").toFile());
+            ImageIO.write(image, "png", directory.resolve(filename).toFile());
         } catch (Exception ex) { throw new AssertionError("Unable to render Swing component preview", ex); }
     }
     private static void layout(Container container) {
