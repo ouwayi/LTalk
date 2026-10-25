@@ -9,6 +9,7 @@ import javax.swing.event.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
 
 /** Swing presentation adapter. The TCP client, server interfaces and wire protocol are unchanged. */
@@ -22,7 +23,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         @Override protected void paintComponent(Graphics graphics) {
             super.paintComponent(graphics);
             if (getText().isEmpty()) {
-                Graphics2D g = (Graphics2D) graphics.create(); ChatTheme.quality(g); g.setFont(getFont()); g.setColor(ChatTheme.MUTED);
+                Graphics2D g = (Graphics2D) graphics.create(); ChatTheme.quality(g); g.setFont(getFont()); g.setColor(ChatTheme.palette(this).muted());
                 g.drawString("消息", getInsets().left + 2, getInsets().top + g.getFontMetrics().getAscent()); g.dispose();
             }
         }
@@ -33,10 +34,10 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     private final JLabel headerAvatar = new JLabel();
     private final JLabel onlineTitle = ChatTheme.label("消息", 12, ChatTheme.MUTED, false);
     private final JLabel counter = ChatTheme.label("", 10, ChatTheme.MUTED, false);
-    private final JLabel hint = ChatTheme.label("Enter 发送 · Shift+Enter 换行", 10, new Color(77, 120, 88), false);
+    private final JLabel hint = ChatTheme.label("Enter 发送 · Shift+Enter 换行", 10, ChatTheme.MUTED, false);
     private final JLabel identity = ChatTheme.label("LTalk · 未连接", 12, ChatTheme.INK, true);
     private final JButton send = ChatTheme.primary("");
-    private final JButton group = new JButton("公共聊天室");
+    private final JButton group = ChatTheme.pill("公共聊天室");
     private final JButton back = ChatTheme.iconButton(LineIcon.Kind.BACK, "返回会话列表");
     private final JButton menu = ChatTheme.iconButton(LineIcon.Kind.MENU, "菜单与连接设置");
     private final JButton create = ChatTheme.iconButton(LineIcon.Kind.COMPOSE, "新建会话");
@@ -59,9 +60,16 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     private ChatClient.State connectionState = ChatClient.State.DISCONNECTED;
     private boolean refreshingList, restoringDraft;
     private String pendingSelf = "";
+    private final AppearancePreferences appearancePreferences;
+    private AppearanceSettings appearance;
+    private final WallpaperPanel background;
 
     public ChatWindow(String initialHost, String initialPort, String initialUser) {
+        this(initialHost, initialPort, initialUser, AppearancePreferences.defaultFile());
+    }
+    ChatWindow(String initialHost, String initialPort, String initialUser, Path appearanceFile) {
         super("LTalk · 局域网聊天室");
+        appearancePreferences = new AppearancePreferences(appearanceFile); appearance = appearancePreferences.load();
         connection = new ConnectionPanel(initialHost, initialPort, initialUser);
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         setMinimumSize(new Dimension(360, 540)); setSize(1200, 820); setLocationByPlatform(true);
@@ -91,7 +99,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         historySearch.add(messageSearch); historySearch.add(closeSearch, BorderLayout.EAST); historySearch.setVisible(false);
         header.add(historySearch, BorderLayout.SOUTH);
 
-        input.setFont(ChatTheme.FONT.deriveFont(15f)); input.setForeground(ChatTheme.INK);
+        input.setFont(ChatTheme.FONT.deriveFont(15f)); ChatTheme.foreground(input, ThemePalette.Role.TEXT);
         input.setLineWrap(true); input.setWrapStyleWord(true); input.setOpaque(false);
         input.setBorder(new EmptyBorder(4, 2, 4, 2)); input.setMargin(new Insets(0, 0, 0, 0));
         input.setToolTipText("输入消息；Enter 发送，Shift+Enter 换行");
@@ -104,7 +112,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         send.setToolTipText("发送消息"); send.getAccessibleContext().setAccessibleName("发送消息");
         composer.add(composeActions, BorderLayout.EAST);
         chatContent.add(header); chatContent.add(timeline); chatContent.add(composer); chatContent.add(hint); chatContent.add(counter);
-        WallpaperPanel background = new WallpaperPanel(new BorderLayout()); background.setName("chatPane"); background.add(chatContent);
+        background = new WallpaperPanel(new BorderLayout(), appearance); background.setName("chatPane"); background.add(chatContent);
         shell = new ResponsiveShell(sidebar, background); setContentPane(shell);
         shell.onLayout(() -> {
             back.setVisible(shell.compact());
@@ -143,7 +151,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         input.getDocument().addDocumentListener(changed(() -> {
             if (!restoringDraft) store.saveDraft(input.getText());
             counter.setText(input.getText().length() + " / 2000");
-            counter.setForeground(input.getText().length() > 2000 ? ChatTheme.RED : new Color(77, 120, 88));
+            ChatTheme.foreground(counter, input.getText().length() > 2000 ? ThemePalette.Role.DANGER : ThemePalette.Role.MUTED);
             chatContent.revalidate(); chatContent.repaint();
         }));
         input.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "send-message");
@@ -157,32 +165,31 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
             @Override public void windowGainedFocus(WindowEvent e) { store.setVisible(!shell.compact() || shell.chatOpen()); refreshList(); }
             @Override public void windowLostFocus(WindowEvent e) { store.setVisible(false); }
         });
-        connection.state(true); refreshList(); refreshConversation();
+        connection.state(true); applyAppearance(appearance, false); refreshList(); refreshConversation();
     }
 
     private void buildSidebar() {
-        sidebar.setBackground(Color.WHITE); sidebar.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, ChatTheme.LINE)); sidebar.setName("sidebar");
-        JPanel top = new JPanel(); top.setLayout(new BoxLayout(top, BoxLayout.Y_AXIS)); top.setBackground(Color.WHITE);
-        JPanel searchRow = new JPanel(new BorderLayout(5, 0)); searchRow.setBackground(Color.WHITE); searchRow.setBorder(new EmptyBorder(14, 8, 8, 8));
+        ChatTheme.surface(sidebar); sidebar.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, ChatTheme.LINE)); sidebar.setName("sidebar");
+        JPanel top = new JPanel(); top.setLayout(new BoxLayout(top, BoxLayout.Y_AXIS)); ChatTheme.surface(top);
+        JPanel searchRow = new JPanel(new BorderLayout(5, 0)); ChatTheme.surface(searchRow); searchRow.setBorder(new EmptyBorder(14, 8, 8, 8));
         ChatTheme.RoundedPanel searchPill = new ChatTheme.RoundedPanel(new BorderLayout(6, 0), 32, ChatTheme.SOFT, false);
         searchPill.setBorder(new EmptyBorder(0, 10, 0, 8)); searchPill.add(new JLabel(new LineIcon(LineIcon.Kind.SEARCH, ChatTheme.MUTED, 18)), BorderLayout.WEST);
         search.setBorder(new EmptyBorder(10, 0, 10, 0)); search.setOpaque(false); search.setToolTipText("搜索会话名称或最后一条消息");
         search.getAccessibleContext().setAccessibleName("搜索会话"); searchPill.add(search);
         searchRow.add(menu, BorderLayout.WEST); searchRow.add(searchPill); searchRow.add(create, BorderLayout.EAST); top.add(searchRow);
-        JPanel brand = new JPanel(new BorderLayout()); brand.setBackground(Color.WHITE); brand.setBorder(new EmptyBorder(4, 21, 10, 19));
+        JPanel brand = new JPanel(new BorderLayout()); ChatTheme.surface(brand); brand.setBorder(new EmptyBorder(4, 21, 10, 19));
         brand.add(ChatTheme.label("LTalk", 22, ChatTheme.INK, true)); brand.add(onlineTitle, BorderLayout.EAST); top.add(brand);
-        connectionWrapper = new JPanel(new BorderLayout()); connectionWrapper.setBackground(Color.WHITE); connectionWrapper.setBorder(new EmptyBorder(0, 14, 10, 14));
+        connectionWrapper = new JPanel(new BorderLayout()); ChatTheme.surface(connectionWrapper); connectionWrapper.setBorder(new EmptyBorder(0, 14, 10, 14));
         connectionWrapper.add(connection); top.add(connectionWrapper);
-        JPanel tabs = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 4)); tabs.setBackground(Color.WHITE);
-        group.setFont(ChatTheme.FONT.deriveFont(Font.BOLD, 12f)); group.setForeground(ChatTheme.BLUE); group.setBackground(new Color(233, 244, 255));
+        JPanel tabs = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 4)); ChatTheme.surface(tabs);
         group.setFocusPainted(false); group.setBorder(new EmptyBorder(8, 14, 8, 14)); group.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         group.setToolTipText("选择公共群聊"); tabs.add(group); tabs.add(ChatTheme.label("全部会话", 11, ChatTheme.MUTED, false)); top.add(tabs);
         sidebar.add(top, BorderLayout.NORTH);
         JScrollPane listScroll = new JScrollPane(conversations); ChatTheme.scroll(listScroll, false);
-        listCards.setBackground(Color.WHITE); listCards.add(listScroll, "list");
-        JPanel empty = new JPanel(new GridBagLayout()); empty.setBackground(Color.WHITE); empty.add(ChatTheme.label("没有匹配的会话", 13, ChatTheme.MUTED, false)); listCards.add(empty, "empty");
+        ChatTheme.surface(listCards); listCards.add(listScroll, "list");
+        JPanel empty = new JPanel(new GridBagLayout()); ChatTheme.surface(empty); empty.add(ChatTheme.label("没有匹配的会话", 13, ChatTheme.MUTED, false)); listCards.add(empty, "empty");
         sidebar.add(listCards, BorderLayout.CENTER);
-        JPanel footer = new JPanel(new BorderLayout(4, 5)); footer.setBackground(Color.WHITE); footer.setBorder(new EmptyBorder(11, 20, 13, 14));
+        JPanel footer = new JPanel(new BorderLayout(4, 5)); ChatTheme.surface(footer); footer.setBorder(new EmptyBorder(11, 20, 13, 14));
         footer.add(identity, BorderLayout.NORTH); footer.add(status, BorderLayout.CENTER);
         JButton settings = ChatTheme.iconButton(LineIcon.Kind.MORE, "显示连接设置"); settings.setName("connectionSettings");
         settings.addActionListener(e -> toggleConnection()); footer.add(settings, BorderLayout.EAST); sidebar.add(footer, BorderLayout.SOUTH);
@@ -203,7 +210,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
             if (submittedTo.kind() == ConversationId.Kind.GROUP) client.sendGroup(input.getText());
             else client.sendPrivate(submittedTo.key(), input.getText());
             input.setText(""); store.saveDraft(""); input.requestFocusInWindow(); timeline.scrollToBottom();
-            hint.setText("Enter 发送 · Shift+Enter 换行"); hint.setForeground(new Color(77, 120, 88));
+            hint.setText("Enter 发送 · Shift+Enter 换行"); ChatTheme.foreground(hint, ThemePalette.Role.MUTED);
         } catch (IOException ex) { showError(ex.getMessage()); }
     }
 
@@ -245,7 +252,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         }
         connection.state(state == ChatClient.State.DISCONNECTED);
         identity.setText(state == ChatClient.State.CONNECTED ? "●  " + store.self() + "  ·  已连接" : state == ChatClient.State.CONNECTING ? "◌  正在连接…" : "LTalk · 未连接");
-        identity.setForeground(state == ChatClient.State.CONNECTED ? ChatTheme.BLUE : ChatTheme.INK);
+        ChatTheme.foreground(identity, state == ChatClient.State.CONNECTED ? ThemePalette.Role.ACCENT : ThemePalette.Role.TEXT);
         setTitle("LTalk · 局域网聊天室" + (state == ChatClient.State.CONNECTED ? " · " + store.self() : ""));
         setStatus(detail, false); refreshList(); refreshConversation();
     }
@@ -269,38 +276,62 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     private void showError(String detail) { store.notice(store.selectedId(), detail, true); feedback(detail, true); renderTimeline(); }
     private void feedback(String detail, boolean error) {
         setStatus(detail, error); hint.setText(detail); hint.setToolTipText(detail);
-        hint.setForeground(error ? ChatTheme.RED : new Color(77, 120, 88));
+        ChatTheme.foreground(hint, error ? ThemePalette.Role.DANGER : ThemePalette.Role.MUTED);
     }
     private void setStatus(String detail, boolean error) {
-        status.setText(detail); status.setToolTipText(detail); status.setForeground(error ? ChatTheme.RED : ChatTheme.MUTED);
+        status.setText(detail); status.setToolTipText(detail); ChatTheme.foreground(status, error ? ThemePalette.Role.DANGER : ThemePalette.Role.MUTED);
     }
 
     private void showConnection(boolean visible) { connection.setVisible(visible); connectionWrapper.setVisible(visible); sidebar.revalidate(); sidebar.repaint(); }
     private void toggleConnection() { showConnection(!connection.isVisible()); shell.openList(); }
     private void showMenu() {
-        JPopupMenu popup = new JPopupMenu();
-        item(popup, "连接设置", this::toggleConnection);
-        JMenuItem disconnect = item(popup, "断开连接", client::disconnect); disconnect.setEnabled(connectionState != ChatClient.State.DISCONNECTED);
-        popup.addSeparator(); item(popup, "关于 LTalk", () -> setStatus("LTalk · 局域网聊天，群聊与私聊由服务端转发", false)); popup.show(menu, 0, menu.getHeight());
+        ChatPopupMenu popup = new ChatPopupMenu(menu, "LTalk");
+        popup.action("menuConnection", "连接设置", LineIcon.Kind.SETTINGS, this::toggleConnection);
+        popup.action("menuAppearance", "外观设置", LineIcon.Kind.PALETTE, this::showAppearance);
+        popup.action("menuMode", appearance.dark() ? "切换浅色模式" : "切换深色模式", appearance.dark() ? LineIcon.Kind.SUN : LineIcon.Kind.MOON,
+                () -> applyAppearance(appearance.withMode(appearance.dark() ? AppearanceSettings.Mode.LIGHT : AppearanceSettings.Mode.DARK), true));
+        popup.addSeparator();
+        JMenuItem disconnect = popup.action("menuDisconnect", "断开连接", LineIcon.Kind.LOGOUT, client::disconnect);
+        disconnect.setEnabled(connectionState != ChatClient.State.DISCONNECTED);
+        popup.action("menuAbout", "关于 LTalk", LineIcon.Kind.USERS, () -> setStatus("LTalk · 局域网聊天，群聊与私聊由服务端转发", false));
+        popup.show(menu, 0, menu.getHeight() + 4);
     }
     private void showNewConversation() {
-        JPopupMenu popup = new JPopupMenu(); item(popup, "进入公共聊天室", () -> selectConversation(ConversationId.PUBLIC));
+        ChatPopupMenu popup = new ChatPopupMenu(create, "新建会话");
+        popup.action("newPublic", "进入公共聊天室", LineIcon.Kind.USERS, () -> selectConversation(ConversationId.PUBLIC));
         for (ConversationStore.Summary summary : store.summaries("")) {
             if (summary.id().kind() == ConversationId.Kind.PRIVATE && summary.online())
-                item(popup, "私聊 " + summary.title(), () -> selectConversation(summary.id()));
+                popup.action("newPrivate-" + summary.id().key(), "私聊 " + summary.title(), LineIcon.Kind.COMPOSE, () -> selectConversation(summary.id()));
         }
-        popup.addSeparator(); item(popup, "添加好友 / 创建群组 · 待接入", () -> showPendingTool("好友与群组管理"));
-        popup.show(create, 0, create.getHeight());
+        popup.addSeparator(); popup.action("newFuture", "添加好友 / 创建群组 · 待接入", LineIcon.Kind.USERS, () -> showPendingTool("好友与群组管理"));
+        popup.show(create, 0, create.getHeight() + 4);
     }
     private void showChatMenu() {
-        JPopupMenu popup = new JPopupMenu(); item(popup, "回到最新消息", timeline::scrollToBottom);
-        item(popup, "连接设置", this::toggleConnection); popup.show(more, 0, more.getHeight());
+        ChatPopupMenu popup = new ChatPopupMenu(more, store.selected().title());
+        popup.action("chatLatest", "回到最新消息", LineIcon.Kind.BACK, timeline::scrollToBottom);
+        popup.action("chatAppearance", "外观设置", LineIcon.Kind.PALETTE, this::showAppearance);
+        popup.action("chatConnection", "连接设置", LineIcon.Kind.SETTINGS, this::toggleConnection);
+        popup.show(more, more.getWidth() - popup.getPreferredSize().width, more.getHeight() + 4);
+    }
+    private void showAppearance() {
+        JDialog dialog = new JDialog(this, "外观设置", Dialog.ModalityType.APPLICATION_MODAL); dialog.setName("appearanceDialog");
+        AppearancePanel panel = new AppearancePanel(appearance, value -> { applyAppearance(value, true); dialog.dispose(); }, dialog::dispose);
+        dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE); dialog.setContentPane(panel); dialog.pack();
+        dialog.setResizable(false); dialog.setLocationRelativeTo(this);
+        dialog.getRootPane().registerKeyboardAction(e -> dialog.dispose(), KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
+        dialog.setVisible(true);
+    }
+    void applyAppearance(AppearanceSettings value, boolean persist) {
+        appearance = value; ThemePalette palette = ThemePalette.of(value); background.setAppearance(value);
+        ChatTheme.apply(shell, palette); sidebar.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, palette.line()));
+        conversations.repaint(); renderTimeline();
+        if (persist) {
+            try { appearancePreferences.save(value); setStatus("外观设置已保存到本机", false); }
+            catch (IOException ex) { feedback("外观已应用，但本地保存失败：" + ex.getMessage(), true); }
+        }
     }
     /** Integration point for later attachment/emoji/friend features; does not send fake wire requests. */
     private void showPendingTool(String feature) { feedback(feature + "尚未接入；当前支持纯文本消息", false); }
-    private static JMenuItem item(JPopupMenu menu, String title, Runnable callback) {
-        JMenuItem item = new JMenuItem(title); item.addActionListener(e -> callback.run()); menu.add(item); return item;
-    }
     private static Action action(Runnable callback) { return new AbstractAction() { @Override public void actionPerformed(ActionEvent e) { callback.run(); } }; }
     private static DocumentListener changed(Runnable task) {
         return new DocumentListener() {

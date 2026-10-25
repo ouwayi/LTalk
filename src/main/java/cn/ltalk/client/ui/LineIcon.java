@@ -6,12 +6,14 @@ import java.awt.geom.*;
 
 /** Small vector icons stay sharp at desktop display scaling, without remote or font assets. */
 public record LineIcon(Kind kind, Color color, int size) implements Icon {
-    public enum Kind { MENU, COMPOSE, SEARCH, MORE, SEND, ATTACH, EMOJI, BACK, CLOSE, USERS, LOGOUT, CHECK }
+    public enum Kind { MENU, COMPOSE, SEARCH, MORE, SEND, ATTACH, EMOJI, BACK, CLOSE, USERS, LOGOUT, CHECK, SETTINGS, PALETTE, SUN, MOON }
     @Override public int getIconWidth() { return size; }
     @Override public int getIconHeight() { return size; }
     @Override public void paintIcon(Component component, Graphics graphics, int x, int y) {
         Graphics2D g = (Graphics2D) graphics.create(); g.translate(x, y); g.scale(size / 24.0, size / 24.0);
-        ChatTheme.quality(g); g.setColor(component.isEnabled() ? color : new Color(177, 189, 197));
+        ThemePalette palette = ChatTheme.palette(component);
+        Color effective = color.equals(ChatTheme.MUTED) ? palette.muted() : color;
+        ChatTheme.quality(g); g.setColor(component.isEnabled() ? effective : palette.muted());
         g.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         switch (kind) {
             case MENU -> { line(g, 4, 6, 20, 6); line(g, 4, 12, 20, 12); line(g, 4, 18, 20, 18); }
@@ -33,6 +35,26 @@ public record LineIcon(Kind kind, Color color, int size) implements Icon {
             case BACK -> { line(g, 20, 12, 4, 12); line(g, 4, 12, 11, 5); line(g, 4, 12, 11, 19); }
             case CLOSE -> { line(g, 6, 6, 18, 18); line(g, 18, 6, 6, 18); }
             case CHECK -> { line(g, 4, 12, 10, 18); line(g, 10, 18, 21, 5); }
+            case SETTINGS -> {
+                g.drawOval(5, 5, 14, 14); g.drawOval(9, 9, 6, 6);
+                for (int n = 0; n < 8; n++) {
+                    double angle = n * Math.PI / 4;
+                    line(g, 12 + 7 * Math.cos(angle), 12 + 7 * Math.sin(angle), 12 + 10 * Math.cos(angle), 12 + 10 * Math.sin(angle));
+                }
+            }
+            case SUN -> {
+                g.drawOval(7, 7, 10, 10);
+                for (int n = 0; n < 8; n++) { double a = n * Math.PI / 4; line(g, 12 + 8 * Math.cos(a), 12 + 8 * Math.sin(a), 12 + 10 * Math.cos(a), 12 + 10 * Math.sin(a)); }
+            }
+            case MOON -> {
+                Path2D p = new Path2D.Double(); p.moveTo(16, 3); p.curveTo(1, 0, -1, 20, 12, 21); p.curveTo(18, 22, 22, 17, 22, 14);
+                p.curveTo(12, 19, 8, 9, 16, 3); g.draw(p);
+            }
+            case PALETTE -> {
+                g.draw(new Ellipse2D.Double(2, 3, 20, 18));
+                for (Point p : new Point[]{new Point(7, 8), new Point(13, 6), new Point(18, 10), new Point(7, 15)}) g.fillOval(p.x - 1, p.y - 1, 3, 3);
+                g.drawOval(13, 14, 5, 5);
+            }
             case USERS -> {
                 g.drawOval(8, 3, 8, 8); g.draw(new Arc2D.Double(4, 13, 16, 14, 0, 180, Arc2D.OPEN));
                 g.draw(new Arc2D.Double(0, 5, 9, 7, 90, 180, Arc2D.OPEN)); g.draw(new Arc2D.Double(0, 14, 8, 10, 55, 125, Arc2D.OPEN));

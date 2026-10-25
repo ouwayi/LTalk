@@ -3,7 +3,9 @@ package cn.ltalk.client.ui;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.plaf.basic.BasicScrollBarUI;
+import javax.swing.text.JTextComponent;
 import java.awt.*;
+import static cn.ltalk.client.ui.ThemePalette.Role;
 
 public final class ChatTheme {
     public static final Color BLUE = new Color(51, 144, 236);
@@ -14,7 +16,43 @@ public final class ChatTheme {
     public static final Color OUTGOING = new Color(225, 255, 199);
     public static final Color RED = new Color(230, 92, 100);
     public static final Font FONT = new Font("Microsoft YaHei UI", Font.PLAIN, 14);
+    private static final ThemePalette DEFAULT = ThemePalette.of(AppearanceSettings.defaults());
+    private static final String PALETTE = "ltalk.palette", FOREGROUND = "ltalk.foreground", BACKGROUND = "ltalk.background";
     private ChatTheme() { }
+
+    public static ThemePalette palette(Component component) {
+        for (Component current = component; current != null; current = current.getParent()) {
+            if (current instanceof JComponent c && c.getClientProperty(PALETTE) instanceof ThemePalette p) return p;
+        }
+        return DEFAULT;
+    }
+    public static void apply(JComponent root, ThemePalette palette) {
+        root.putClientProperty(PALETTE, palette); applyTree(root, palette); root.repaint();
+    }
+    private static void applyTree(Component component, ThemePalette palette) {
+        if (component instanceof JComponent c) {
+            if (c.getClientProperty(FOREGROUND) instanceof Role role) c.setForeground(palette.color(role));
+            if (c.getClientProperty(BACKGROUND) instanceof Role role) c.setBackground(palette.color(role));
+            if (c instanceof JTextComponent text) {
+                text.setCaretColor(palette.text()); text.setSelectionColor(BLUE); text.setSelectedTextColor(Color.WHITE);
+                text.setDisabledTextColor(palette.muted());
+            }
+        }
+        if (component instanceof Container container) for (Component child : container.getComponents()) applyTree(child, palette);
+    }
+    public static void foreground(JComponent component, Role role) {
+        component.putClientProperty(FOREGROUND, role); component.setForeground(palette(component).color(role));
+    }
+    public static void surface(JComponent component) {
+        component.putClientProperty(BACKGROUND, Role.SURFACE); component.setBackground(palette(component).surface());
+    }
+    private static Role role(Color color) {
+        if (color.equals(INK)) return Role.TEXT;
+        if (color.equals(MUTED)) return Role.MUTED;
+        if (color.equals(BLUE)) return Role.ACCENT;
+        if (color.equals(RED)) return Role.DANGER;
+        return null;
+    }
 
     public static void install() {
         for (Object key : UIManager.getDefaults().keySet().toArray()) {
@@ -32,6 +70,7 @@ public final class ChatTheme {
         JLabel label = new JLabel(value);
         label.putClientProperty("html.disable", Boolean.TRUE);
         label.setFont(FONT.deriveFont(bold ? Font.BOLD : Font.PLAIN, size)); label.setForeground(color);
+        if (role(color) != null) label.putClientProperty(FOREGROUND, role(color));
         return label;
     }
     public static JButton iconButton(LineIcon.Kind kind, String tooltip) {
@@ -44,7 +83,7 @@ public final class ChatTheme {
             @Override public void paint(Graphics graphics, JComponent component) {
                 Graphics2D g = (Graphics2D) graphics.create(); quality(g);
                 if (button.getModel().isRollover() || button.hasFocus()) {
-                    g.setColor(SOFT); g.fillRoundRect(0, 0, button.getWidth(), button.getHeight(), 22, 22);
+                    g.setColor(palette(button).hover()); g.fillRoundRect(0, 0, button.getWidth(), button.getHeight(), 22, 22);
                 }
                 g.dispose(); super.paint(graphics, component);
             }
@@ -59,8 +98,35 @@ public final class ChatTheme {
         button.setUI(new javax.swing.plaf.basic.BasicButtonUI() {
             @Override public void paint(Graphics graphics, JComponent component) {
                 Graphics2D g = (Graphics2D) graphics.create(); quality(g);
-                g.setColor(!button.isEnabled() ? new Color(179, 202, 221) : button.getModel().isRollover() ? BLUE.darker() : BLUE);
+                g.setColor(!button.isEnabled() ? palette(button).disabled() : button.getModel().isRollover() ? BLUE.darker() : BLUE);
                 g.fillRoundRect(0, 0, button.getWidth(), button.getHeight(), 20, 20); g.dispose(); super.paint(graphics, component);
+            }
+        });
+        return button;
+    }
+    public static JButton pill(String title) {
+        JButton button = iconButton(LineIcon.Kind.USERS, title); button.setIcon(null); button.setText(title);
+        button.setPreferredSize(null); button.setFont(FONT.deriveFont(Font.BOLD, 12f));
+        button.setBorder(new EmptyBorder(8, 14, 8, 14)); foreground(button, Role.ACCENT);
+        button.setUI(new javax.swing.plaf.basic.BasicButtonUI() {
+            @Override public void paint(Graphics graphics, JComponent c) {
+                Graphics2D g = (Graphics2D) graphics.create(); quality(g);
+                g.setColor(button.getModel().isRollover() ? palette(button).hover() : palette(button).accentSoft());
+                g.fillRoundRect(0, 0, button.getWidth(), button.getHeight(), 16, 16); g.dispose(); super.paint(graphics, c);
+            }
+        });
+        return button;
+    }
+    public static JToggleButton choice(String title) {
+        JToggleButton button = new JToggleButton(title); button.setFont(FONT); button.setFocusPainted(false);
+        button.setBorder(new EmptyBorder(10, 14, 10, 14)); button.setContentAreaFilled(false);
+        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        button.setUI(new javax.swing.plaf.basic.BasicToggleButtonUI() {
+            @Override public void paint(Graphics graphics, JComponent c) {
+                ThemePalette p = palette(button); Graphics2D g = (Graphics2D) graphics.create(); quality(g);
+                g.setColor(button.isSelected() ? p.accentSoft() : button.getModel().isRollover() ? p.hover() : p.soft());
+                g.fillRoundRect(0, 0, button.getWidth(), button.getHeight(), 16, 16); g.dispose();
+                button.setForeground(button.isSelected() ? BLUE : p.text()); super.paint(graphics, c);
             }
         });
         return button;
@@ -71,19 +137,20 @@ public final class ChatTheme {
                 super.paintComponent(graphics);
                 Object hint = getClientProperty("placeholder");
                 if (getText().isEmpty() && hint instanceof String text) {
-                    Graphics2D g = (Graphics2D) graphics.create(); quality(g); g.setColor(MUTED); g.setFont(getFont());
+                    Graphics2D g = (Graphics2D) graphics.create(); quality(g); g.setColor(palette(this).muted()); g.setFont(getFont());
                     g.drawString(text, getInsets().left + 1, (getHeight() - g.getFontMetrics().getHeight()) / 2 + g.getFontMetrics().getAscent()); g.dispose();
                 }
             }
         };
         field.setName(name); field.setFont(FONT); field.setForeground(INK);
         field.setBackground(SOFT); field.setBorder(new EmptyBorder(10, 12, 10, 12));
+        field.putClientProperty(FOREGROUND, Role.TEXT); field.putClientProperty(BACKGROUND, Role.SOFT);
         return field;
     }
     public static void scroll(JScrollPane pane, boolean transparent) {
         pane.setBorder(null); pane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         pane.setOpaque(!transparent); pane.getViewport().setOpaque(!transparent);
-        if (!transparent) pane.getViewport().setBackground(Color.WHITE);
+        if (!transparent) { surface(pane); surface(pane.getViewport()); }
         JScrollBar bar = pane.getVerticalScrollBar(); bar.setUnitIncrement(24); bar.setPreferredSize(new Dimension(7, 0));
         bar.setUI(new BasicScrollBarUI() {
             @Override protected JButton createDecreaseButton(int orientation) { return zero(); }
@@ -92,7 +159,8 @@ public final class ChatTheme {
             @Override protected void paintTrack(Graphics g, JComponent c, Rectangle r) { }
             @Override protected void paintThumb(Graphics graphics, JComponent c, Rectangle r) {
                 Graphics2D g = (Graphics2D) graphics.create(); quality(g);
-                g.setColor(new Color(100, 124, 114, isThumbRollover() ? 135 : 70));
+                Color base = palette(pane).muted();
+                g.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(), isThumbRollover() ? 170 : 95));
                 g.fillRoundRect(r.x + 1, r.y, Math.max(3, r.width - 2), r.height, 7, 7); g.dispose();
             }
         });
@@ -104,10 +172,13 @@ public final class ChatTheme {
         private final boolean shadow;
         public RoundedPanel(LayoutManager layout, int radius, Color color, boolean shadow) {
             super(layout); this.radius = radius; this.shadow = shadow; setBackground(color); setOpaque(false);
+            if (color.equals(Color.WHITE)) putClientProperty(BACKGROUND, Role.SURFACE);
+            else if (color.equals(SOFT)) putClientProperty(BACKGROUND, Role.SOFT);
+            else if (color.equals(OUTGOING)) putClientProperty(BACKGROUND, Role.OUTGOING);
         }
         @Override protected void paintComponent(Graphics graphics) {
             Graphics2D g = (Graphics2D) graphics.create(); quality(g);
-            if (shadow) { g.setColor(new Color(30, 62, 40, 20)); g.fillRoundRect(0, 2, getWidth(), getHeight() - 2, radius, radius); }
+            if (shadow) { g.setColor(palette(this).shadow()); g.fillRoundRect(0, 2, getWidth(), getHeight() - 2, radius, radius); }
             g.setColor(getBackground()); g.fillRoundRect(0, 0, getWidth(), getHeight() - (shadow ? 2 : 0), radius, radius);
             g.dispose(); super.paintComponent(graphics);
         }

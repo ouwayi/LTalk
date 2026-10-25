@@ -10,7 +10,7 @@ public final class ConversationList extends JList<ConversationStore.Summary> {
     private int hover = -1;
     public ConversationList(DefaultListModel<ConversationStore.Summary> model) {
         super(model); setName("conversations"); setFixedCellHeight(84); setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        setBackground(Color.WHITE); setBorder(BorderFactory.createEmptyBorder(0, 8, 8, 8)); setCellRenderer(new Cell());
+        ChatTheme.surface(this); setBorder(BorderFactory.createEmptyBorder(0, 8, 8, 8)); setCellRenderer(new Cell());
         getAccessibleContext().setAccessibleName("会话列表"); setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         addMouseMotionListener(new MouseMotionAdapter() {
             @Override public void mouseMoved(MouseEvent event) {
@@ -32,28 +32,29 @@ public final class ConversationList extends JList<ConversationStore.Summary> {
     private final class Cell extends JPanel implements ListCellRenderer<ConversationStore.Summary> {
         private ConversationStore.Summary value;
         private boolean selected, hovered;
+        private ThemePalette palette;
         Cell() { setOpaque(false); }
         @Override public Component getListCellRendererComponent(JList<? extends ConversationStore.Summary> list,
                 ConversationStore.Summary value, int index, boolean selected, boolean focus) {
-            this.value = value; this.selected = selected; hovered = index == hover;
+            this.value = value; this.selected = selected; hovered = index == hover; palette = ChatTheme.palette(list);
             getAccessibleContext().setAccessibleName(value.title() + (value.online() ? "，在线" : "，离线") + "，" + value.preview() + "，未读 " + value.unread());
             return this;
         }
         @Override protected void paintComponent(Graphics graphics) {
             Graphics2D g = (Graphics2D) graphics.create(); ChatTheme.quality(g);
             int w = getWidth();
-            if (selected || hovered) { g.setColor(selected ? ChatTheme.BLUE : ChatTheme.SOFT); g.fillRoundRect(0, 3, w, 78, 20, 20); }
+            if (selected || hovered) { g.setColor(selected ? ChatTheme.BLUE : palette.hover()); g.fillRoundRect(0, 3, w, 78, 20, 20); }
             new Avatar(value.title(), value.id().kind() == ConversationId.Kind.GROUP, 50).paintIcon(this, g, 12, 17);
             if (value.id().kind() == ConversationId.Kind.PRIVATE) {
-                g.setColor(Color.WHITE); g.fillOval(48, 52, 13, 13);
+                g.setColor(selected ? ChatTheme.BLUE : palette.surface()); g.fillOval(48, 52, 13, 13);
                 g.setColor(value.online() ? new Color(81, 190, 130) : new Color(178, 188, 196)); g.fillOval(50, 54, 9, 9);
             }
-            if (value.unread() > 0) { g.setColor(Color.WHITE); g.fillOval(48, 16, 13, 13); g.setColor(ChatTheme.RED); g.fillOval(50, 18, 9, 9); }
-            Color secondary = selected ? new Color(229, 242, 255) : ChatTheme.MUTED;
+            if (value.unread() > 0) { g.setColor(selected ? ChatTheme.BLUE : palette.surface()); g.fillOval(48, 16, 13, 13); g.setColor(palette.danger()); g.fillOval(50, 18, 9, 9); }
+            Color secondary = selected ? new Color(229, 242, 255) : palette.muted();
             g.setFont(ChatTheme.FONT.deriveFont(11f)); g.setColor(secondary);
             String time = value.time() == null ? "" : DateTimeFormatter.ofPattern("HH:mm").format(value.time().atZone(ZoneId.systemDefault()));
             g.drawString(time, w - 14 - g.getFontMetrics().stringWidth(time), 28);
-            g.setFont(ChatTheme.FONT.deriveFont(Font.BOLD, 14f)); g.setColor(selected ? Color.WHITE : ChatTheme.INK);
+            g.setFont(ChatTheme.FONT.deriveFont(Font.BOLD, 14f)); g.setColor(selected ? Color.WHITE : palette.text());
             g.drawString(ellipsis(g.getFontMetrics(), value.title(), w - 132), 74, 32);
             int badgeWidth = 0;
             if (value.unread() > 0) {

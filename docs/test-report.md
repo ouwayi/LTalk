@@ -5,7 +5,7 @@
 - 初始 MVP 自动化构建日期：**2026-10-24（Asia/Shanghai）**；UI 改造回归：**2026-10-25**。宿主机＋虚拟机人工验收由用户执行并反馈，具体测试时间未提供。
 - 系统：Windows；JDK **25.0.4**，Maven **3.9.9**，源码/目标兼容 **Java 17**。
 - 网络：自动化使用 `127.0.0.1` 和系统分配的临时 TCP 端口；后续用户完成宿主机＋虚拟机跨系统人工测试，宿主机运行服务端和 alice，虚拟机运行 bob、carol。
-- 初始 MVP 完整构建：**28 tests, 0 failures, 0 errors, 0 skipped**；当前 UI 改造后的完整构建：**35 tests, 0 failures, 0 errors, 0 skipped，BUILD SUCCESS**。
+- 初始 MVP 完整构建为 28 项、分栏界面回归为 35 项；当前背景、主题与菜单更新后的完整构建：**46 tests, 0 failures, 0 errors, 0 skipped，BUILD SUCCESS**。
 - 10 客户端独立长测：**600 轮，600.49 秒，6,000 次群聊投递、1,200 次私聊投递，0 失败**。
 - Swing 自有组件树在 EDT 上验证通过，并生成组件渲染预览；用户随后反馈已完成待人工验收项目，除静默断网检测限制外均可正常运作。人工结果来源为用户反馈，未附截图或收包日志；不将此记录写成双物理设备测试。
 
@@ -43,7 +43,7 @@ Total time: 7.344 s
 
 附加交付验证：在新的临时目录下载 Maven 3.9.9、核对固定 SHA-512 并启动成功；构建脚本的零参数默认 package、单参数 `-v` 和多参数模式均已检查。最终 JAR 通过独立子进程启动验证，监听 `0.0.0.0`、LOGIN_OK 首帧、中文/emoji 群聊回显及 LOGOUT 后 EOF 均通过（`PACKAGED_SMOKE_PASS`），不依赖 Maven 测试类路径。
 
-## 桌面 UI 回归（2026-10-25）
+## 分栏界面回归（2026-10-25，35 项基线）
 
 本次仅更新 Swing 展示和本地会话状态。差异检查确认 `server/`、`common/`、ChatClient、ClientEventListener 与 pom.xml 没有变化，后端接口及 TCP 协议保持不变。原有网络与协议测试全部保留。
 
@@ -82,6 +82,44 @@ BUILD SUCCESS
 | 打开 bob 私聊并输入草稿，再关闭测试 bob 连接 | 当前页仍为 bob；显示离线重选提示，发送按钮禁用，`UI-CUA-003` 草稿保留，未变为群聊发送 |
 
 测试收包和服务端日志分别位于 `.tools/ui-demo-frames.log`、`.tools/ui-demo-server.log`；测试 UI 的错误输出日志为空。原生窗口观察用于补充组件测试，不将本次本机运行写成新一轮虚拟机断网或双物理设备测试。
+
+## 背景、主题与菜单回归（2026-10-25）
+
+本轮移除背景纹样，增加纯色/渐变、自定义颜色、浅色/深色和本机偏好保存，并统一主菜单、新建会话和聊天更多菜单。服务端、common、ChatClient、ClientEventListener 和 pom.xml 未变；原 35 项测试保留，新增 11 项行为与错误路径检查。
+
+命令：`powershell -NoProfile -File .\build.ps1 -o package`。本地完整日志 `.tools/appearance-build.log`，最近报告 `target/surefire-reports/`。
+
+```text
+Tests run: 46, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+Total time: 11.772 s
+```
+
+| 测试类 | 当前测试数 | 覆盖内容 |
+| --- | ---: | --- |
+| 原网络、协议、Store、Timeline、Selection 与 LoadTest | 33 | 原有业务回归，未删除或跳过断言 |
+| ChatWindowTest | 4 | 原 2 项；新增切换后原消息换色、连接/草稿保留、重启加载外观、保存失败提示 |
+| AppearanceSettingsTest | 2 | HEX 校验、透明色拒绝、不同模式颜色独立、纯色像素均匀及渐变端点 |
+| AppearancePreferencesTest | 3 | 设置完整往返、损坏/超大/未知版本回退、写入失败不损坏目标且无临时文件残留 |
+| AppearancePanelTest | 2 | 无效颜色阻止应用、深色/纯色预览、取消不发布、恢复默认 |
+| ChatPopupMenuTest | 2 | 动作、禁用项、悬停颜色与窗口色板隔离 |
+
+新增预览已检查：`target/ui-preview/ui-dark-desktop.png`、`ui-dark-narrow.png`、`menu-light.png`、`menu-dark.png`、`appearance-settings.png`。浅色/窄屏已有预览由本轮测试重新生成，均不提交 Git。
+
+### 真实窗口补充验收
+
+使用 computer-use 在本机独立端口 **39005** 验收，测试进程的 `user.home` 指向 `.tools/appearance-demo-home`，不覆盖实际系统用户的外观设置。
+
+| 操作 | 实际结果 |
+| --- | --- |
+| 打开新建会话与主菜单 | 圆角、分组标题、图标、分隔线和行距正常，无旧式方框蓝边；Escape 可关闭菜单 |
+| 主菜单一键切换深色 | 会话栏、连接表单、聊天背景、标题、输入与空状态即时换色；深色菜单文字和图标可读 |
+| 打开外观设置 | 显示浅色/深色、纯色/渐变、预设、两个自定义色值和预览 |
+| 选择纯色并输入 `#23384A`，点击应用 | 预览与聊天区变为选定纯色；配置记录 `mode=DARK`、`background=SOLID`、`dark.start=#23384A` |
+| 深色下连接并接收消息 | 三人在线，群聊消息、系统提示和私聊未读正常显示 |
+| Enter 发送 `APPEARANCE-001` | 显示一份右侧深色气泡，输入清空；bob、carol 的网络收包均包含对应 GROUP_MESSAGE |
+
+本机日志为 `.tools/appearance-demo-frames.log`、`appearance-demo-server.log`、`appearance-demo-window.log`，UI 错误输出为空。本轮不重复前一天的 10 分钟长测，也不将本机 UI 验收写成虚拟机断网测试。
 
 ## 10 分钟观察（初始 MVP，2026-10-24）
 

@@ -7,6 +7,7 @@ import cn.ltalk.server.ChatServer;
 import cn.ltalk.support.Peer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
 
 import javax.imageio.ImageIO;
 import javax.swing.*;
@@ -22,13 +23,14 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** Exercises our own non-visible Swing component tree on the EDT, without OS input automation. */
 class ChatWindowTest {
+    @TempDir Path appearanceDirectory;
     @Test @Timeout(20)
     void connectionPrivateTargetLossDraftAndGroupEcho() throws Exception {
         AtomicReference<ChatWindow> windowRef = new AtomicReference<>();
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.start();
             try (Peer bob = Peer.login(server.port(), "bob")) {
-                SwingUtilities.invokeAndWait(() -> windowRef.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice")));
+                SwingUtilities.invokeAndWait(() -> windowRef.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("appearance.properties"))));
                 ChatWindow window = windowRef.get();
                 onEdt(() -> {
                     assertFalse(button(window, "send").isEnabled());
@@ -81,7 +83,7 @@ class ChatWindowTest {
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.start();
             try (Peer bob = Peer.login(server.port(), "bob"); Peer carol = Peer.login(server.port(), "carol")) {
-                onEdt(() -> { ChatTheme.install(); ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice")); button(ref.get(), "connect").doClick(); });
+                onEdt(() -> { ChatTheme.install(); ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("appearance.properties"))); button(ref.get(), "connect").doClick(); });
                 ChatWindow window = ref.get();
                 awaitEdt(() -> button(window, "send").isEnabled() && list(window).getModel().getSize() == 3);
                 bob.group("你好，欢迎来到 LTalk 👋");
@@ -137,6 +139,54 @@ class ChatWindowTest {
                         && ("bob".equals(m.from()) || "bob".equals(m.to())), 100);
             }
         } finally { if (ref.get() != null) onEdt(() -> ref.get().dispatchEvent(new WindowEvent(ref.get(), WindowEvent.WINDOW_CLOSING))); }
+    }
+
+    @Test @Timeout(25)
+    void appearanceUpdatesExistingMessagesKeepsDraftAndConnectionAndSurvivesRestart() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>(); Path settings = appearanceDirectory.resolve("appearance.properties");
+        var dark = AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK).withBackground(AppearanceSettings.BackgroundStyle.SOLID,
+                AppearanceSettings.color("#182A3D"), AppearanceSettings.color("#314860"));
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start();
+            try (Peer bob = Peer.login(server.port(), "bob")) {
+                onEdt(() -> { ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", settings)); button(ref.get(), "connect").doClick(); });
+                ChatWindow window = ref.get(); awaitEdt(() -> button(window, "send").isEnabled());
+                bob.group("切换主题之前的消息"); awaitEdt(() -> history(window).contains("之前的消息"));
+                onEdt(() -> {
+                    area(window, "input").setText("不应丢失的草稿"); window.applyAppearance(dark, true);
+                    assertEquals("不应丢失的草稿", area(window, "input").getText()); assertTrue(button(window, "send").isEnabled());
+                    assertTrue(ChatTheme.palette(window.getContentPane()).dark());
+                    assertEquals(ThemePalette.of(dark).surface(), find(window, "sidebar").getBackground());
+                    assertEquals(ThemePalette.of(dark).text(), area(window, "input").getForeground());
+                    assertTrue(history(window).contains("之前的消息")); assertFalse(text(window, "host").isEnabled());
+                    render(window, 1200, 780, "ui-dark-desktop.png");
+                    button(window, "group").doClick(); render(window, 420, 760, "ui-dark-narrow.png");
+                    area(window, "input").setText("DARK-G-001"); button(window, "send").doClick();
+                });
+                assertEquals("DARK-G-001", bob.await(m -> m.type() == MessageType.GROUP_MESSAGE && "alice".equals(m.from())).content());
+                awaitEdt(() -> history(window).contains("DARK-G-001"));
+                onEdt(() -> window.dispatchEvent(new WindowEvent(window, WindowEvent.WINDOW_CLOSING))); ref.set(null);
+                onEdt(() -> {
+                    ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", settings));
+                    assertTrue(ChatTheme.palette(ref.get().getContentPane()).dark());
+                    assertEquals(dark, new AppearancePreferences(settings).load());
+                });
+            }
+        } finally { if (ref.get() != null) onEdt(() -> ref.get().dispatchEvent(new WindowEvent(ref.get(), WindowEvent.WINDOW_CLOSING))); }
+    }
+
+    @Test void preferenceSaveFailureIsVisibleWithoutUndoingAppearanceOrDraft() throws Exception {
+        Path invalidTarget = Files.createDirectory(appearanceDirectory.resolve("cannot-replace-directory"));
+        onEdt(() -> {
+            ChatWindow window = new ChatWindow(null, null, null, invalidTarget);
+            try {
+                area(window, "input").setText("保存失败也保留草稿");
+                window.applyAppearance(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK), true);
+                assertTrue(ChatTheme.palette(window.getContentPane()).dark());
+                assertEquals("保存失败也保留草稿", area(window, "input").getText());
+                assertTrue(label(window, "status").getText().contains("保存失败"));
+            } finally { window.dispatchEvent(new WindowEvent(window, WindowEvent.WINDOW_CLOSING)); }
+        });
     }
 
     private static void invokeKey(JTextArea editor, int key, int modifiers) {

@@ -17,6 +17,7 @@ public final class MessageTimeline extends JScrollPane {
     private int renderGeneration;
     private Map<ConversationStore.Entry, Component> renderedRows = new IdentityHashMap<>();
     private String renderedSelf = "";
+    private ThemePalette renderedPalette;
 
     public MessageTimeline() {
         super(); setName("timeline"); setViewportView(column); ChatTheme.scroll(this, true);
@@ -28,7 +29,9 @@ public final class MessageTimeline extends JScrollPane {
     public String renderedText() { return renderedText; }
 
     public void showEntries(List<ConversationStore.Entry> entries, String self, String query, boolean connected) {
-        Map<ConversationStore.Entry, Component> previous = renderedSelf.equals(self) ? renderedRows : Map.of();
+        ThemePalette palette = ChatTheme.palette(this);
+        Map<ConversationStore.Entry, Component> previous = renderedSelf.equals(self) && palette.equals(renderedPalette) ? renderedRows : Map.of();
+        renderedPalette = palette;
         renderedSelf = self; renderedRows = new IdentityHashMap<>();
         column.removeAll(); renderGeneration++;
         String needle = query.strip().toLowerCase(Locale.ROOT);
@@ -38,21 +41,21 @@ public final class MessageTimeline extends JScrollPane {
         StringBuilder plain = new StringBuilder();
         if (shown.isEmpty()) {
             column.add(new EmptyState(needle.isEmpty() ? "从一句问候开始" : "没有找到消息",
-                    needle.isEmpty() ? connected ? "发送消息，与伙伴保持联系" : "连接到聊天室，开始你的第一次对话" : "试试其他关键词"));
+                    needle.isEmpty() ? connected ? "发送消息，与伙伴保持联系" : "连接到聊天室，开始你的第一次对话" : "试试其他关键词", palette));
         } else {
             LocalDate previousDate = null;
             for (ConversationStore.Entry entry : shown) {
                 LocalDate date = entry.time().atZone(ZoneId.systemDefault()).toLocalDate();
-                if (!date.equals(previousDate)) { column.add(new Pill(date.equals(LocalDate.now()) ? "今天" : date.toString(), false)); previousDate = date; }
+                if (!date.equals(previousDate)) { column.add(new Pill(date.equals(LocalDate.now()) ? "今天" : date.toString(), false, palette)); previousDate = date; }
                 if (entry.kind() == ConversationStore.EntryKind.MESSAGE) {
                     boolean own = entry.from().equals(self);
                     Component row = previous.get(entry);
-                    if (row == null) row = new BubbleRow(entry, own);
+                    if (row == null) row = new BubbleRow(entry, own, palette);
                     renderedRows.put(entry, row); column.add(row);
                     plain.append(own ? "[我] " : "[" + entry.from() + "] ");
                 } else {
                     Component row = previous.get(entry);
-                    if (row == null) row = new Pill(entry.content(), entry.kind() == ConversationStore.EntryKind.ERROR);
+                    if (row == null) row = new Pill(entry.content(), entry.kind() == ConversationStore.EntryKind.ERROR, palette);
                     renderedRows.put(entry, row); column.add(row);
                 }
                 plain.append(entry.content()).append('\n');
@@ -113,24 +116,24 @@ public final class MessageTimeline extends JScrollPane {
         private final JLabel sender;
         private Dimension measured;
         private int measuredWidth = -1;
-        BubbleRow(ConversationStore.Entry entry, boolean own) {
+        BubbleRow(ConversationStore.Entry entry, boolean own, ThemePalette palette) {
             super(null); this.entry = entry; this.own = own; setOpaque(false);
-            bubble = new ChatTheme.RoundedPanel(new BorderLayout(0, 3), 20, own ? ChatTheme.OUTGOING : Color.WHITE, true);
+            bubble = new ChatTheme.RoundedPanel(new BorderLayout(0, 3), 20, own ? palette.outgoing() : palette.surface(), true);
             bubble.setBorder(new EmptyBorder(9, 13, 7, 13));
-            body = new MessageText(entry.content());
+            body = new MessageText(entry.content(), palette);
             body.getAccessibleContext().setAccessibleName((own ? "我" : entry.from()) + "的消息");
             bubble.add(body, BorderLayout.CENTER);
-            sender = ChatTheme.label(entry.from(), 12, avatarColor(entry.from()), true);
+            sender = ChatTheme.label(entry.from(), 12, avatarColor(entry.from(), palette.dark()), true);
             if (!own) bubble.add(sender, BorderLayout.NORTH);
             String time = DateTimeFormatter.ofPattern("HH:mm").format(entry.time().atZone(ZoneId.systemDefault()));
-            JLabel stamp = ChatTheme.label(time, 10, new Color(117, 143, 120), false);
-            if (own) { stamp.setIcon(new LineIcon(LineIcon.Kind.CHECK, new Color(117, 143, 120), 12)); stamp.setHorizontalTextPosition(SwingConstants.LEFT); }
+            JLabel stamp = ChatTheme.label(time, 10, palette.muted(), false);
+            if (own) { stamp.setIcon(new LineIcon(LineIcon.Kind.CHECK, palette.muted(), 12)); stamp.setHorizontalTextPosition(SwingConstants.LEFT); }
             stamp.setHorizontalAlignment(SwingConstants.RIGHT);
             if (own) stamp.setToolTipText("服务端已回显，不代表对方已读");
             bubble.add(stamp, BorderLayout.SOUTH); add(bubble);
         }
-        private static Color avatarColor(String name) {
-            return Color.getHSBColor(Math.floorMod(name.hashCode(), 360) / 360f, .58f, .72f);
+        private static Color avatarColor(String name, boolean dark) {
+            return Color.getHSBColor(Math.floorMod(name.hashCode(), 360) / 360f, .58f, dark ? .96f : .62f);
         }
         Dimension measure(int availableWidth) {
             if (measured != null && measuredWidth == availableWidth) return measured;
@@ -156,12 +159,13 @@ public final class MessageTimeline extends JScrollPane {
     private static final class Pill extends JPanel {
         private final JTextArea text;
         private final boolean error;
+        private final ThemePalette palette;
         private Dimension measured;
         private int measuredWidth = -1;
-        Pill(String value, boolean error) {
-            super(null); setOpaque(false); this.error = error;
+        Pill(String value, boolean error, ThemePalette palette) {
+            super(null); setOpaque(false); this.error = error; this.palette = palette;
             text = new JTextArea(value); text.setEditable(false); text.setOpaque(false); text.setLineWrap(true); text.setWrapStyleWord(true);
-            text.setFont(ChatTheme.FONT.deriveFont(11f)); text.setForeground(error ? new Color(157, 51, 62) : Color.WHITE);
+            text.setFont(ChatTheme.FONT.deriveFont(11f)); text.setForeground(error ? palette.danger() : palette.muted());
             text.setBorder(null); add(text);
         }
         Dimension measure(int width) {
@@ -177,18 +181,19 @@ public final class MessageTimeline extends JScrollPane {
         @Override protected void paintComponent(Graphics graphics) {
             Graphics2D g = (Graphics2D) graphics.create(); ChatTheme.quality(g);
             Dimension size = measured == null ? measure(getWidth()) : measured;
-            g.setColor(error ? new Color(255, 236, 235, 240) : new Color(82, 127, 81, 115));
+            Color base = error ? palette.errorSurface() : palette.surface();
+            g.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(), 235));
             g.fillRoundRect((getWidth() - size.width) / 2, 0, size.width, size.height, 18, 18); g.dispose();
         }
     }
     private static final class EmptyState extends JPanel {
-        EmptyState(String title, String subtitle) {
+        EmptyState(String title, String subtitle, ThemePalette palette) {
             super(new GridBagLayout()); setOpaque(false); setPreferredSize(new Dimension(300, 300));
-            ChatTheme.RoundedPanel card = new ChatTheme.RoundedPanel(new GridLayout(3, 1, 0, 10), 24, new Color(255, 255, 255, 225), true);
+            ChatTheme.RoundedPanel card = new ChatTheme.RoundedPanel(new GridLayout(3, 1, 0, 10), 24, palette.surface(), true);
             card.setBorder(new EmptyBorder(22, 24, 22, 24));
             JLabel icon = new JLabel(new LineIcon(LineIcon.Kind.SEND, ChatTheme.BLUE, 36), SwingConstants.CENTER);
-            JLabel heading = ChatTheme.label(title, 19, ChatTheme.INK, true); heading.setHorizontalAlignment(SwingConstants.CENTER);
-            JLabel detail = ChatTheme.label(subtitle, 11, ChatTheme.MUTED, false); detail.setHorizontalAlignment(SwingConstants.CENTER);
+            JLabel heading = ChatTheme.label(title, 19, palette.text(), true); heading.setHorizontalAlignment(SwingConstants.CENTER);
+            JLabel detail = ChatTheme.label(subtitle, 11, palette.muted(), false); detail.setHorizontalAlignment(SwingConstants.CENTER);
             card.add(icon); card.add(heading); card.add(detail); add(card);
         }
     }

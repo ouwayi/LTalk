@@ -9,7 +9,7 @@ final class MessageText extends JTextPane {
     private final Font normal = ChatTheme.FONT.deriveFont(15f);
     private final Font emoji = new Font("Segoe UI Emoji", Font.PLAIN, 15);
     private final Font logical = new Font(Font.DIALOG, Font.PLAIN, 15);
-    MessageText(String text) {
+    MessageText(String text, ThemePalette palette) {
         setEditorKit(new StyledEditorKit() {
             private final ViewFactory factory = element -> switch (element.getName()) {
                 case AbstractDocument.ContentElementName -> new LabelView(element) {
@@ -24,10 +24,11 @@ final class MessageText extends JTextPane {
             @Override public ViewFactory getViewFactory() { return factory; }
         });
         setEditable(false); setOpaque(false); setBorder(null); setMargin(new Insets(0, 0, 0, 0));
-        setFont(normal); setForeground(ChatTheme.INK); setName("messageText");
+        setFont(normal); setForeground(palette.text()); setCaretColor(palette.text()); setName("messageText");
+        setSelectionColor(ChatTheme.BLUE); setSelectedTextColor(Color.WHITE);
         SimpleAttributeSet base = new SimpleAttributeSet();
         StyleConstants.setFontFamily(base, normal.getFamily()); StyleConstants.setFontSize(base, 15);
-        StyleConstants.setForeground(base, ChatTheme.INK);
+        StyleConstants.setForeground(base, palette.text());
         try {
             getStyledDocument().insertString(0, text, base);
             for (int offset = 0; offset < text.length();) {
