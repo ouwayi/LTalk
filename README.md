@@ -2,14 +2,19 @@
 
 按《局域网聊天项目任务拆解》实现的 Java 课程项目 MVP。一个 TCP 服务端、多个 Swing 桌面客户端，无数据库、无需配置账号。
 
+继续开发前请先读 [当前状态与交接](docs/STATUS.md)，其中记录代码基线、验证范围、已知问题和下一步建议；每完成一个开发阶段同步更新。协议、设计与历史验证证据仍保留在各自文档中。
+
 已实现：多人群聊（含发送者回显）、服务端中转私聊（只发双方）、在线列表、唯一名称登录、输入与协议校验、主动退出、异常断线清理、手动重连。网络连接、收发均在后台，界面在 Swing EDT 更新。私聊对象离线时保留草稿并禁用发送，必须明确重新选择目标。
 
 ## 环境与构建
 
+- 技术栈：Java 单模块 Maven 工程；`Socket/ServerSocket` 阻塞 TCP；UTF-8、LF 分隔的 JSON 帧；Swing/Java2D 桌面 UI；`java.util.logging` 日志，无 Web 前端框架或数据库。
 - **JDK 17 或更高版本**，须包含 `java`、`javac`；客户端需要图形桌面环境。
 - **Maven 3.9.x**（Windows 可使用下面的脚本自动下载固定的 3.9.9）。
 - 固定依赖：Gson **2.11.0**、JUnit Jupiter **5.11.4**（仅测试）。
 - 实际验证环境：Windows、JDK **25.0.4**、Maven **3.9.9**，以 `--release 17` 编译；没有在 JDK 17 运行时实测。
+
+构建前确认 `java -version` 与 `javac -version` 均可运行，并将 `JAVA_HOME`（如设置）指向 JDK。运行已打包 JAR 只需 Java 运行环境；编译和测试需要完整 JDK。其他操作系统可使用已安装 Maven，尚无独立运行验收记录。
 
 在项目根目录运行：
 
@@ -19,6 +24,9 @@ powershell -NoProfile -File .\build.ps1
 
 # 只运行测试
 powershell -NoProfile -File .\build.ps1 test
+
+# 依赖已经缓存后，可离线构建并测试
+powershell -NoProfile -File .\build.ps1 -o package
 ```
 
 脚本首次运行需要联网，将校验过的 Maven 和所有依赖放在 `.tools/`；不会将工具、缓存、JAR 提交到 Git。如果本机脚本执行策略阻止运行，可使用已安装 Maven 的通用命令：
@@ -82,6 +90,8 @@ java -cp target/ltalk-1.0.0.jar cn.ltalk.client.ChatWindow 127.0.0.1 9000 carol
 
 ## 测试
 
+日常回归使用上面的 `build.ps1 test` / `mvn test`；交付打包使用 `build.ps1` / `mvn clean package`。2026-10-27 交接核对时重新执行离线完整构建，**46 项测试通过，0 失败、0 错误、0 跳过**；包含本机真实 Socket 集成测试与 Swing EDT 组件测试。运行测试需要允许本机 TCP，完整 UI 回归需图形桌面环境。结果与未验证范围见 [当前状态](docs/STATUS.md) 和 [测试报告](docs/test-report.md)。
+
 ```powershell
 # Windows：10 个真实 Socket 客户端持续 10 分钟
 powershell -NoProfile -File .\build.ps1 '-Dtest=LoadTest' '-Dltalk.soak.seconds=600' test
@@ -107,6 +117,7 @@ docs/                   需求、协议、设计、测试与演示
 ```
 
 - [需求与用户流程](docs/requirements.md)
+- [当前状态与开发交接](docs/STATUS.md)
 - [通信协议与错误码](docs/protocol.md)
 - [架构、线程与关键设计](docs/design.md)
 - [测试结果、证据与待验收项](docs/test-report.md)

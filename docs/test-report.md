@@ -1,5 +1,11 @@
 # 测试报告与验收记录
 
+## 交接核对回归（2026-10-27）
+
+本阶段仅整理文档，未修改业务源码；重新执行 `powershell -NoProfile -File .\build.ps1 -o package`，Windows/JDK 25.0.4/Maven 3.9.9 下 **46 项测试通过，0 失败、0 错误、0 跳过，BUILD SUCCESS**，耗时 13.821 秒。包括默认 2 秒、10 客户端短回归，没有重新执行 600 秒长测、真实窗口操作或虚拟机断网实验。
+
+日志 `.tools/handoff-build.log`，JUnit XML 位于 `target/surefire-reports/`，均为可覆盖的本机生成物。存在 JDK 25 工具链 native-access/Unsafe 与重复 package 时的 Shade 类/资源重叠警告，本次未改依赖或打包配置。当前状态与待办以 [STATUS.md](STATUS.md) 为入口；下文保留各阶段历史验证来源与范围。
+
 ## 环境与总体结果
 
 - 初始 MVP 自动化构建日期：**2026-10-24（Asia/Shanghai）**；UI 改造回归：**2026-10-25**。宿主机＋虚拟机人工验收由用户执行并反馈，具体测试时间未提供。
