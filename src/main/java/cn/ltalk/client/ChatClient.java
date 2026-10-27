@@ -16,6 +16,7 @@ public final class ChatClient implements AutoCloseable {
     private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(daemonFactory("ltalk-client-deadline-"));
     private final int connectTimeoutMillis;
     private final int loginTimeoutMillis;
+    private final HeartbeatSettings heartbeatSettings;
     private volatile State state = State.DISCONNECTED;
     private Connection active;
     private boolean disposed;
@@ -23,11 +24,17 @@ public final class ChatClient implements AutoCloseable {
     public ChatClient(ClientEventListener listener, Executor callbacks) { this(listener, callbacks, 3000, 5000); }
 
     public ChatClient(ClientEventListener listener, Executor callbacks, int connectTimeoutMillis, int loginTimeoutMillis) {
+        this(listener, callbacks, connectTimeoutMillis, loginTimeoutMillis, HeartbeatSettings.fromSystemProperties());
+    }
+
+    public ChatClient(ClientEventListener listener, Executor callbacks, int connectTimeoutMillis, int loginTimeoutMillis,
+                      HeartbeatSettings heartbeatSettings) {
         if (connectTimeoutMillis < 1 || loginTimeoutMillis < 1) throw new IllegalArgumentException("超时必须为正数");
         this.listener = listener;
         this.callbacks = callbacks;
         this.connectTimeoutMillis = connectTimeoutMillis;
         this.loginTimeoutMillis = loginTimeoutMillis;
+        this.heartbeatSettings = java.util.Objects.requireNonNull(heartbeatSettings);
     }
 
     public State state() { return state; }
@@ -40,6 +47,8 @@ public final class ChatClient implements AutoCloseable {
             if (disposed) throw new IllegalStateException("客户端已关闭");
             if (state != State.DISCONNECTED) throw new IllegalStateException("请先断开当前连接");
             Connection connection = new Connection(normalized);
+            connection.heartbeat = new Heartbeat(heartbeatSettings, message -> submitHeartbeat(connection, message),
+                    () -> terminate(connection, "心跳超时，连接已中断，请手动重新连接；待发送消息未确认"));
             active = connection;
             state = State.CONNECTING;
             emit(connection, () -> listener.onStateChanged(State.CONNECTING, "正在连接并登录…"));
@@ -82,6 +91,7 @@ public final class ChatClient implements AutoCloseable {
                         connection.socket.setSoTimeout(0);
                         connection.deadline.cancel(false);
                         state = State.CONNECTED;
+                        connection.heartbeat.start();
                         emit(connection, () -> listener.onStateChanged(State.CONNECTED, "已连接 · " + connection.userId));
                     }
                 } else {
@@ -94,6 +104,7 @@ public final class ChatClient implements AutoCloseable {
 
     private void dispatch(Connection connection, Message message) throws IOException {
         switch (message.type()) {
+            case PING, PONG -> connection.heartbeat.receive(message);
             case GROUP_MESSAGE, PRIVATE_MESSAGE -> {
                 if (message.from() == null || message.content() == null || message.serverTime() == null
                         || (message.type() == MessageType.PRIVATE_MESSAGE && message.to() == null))
@@ -116,6 +127,19 @@ public final class ChatClient implements AutoCloseable {
     }
 
     public void sendGroup(String content) throws IOException { submitChat(null, content); }
+
+    private void submitHeartbeat(Connection connection, Message message) {
+        if (connection.closed.get()) return;
+        try {
+            connection.sender.execute(() -> {
+                if (connection.closed.get()) return;
+                try { MessageCodec.write(connection.socket.getOutputStream(), message); }
+                catch (IOException ex) { terminate(connection, "心跳写入失败，请手动重新连接；待发送消息未确认"); }
+            });
+        } catch (RejectedExecutionException ex) {
+            terminate(connection, "心跳无法入队，请手动重新连接；待发送消息未确认");
+        }
+    }
     public void sendPrivate(String target, String content) throws IOException {
         if (target == null || !target.matches("[A-Za-z0-9_]{1,20}"))
             throw new ProtocolException("BAD_MESSAGE", "请选择当前在线的私聊对象");
@@ -154,6 +178,7 @@ public final class ChatClient implements AutoCloseable {
         if (!connection.closed.compareAndSet(false, true)) return;
         try { connection.socket.close(); } catch (IOException ignored) { }
         if (connection.deadline != null) connection.deadline.cancel(false);
+        connection.heartbeat.close();
         connection.sender.shutdownNow();
         synchronized (lifecycle) {
             if (active != connection) return;
@@ -190,6 +215,7 @@ public final class ChatClient implements AutoCloseable {
         final ExecutorService sender = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(64), daemonFactory("ltalk-client-send-"), new ThreadPoolExecutor.AbortPolicy());
         volatile ScheduledFuture<?> deadline;
+        Heartbeat heartbeat;
         boolean loggedIn;
         long lastRevision = -1;
         Connection(String userId) { this.userId = userId; }

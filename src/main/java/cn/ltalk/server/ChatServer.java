@@ -16,6 +16,7 @@ public final class ChatServer implements AutoCloseable {
     private final int requestedPort;
     private final int maxConnections;
     private final Duration loginTimeout;
+    private final HeartbeatSettings heartbeatSettings;
     private final Set<ClientSession> sessions = ConcurrentHashMap.newKeySet();
     private final SessionRegistry registry = new SessionRegistry();
     private final MessageRouter router = new MessageRouter(this, registry);
@@ -32,6 +33,11 @@ public final class ChatServer implements AutoCloseable {
     }
 
     public ChatServer(String bindAddress, int port, int maxConnections, Duration loginTimeout) throws UnknownHostException {
+        this(bindAddress, port, maxConnections, loginTimeout, HeartbeatSettings.fromSystemProperties());
+    }
+
+    public ChatServer(String bindAddress, int port, int maxConnections, Duration loginTimeout,
+                      HeartbeatSettings heartbeatSettings) throws UnknownHostException {
         if (port < 0 || port > 65535) throw new IllegalArgumentException("端口必须为 0～65535");
         if (maxConnections < 1 || maxConnections > 1000) throw new IllegalArgumentException("最大连接数须为 1～1000");
         if (loginTimeout.isNegative() || loginTimeout.isZero()) throw new IllegalArgumentException("登录超时必须为正数");
@@ -39,6 +45,7 @@ public final class ChatServer implements AutoCloseable {
         this.requestedPort = port;
         this.maxConnections = maxConnections;
         this.loginTimeout = loginTimeout;
+        this.heartbeatSettings = java.util.Objects.requireNonNull(heartbeatSettings);
         slots = new Semaphore(maxConnections);
         ThreadPoolExecutor boundedWorkers = new ThreadPoolExecutor(maxConnections, maxConnections, 30, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(maxConnections), threadFactory("ltalk-session-"), new ThreadPoolExecutor.AbortPolicy());
@@ -72,7 +79,7 @@ public final class ChatServer implements AutoCloseable {
                 // Admission and shutdown cannot miss a socket between accepting and registering it.
                 synchronized (this) {
                     if (!running || !slots.tryAcquire()) { socket.close(); continue; }
-                    ClientSession session = new ClientSession(this, socket);
+                    ClientSession session = new ClientSession(this, socket, heartbeatSettings);
                     sessions.add(session);
                     LOG.fine(() -> "接受连接 " + socket.getRemoteSocketAddress());
                     try {
@@ -119,13 +126,15 @@ public final class ChatServer implements AutoCloseable {
             running = false;
             if (listener != null) try { listener.close(); } catch (IOException ignored) { }
         }
-        for (ClientSession session : sessions.toArray(ClientSession[]::new)) session.close("服务端停止");
+        ClientSession[] closing = sessions.toArray(ClientSession[]::new);
+        for (ClientSession session : closing) session.close("服务端停止");
         workers.shutdownNow();
         deadlines.shutdownNow();
         try {
             if (acceptThread != null) acceptThread.join(2000);
             workers.awaitTermination(2, TimeUnit.SECONDS);
             deadlines.awaitTermination(2, TimeUnit.SECONDS);
+            for (ClientSession session : closing) session.awaitHeartbeatTermination();
         } catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
     }
 

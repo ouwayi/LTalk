@@ -41,6 +41,8 @@ public final class Peer implements AutoCloseable {
     }
     public Message read() throws IOException {
         Message message = reader.read();
+        if (message != null && message.type() == MessageType.PING)
+            send(Message.of(MessageType.PONG).requestId(message.requestId()).build());
         if (message != null) received.add(message);
         return message;
     }

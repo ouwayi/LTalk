@@ -4,7 +4,7 @@ import cn.ltalk.common.*;
 
 import java.io.IOException;
 import java.net.Socket;
-import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 
@@ -14,11 +14,33 @@ final class ClientSession implements Runnable {
     private final Socket socket;
     private final Object writeLock = new Object();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final ExecutorService heartbeatWriter = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(8), task -> {
+                Thread thread = new Thread(task, "ltalk-heartbeat-write");
+                thread.setDaemon(true);
+                return thread;
+            }, new ThreadPoolExecutor.AbortPolicy());
+    final Heartbeat heartbeat;
     volatile String userId;
     volatile boolean ready;
     volatile ScheduledFuture<?> loginDeadline;
 
-    ClientSession(ChatServer server, Socket socket) { this.server = server; this.socket = socket; }
+    ClientSession(ChatServer server, Socket socket, HeartbeatSettings settings) {
+        this.server = server;
+        this.socket = socket;
+        heartbeat = new Heartbeat(settings, this::submitHeartbeat, () -> close("心跳超时"));
+    }
+
+    private void submitHeartbeat(Message message) {
+        if (closed.get()) return;
+        try { heartbeatWriter.execute(() -> server.deliver(this, message)); }
+        catch (RejectedExecutionException ex) { close("心跳发送队列已满或关闭"); }
+    }
+
+    void awaitHeartbeatTermination() throws InterruptedException {
+        heartbeat.awaitTermination(2, TimeUnit.SECONDS);
+        heartbeatWriter.awaitTermination(2, TimeUnit.SECONDS);
+    }
     boolean isClosed() { return closed.get(); }
 
     void send(Message message) throws IOException {
@@ -64,6 +86,8 @@ final class ClientSession implements Runnable {
         if (deadline != null) deadline.cancel(false);
         // Closing the socket does not wait for a writer, and unblocks pending read/write calls.
         try { socket.close(); } catch (IOException ignored) { }
+        heartbeat.close();
+        heartbeatWriter.shutdownNow();
         server.sessionClosed(this, reason);
     }
 

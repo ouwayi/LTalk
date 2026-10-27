@@ -22,6 +22,7 @@ final class MessageRouter {
             }
             if (!session.ready) throw new ProtocolException("NOT_LOGGED_IN", "请先发送 LOGIN 登录");
             switch (request.type()) {
+                case PING, PONG -> session.heartbeat.receive(request);
                 case LOGOUT -> session.close("用户主动退出");
                 case GROUP_SEND -> {
                     validateChat(request);
@@ -61,6 +62,7 @@ final class MessageRouter {
         if (list == null) return;
         LOG.info(() -> "登录成功 user=" + userId);
         if (session.loginDeadline != null) session.loginDeadline.cancel(false);
+        session.heartbeat.start();
         server.broadcast(list);
         server.system(userId + " 上线了");
     }
