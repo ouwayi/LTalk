@@ -17,6 +17,17 @@ public final class ChatServer implements AutoCloseable {
     private final int maxConnections;
     private final Duration loginTimeout;
     private final HeartbeatSettings heartbeatSettings;
+    private AccountStore accounts;
+    private ChatArchive archive;
+    private java.nio.file.Path dataDirectory;
+    private java.nio.channels.FileChannel dataLockChannel;
+    private java.nio.channels.FileLock dataLock;
+    public AccountStore accounts() { return accounts; }
+    ChatArchive archive() { return archive; }
+    public synchronized void dataDirectory(java.nio.file.Path path) {
+        if (listener != null) throw new IllegalStateException("启动后不能更改数据目录");
+        dataDirectory = path;
+    }
     private final Set<ClientSession> sessions = ConcurrentHashMap.newKeySet();
     private final SessionRegistry registry = new SessionRegistry();
     private final MessageRouter router = new MessageRouter(this, registry);
@@ -55,6 +66,18 @@ public final class ChatServer implements AutoCloseable {
 
     public synchronized void start() throws IOException {
         if (stopped || listener != null) throw new IllegalStateException("请为每次启动创建新的 ChatServer");
+        if (dataDirectory == null) dataDirectory = java.nio.file.Files.createTempDirectory("ltalk-server-");
+        java.nio.file.Files.createDirectories(dataDirectory);
+        dataLockChannel = java.nio.channels.FileChannel.open(dataDirectory.resolve("server.lock"),
+                java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.WRITE);
+        try {
+            dataLock = dataLockChannel.tryLock();
+            if (dataLock == null) throw new IOException("数据目录已被另一个服务端使用");
+            accounts = new AccountStore(dataDirectory.resolve("accounts"));
+            archive = new ChatArchive(dataDirectory.resolve("history"));
+        } catch (IOException | RuntimeException ex) {
+            dataLockChannel.close(); throw new IOException("无法打开服务端数据目录", ex);
+        }
         ServerSocket socket = new ServerSocket();
         try {
             socket.setReuseAddress(true);
@@ -136,6 +159,8 @@ public final class ChatServer implements AutoCloseable {
             deadlines.awaitTermination(2, TimeUnit.SECONDS);
             for (ClientSession session : closing) session.awaitHeartbeatTermination();
         } catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
+        try { if (dataLock != null && dataLock.isValid()) dataLock.release(); } catch (IOException ignored) { }
+        try { if (dataLockChannel != null) dataLockChannel.close(); } catch (IOException ignored) { }
     }
 
     private static ThreadFactory threadFactory(String prefix) {
@@ -151,6 +176,7 @@ public final class ChatServer implements AutoCloseable {
             String bind = args.length > 1 ? args[1] : "0.0.0.0";
             int max = args.length > 2 ? Integer.parseInt(args[2]) : 20;
             ChatServer server = new ChatServer(bind, port, max, Duration.ofSeconds(10));
+            server.dataDirectory(java.nio.file.Path.of(System.getProperty("ltalk.dataDir", "data")));
             Runtime.getRuntime().addShutdownHook(new Thread(server::close, "ltalk-shutdown"));
             server.start();
             System.out.println("LTalk 已启动，按 Ctrl+C 停止。客户端应连接本机或局域网 IPv4 地址。");

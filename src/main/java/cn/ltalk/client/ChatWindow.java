@@ -12,7 +12,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
 
-/** Swing presentation adapter. The TCP client, server interfaces and wire protocol are unchanged. */
+/** Swing presentation adapter; account and export operations stay in the background client. */
 public final class ChatWindow extends JFrame implements ClientEventListener {
     private final ConversationStore store = new ConversationStore();
     private final ChatClient client = new ChatClient(this, SwingUtilities::invokeLater);
@@ -121,6 +121,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
             if (before != store.selected().unread()) SwingUtilities.invokeLater(this::refreshList);
         });
 
+        connection.register.addActionListener(e -> registerAccount());
         connection.connect.addActionListener(e -> connect()); connection.disconnect.addActionListener(e -> client.disconnect());
         send.addActionListener(e -> send()); group.addActionListener(e -> selectConversation(ConversationId.PUBLIC));
         back.addActionListener(e -> { shell.openList(); refreshList(); });
@@ -198,7 +199,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     private void connect() {
         try {
             pendingSelf = Validation.userId(connection.user.getText());
-            client.connect(connection.host.getText(), Integer.parseInt(connection.port.getText().strip()), pendingSelf);
+            client.connect(connection.host.getText(), Integer.parseInt(connection.port.getText().strip()), pendingSelf, new String(connection.password.getPassword()));
         } catch (IOException | IllegalArgumentException | IllegalStateException ex) {
             showError(ex instanceof NumberFormatException ? "端口必须是 1～65535 的整数" : ex.getMessage());
         }
@@ -284,8 +285,34 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
 
     private void showConnection(boolean visible) { connection.setVisible(visible); connectionWrapper.setVisible(visible); sidebar.revalidate(); sidebar.repaint(); }
     private void toggleConnection() { showConnection(!connection.isVisible()); shell.openList(); }
+    private void registerAccount() {
+        JTextField nickname = new JTextField();
+        JCheckBox random = new JCheckBox("系统随机生成用户名");
+        JPanel form = new JPanel(new GridLayout(0, 1, 4, 4));
+        form.add(new JLabel("昵称（用户名/密码填写在连接设置中）")); form.add(nickname); form.add(random);
+        if (JOptionPane.showConfirmDialog(this, form, "注册账号", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION) return;
+        try { client.register(connection.host.getText(), Integer.parseInt(connection.port.getText().strip()),
+                connection.user.getText(), nickname.getText(), new String(connection.password.getPassword()), random.isSelected()); }
+        catch (RuntimeException ex) { showError(ex.getMessage()); }
+    }
+    @Override public void onRegistered(String userId) {
+        connection.user.setText(userId); setStatus("注册成功，用户名：" + userId + "，请点击连接登录", false);
+    }
+    @Override public void onExported(Path path) { setStatus("导出成功：" + path, false); }
+    private void exportHistory() {
+        String format = (String) JOptionPane.showInputDialog(this, "导出格式", "导出聊天记录", JOptionPane.QUESTION_MESSAGE,
+                null, new String[]{"json", "csv"}, "json");
+        if (format == null) return;
+        JFileChooser chooser = new JFileChooser(); chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            try { client.exportHistory(chooser.getSelectedFile().toPath(), format); }
+            catch (IOException ex) { showError(ex.getMessage()); }
+        }
+    }
     private void showMenu() {
         ChatPopupMenu popup = new ChatPopupMenu(menu, "LTalk");
+        JMenuItem export = popup.action("menuExport", "导出聊天记录", LineIcon.Kind.SETTINGS, this::exportHistory);
+        export.setEnabled(connectionState == ChatClient.State.CONNECTED);
         popup.action("menuConnection", "连接设置", LineIcon.Kind.SETTINGS, this::toggleConnection);
         popup.action("menuAppearance", "外观设置", LineIcon.Kind.PALETTE, this::showAppearance);
         popup.action("menuMode", appearance.dark() ? "切换浅色模式" : "切换深色模式", appearance.dark() ? LineIcon.Kind.SUN : LineIcon.Kind.MOON,

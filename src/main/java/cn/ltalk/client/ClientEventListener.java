@@ -10,4 +10,6 @@ public interface ClientEventListener {
     default void onUserList(Message message) { }
     default void onSystem(Message message) { }
     default void onError(Message message) { }
+    default void onRegistered(String userId) { }
+    default void onExported(java.nio.file.Path path) { }
 }

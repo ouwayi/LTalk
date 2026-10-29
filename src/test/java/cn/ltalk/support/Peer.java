@@ -26,12 +26,21 @@ public final class Peer implements AutoCloseable {
     public static Peer login(int port, String user) throws IOException {
         Peer peer = new Peer(port);
         try {
-            peer.send(Message.of(MessageType.LOGIN).requestId("login").userId(user).build());
+            peer.send(Message.of(MessageType.REGISTER).requestId("register").userId(user).nickname(user).password("test123!").build());
+            Message registered = peer.read();
+            assertTrue(registered.type() == MessageType.REGISTER_OK || "USER_EXISTS".equals(registered.code()));
+            peer.send(Message.of(MessageType.LOGIN).requestId("login").userId(user).password("test123!").build());
             Message response = peer.read();
             assertNotNull(response);
             assertEquals(MessageType.LOGIN_OK, response.type(), () -> "First frame must be LOGIN_OK: " + response);
             return peer;
         } catch (Throwable ex) { peer.close(); throw ex; }
+    }
+    public static void seed(cn.ltalk.server.ChatServer server) throws IOException {
+        for (String user : List.of("alice", "same", "other", "old_user", "new_user", "watcher", "bob")) {
+            try { server.accounts().register(user, user, "test123!", false); }
+            catch (cn.ltalk.common.ProtocolException ex) { if (!ex.code().equals("USER_EXISTS")) throw ex; }
+        }
     }
     public void send(Message message) throws IOException { MessageCodec.write(socket.getOutputStream(), message); }
     public void raw(String text) throws IOException { socket.getOutputStream().write(text.getBytes(StandardCharsets.UTF_8)); socket.getOutputStream().flush(); }

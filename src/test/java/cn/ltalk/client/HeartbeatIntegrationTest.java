@@ -25,8 +25,8 @@ class HeartbeatIntegrationTest {
             // Different local timing demonstrates that timing is not negotiated on the wire.
             try (ChatClient first = client(a);
                  ChatClient second = new ChatClient(b, Runnable::run, 1000, 1000, new HeartbeatSettings(130, 650))) {
-                first.connect("127.0.0.1", server.port(), "alice"); a.state(ChatClient.State.CONNECTED);
-                second.connect("127.0.0.1", server.port(), "bob"); b.state(ChatClient.State.CONNECTED);
+                first.connect("127.0.0.1", server.port(), "alice", "test123!"); a.state(ChatClient.State.CONNECTED);
+                second.connect("127.0.0.1", server.port(), "bob", "test123!"); b.state(ChatClient.State.CONNECTED);
                 TimeUnit.MILLISECONDS.sleep(1500); // Several full probe/response cycles with no user activity.
                 assertEquals(2, server.onlineCount());
                 assertEquals(ChatClient.State.CONNECTED, first.state());
@@ -48,8 +48,8 @@ class HeartbeatIntegrationTest {
             try (ChatServer server = server(); BlackHole proxy = new BlackHole(server.port())) {
                 Events events = new Events(), watching = new Events();
                 try (ChatClient client = client(events); ChatClient watcher = client(watching)) {
-                    watcher.connect("127.0.0.1", server.port(), "watcher"); watching.state(ChatClient.State.CONNECTED);
-                    client.connect("127.0.0.1", proxy.port(), "alice"); events.state(ChatClient.State.CONNECTED);
+                    watcher.connect("127.0.0.1", server.port(), "watcher", "test123!"); watching.state(ChatClient.State.CONNECTED);
+                    client.connect("127.0.0.1", proxy.port(), "alice", "test123!"); events.state(ChatClient.State.CONNECTED);
                     client.sendGroup("connected"); events.message(MessageType.GROUP_MESSAGE);
                     long revision = watching.users(2).revision();
                     long started = System.nanoTime();
@@ -61,7 +61,7 @@ class HeartbeatIntegrationTest {
                     assertTrue(events.details.stream().anyMatch(s -> s.contains("心跳超时")));
                     assertTrue(System.nanoTime() - started < TimeUnit.MILLISECONDS.toNanos(2500), "Detection exceeded tolerance");
                     assertThrows(IOException.class, () -> client.sendGroup("disconnected"));
-                    client.connect("127.0.0.1", server.port(), "alice"); events.state(ChatClient.State.CONNECTED);
+                    client.connect("127.0.0.1", server.port(), "alice", "test123!"); events.state(ChatClient.State.CONNECTED);
                     TimeUnit.MILLISECONDS.sleep(1000); // Past the old connection's pending deadline.
                     client.sendGroup("new connection");
                     assertEquals("new connection", events.message(MessageType.GROUP_MESSAGE).content());
@@ -103,7 +103,7 @@ class HeartbeatIntegrationTest {
                 }
                 return null;
             });
-            client.connect("127.0.0.1", endpoint.getLocalPort(), "alice"); events.state(ChatClient.State.CONNECTED);
+            client.connect("127.0.0.1", endpoint.getLocalPort(), "alice", "test123!"); events.state(ChatClient.State.CONNECTED);
             events.state(ChatClient.State.DISCONNECTED);
             assertTrue(events.details.stream().anyMatch(s -> s.contains("心跳超时")));
             serving.get(4, TimeUnit.SECONDS);
@@ -112,10 +112,10 @@ class HeartbeatIntegrationTest {
 
     @Test void serverRejectsInvalidHeartbeatAndReclaimsSilentIdentityAndSlot() throws Exception {
         try (ChatServer server = new ChatServer("127.0.0.1", 0, 1, Duration.ofSeconds(2), FAST)) {
-            server.start();
+            server.start(); cn.ltalk.support.Peer.seed(server);
             try (Peer peer = new Peer(server.port())) {
-                peer.send(Message.of(MessageType.PING).requestId("pre-login").build()); peer.error("NOT_LOGGED_IN");
-                peer.send(Message.of(MessageType.LOGIN).requestId("login").userId("alice").build());
+                peer.send(Message.of(MessageType.PING).requestId("pre-login").build()); peer.error("NOT_AUTHENTICATED");
+                peer.send(Message.of(MessageType.LOGIN).requestId("login").userId("alice").password("test123!").build());
                 assertEquals(MessageType.LOGIN_OK, peer.read().type());
                 for (String id : new String[]{null, " ", "x".repeat(65)}) {
                     for (MessageType type : new MessageType[]{MessageType.PING, MessageType.PONG}) {
@@ -153,7 +153,7 @@ class HeartbeatIntegrationTest {
             Events events = new Events();
             try (ChatClient client = client(events)) {
                 for (int round = 0; round < 5; round++) {
-                    client.connect("127.0.0.1", server.port(), "alice"); events.state(ChatClient.State.CONNECTED);
+                    client.connect("127.0.0.1", server.port(), "alice", "test123!"); events.state(ChatClient.State.CONNECTED);
                     TimeUnit.MILLISECONDS.sleep(180);
                     client.disconnect(); events.state(ChatClient.State.DISCONNECTED);
                     until(() -> server.connectionCount() == 0);
@@ -166,7 +166,7 @@ class HeartbeatIntegrationTest {
 
     private static ChatServer server() throws Exception {
         ChatServer server = new ChatServer("127.0.0.1", 0, 2, Duration.ofSeconds(2), FAST);
-        server.start(); return server;
+        server.start(); cn.ltalk.support.Peer.seed(server); return server;
     }
 
     private static ChatClient client(Events events) { return new ChatClient(events, Runnable::run, 1000, 1000, FAST); }

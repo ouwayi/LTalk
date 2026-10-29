@@ -88,3 +88,9 @@ AppearanceSettings 分别保存浅色和深色背景色，模式切换不覆盖�
 自动化生成的界面预览位于 `target/ui-preview/ui-desktop.png`、`ui-narrow-chat.png`、`ui-narrow-list.png`，它们使用测试会话数据，不提交 Git。真实 Windows 窗口的 computer-use 验收过程与最终测试数见 [测试报告](test-report.md)。
 
 另有暗色与菜单预览：`ui-dark-desktop.png`、`ui-dark-narrow.png`、`menu-light.png`、`menu-dark.png`、`appearance-settings.png`，均在同一预览目录。
+
+## 账号与导出入口（2026-10-29）
+
+ConnectionPanel 新增密码输入与注册按钮；注册弹窗填写昵称，用户名/密码沿用连接表单，可选择随机用户名，成功返回后填回用户名而不自动登录。主菜单新增「导出聊天记录」，登录后可选择 JSON/CSV 和目标目录。网络、密码验证和导出文件写入在后台，状态/完成/错误经原回调执行器更新 EDT；不将密码保存进外观配置或聊天记录。列表继续按用户名显示，昵称仅保存为账号资料。
+
+组件回归已通过；本轮未执行注册/导出原生弹窗和多机操作，未改变主题、背景或现有占位功能。协议已扩展至 v2，旧版无密码客户端须升级。

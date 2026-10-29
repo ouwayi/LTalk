@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @Timeout(25)
 class ChatServerTest {
     private ChatServer server;
-    @BeforeEach void start() throws Exception { server = new ChatServer("127.0.0.1", 0); server.start(); }
+    @BeforeEach void start() throws Exception { server = new ChatServer("127.0.0.1", 0); server.start(); cn.ltalk.support.Peer.seed(server); }
     @AfterEach void stop() { server.close(); }
 
     @Test void groupEchoPrivateIsolationAndNoHistory() throws Exception {
@@ -45,7 +45,7 @@ class ChatServerTest {
 
     @Test void duplicateLoginPreservesOriginalAndRejectsNewConnection() throws Exception {
         try (Peer original = Peer.login(server.port(), "alice"); Peer duplicate = new Peer(server.port())) {
-            duplicate.send(Message.of(MessageType.LOGIN).requestId("duplicate").userId("alice").build());
+            duplicate.send(Message.of(MessageType.LOGIN).requestId("duplicate").userId("alice").password("test123!").build());
             duplicate.error("USER_EXISTS"); assertNull(duplicate.read());
             original.group("still here"); assertEquals("still here", original.type(MessageType.GROUP_MESSAGE).content());
             assertEquals(1, server.onlineCount());
@@ -59,7 +59,7 @@ class ChatServerTest {
                 CountDownLatch go = new CountDownLatch(1);
                 List<Future<Message>> results = new ArrayList<>();
                 for (Peer peer : List.of(a, b)) results.add(pool.submit(() -> {
-                    go.await(); peer.send(Message.of(MessageType.LOGIN).requestId("claim").userId("same").build()); return peer.read();
+                    go.await(); peer.send(Message.of(MessageType.LOGIN).requestId("claim").userId("same").password("test123!").build()); return peer.read();
                 }));
                 go.countDown();
                 List<MessageType> types = List.of(results.get(0).get().type(), results.get(1).get().type());
@@ -72,10 +72,10 @@ class ChatServerTest {
 
     @Test void badRequestsDoNotBroadcastAndIdentityCannotBeForged() throws Exception {
         try (Peer raw = new Peer(server.port())) {
-            raw.group("not logged in"); raw.error("NOT_LOGGED_IN");
+            raw.group("not logged in"); raw.error("NOT_AUTHENTICATED");
             raw.raw("garbage\n"); raw.error("BAD_MESSAGE");
             raw.raw("{\"type\":\"WHAT\"}\n"); raw.error("BAD_MESSAGE");
-            raw.raw("{\"type\":\"LOGIN\",\"requestId\":\"r\",\"userId\":\"bad-id\"}\n");
+            raw.raw("{\"type\":\"LOGIN\",\"requestId\":\"r\",\"userId\":\"bad-id\",\"password\":\"test123!\"}\n");
             raw.error("INVALID_USER_ID"); assertNull(raw.read());
         }
         try (Peer a = Peer.login(server.port(), "alice"); Peer b = Peer.login(server.port(), "bob")) {
@@ -110,7 +110,7 @@ class ChatServerTest {
     @Test void realSocketFragmentationAndCoalescing() throws Exception {
         try (Peer a = new Peer(server.port())) {
             a.raw("{\"type\":\"LOG");
-            a.raw("IN\",\"requestId\":\"r1\",\"userId\":\"alice\"}\n");
+            a.raw("IN\",\"requestId\":\"r1\",\"userId\":\"alice\",\"password\":\"test123!\"}\n");
             assertEquals(MessageType.LOGIN_OK, a.read().type());
             a.raw("{\"type\":\"GROUP_SEND\",\"requestId\":\"r2\",\"content\":\"一\\n二\"}\n"
                     + "{\"type\":\"GROUP_SEND\",\"requestId\":\"r3\",\"content\":\"三\"}\n");
@@ -128,7 +128,7 @@ class ChatServerTest {
     }
 
     @Test void loginTimeoutIsAbsoluteAndConnectionSlotsAreReclaimed() throws Exception {
-        server.close(); server = new ChatServer("127.0.0.1", 0, 1, Duration.ofMillis(250)); server.start();
+        server.close(); server = new ChatServer("127.0.0.1", 0, 1, Duration.ofMillis(250)); server.start(); cn.ltalk.support.Peer.seed(server);
         try (Peer idle = new Peer(server.port())) { assertNull(idle.read()); }
         try (Peer ready = Peer.login(server.port(), "alice"); Peer extra = new Peer(server.port())) {
             assertNull(extra.read()); ready.group("slot reclaimed"); ready.type(MessageType.GROUP_MESSAGE);
@@ -136,7 +136,7 @@ class ChatServerTest {
     }
 
     @Test void tricklingBytesCannotExtendLoginDeadline() throws Exception {
-        server.close(); server = new ChatServer("127.0.0.1", 0, 2, Duration.ofMillis(300)); server.start();
+        server.close(); server = new ChatServer("127.0.0.1", 0, 2, Duration.ofMillis(300)); server.start(); cn.ltalk.support.Peer.seed(server);
         ScheduledExecutorService trickle = Executors.newSingleThreadScheduledExecutor();
         try (Peer peer = new Peer(server.port())) {
             long started = System.nanoTime();

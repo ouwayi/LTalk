@@ -40,6 +40,10 @@ public final class ChatClient implements AutoCloseable {
     public State state() { return state; }
 
     public void connect(String host, int port, String userId) throws IOException {
+        connect(host, port, userId, "");
+    }
+
+    public void connect(String host, int port, String userId, String password) throws IOException {
         if (host == null || host.isBlank()) throw new IllegalArgumentException("请输入服务端 IP 或主机名");
         if (port < 1 || port > 65535) throw new IllegalArgumentException("端口必须为 1～65535");
         String normalized = Validation.userId(userId);
@@ -54,17 +58,17 @@ public final class ChatClient implements AutoCloseable {
             emit(connection, () -> listener.onStateChanged(State.CONNECTING, "正在连接并登录…"));
             connection.deadline = deadlines.schedule(() -> terminate(connection, "连接或登录超时，请检查地址后重新连接"),
                     (long) connectTimeoutMillis + loginTimeoutMillis, TimeUnit.MILLISECONDS);
-            connection.sender.execute(() -> establish(connection, host.strip(), port));
+            connection.sender.execute(() -> establish(connection, host.strip(), port, password));
         }
     }
 
-    private void establish(Connection connection, String host, int port) {
+    private void establish(Connection connection, String host, int port, String password) {
         try {
             connection.socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis);
             connection.socket.setTcpNoDelay(true);
             connection.socket.setSoTimeout(loginTimeoutMillis);
             MessageCodec.write(connection.socket.getOutputStream(), Message.of(MessageType.LOGIN)
-                    .requestId(connection.nextId()).userId(connection.userId).build());
+                    .requestId(connection.nextId()).userId(connection.userId).password(password).build());
             Thread reader = daemonFactory("ltalk-client-reader-").newThread(() -> receive(connection));
             reader.start();
         } catch (IOException | RuntimeException ex) { terminate(connection, "连接失败：" + ex.getMessage()); }
@@ -103,8 +107,24 @@ public final class ChatClient implements AutoCloseable {
     }
 
     private void dispatch(Connection connection, Message message) throws IOException {
+        synchronized (connection) {
+        if (message.requestId() != null && message.requestId().equals(connection.exportRequest)) {
+            if (connection.exportDeadline != null) connection.exportDeadline.cancel(false);
+            try {
+                if (message.type() == MessageType.ERROR) { closeExport(connection); emit(connection, () -> listener.onError(message)); return; }
+                if (message.type() == MessageType.EXPORT_END) {
+                    java.nio.file.Path path = connection.export.finish(); connection.export = null; connection.exportRequest = null; connection.exporting.set(false);
+                    emit(connection, () -> listener.onExported(path)); return;
+                }
+                if (message.type() != MessageType.EXPORT_PAGE || message.record() == null || message.cursor() == null)
+                    throw new IOException("无效导出响应");
+                connection.export.append(message.record()); requestExport(connection, message.cursor()); return;
+            } catch (IOException | RuntimeException ex) { exportFailed(connection); return; }
+        }
+        }
         switch (message.type()) {
             case PING, PONG -> connection.heartbeat.receive(message);
+            case EXPORT_PAGE, EXPORT_END -> { /* Ignore a response arriving after a cancelled export. */ }
             case GROUP_MESSAGE, PRIVATE_MESSAGE -> {
                 if (message.from() == null || message.content() == null || message.serverTime() == null
                         || (message.type() == MessageType.PRIVATE_MESSAGE && message.to() == null))
@@ -127,6 +147,62 @@ public final class ChatClient implements AutoCloseable {
     }
 
     public void sendGroup(String content) throws IOException { submitChat(null, content); }
+
+    public void register(String host, int port, String userId, String nickname, String password, boolean random) {
+        if (state != State.DISCONNECTED) throw new IllegalStateException("请先断开当前连接");
+        daemonFactory("ltalk-client-register-").newThread(() -> {
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis); socket.setSoTimeout(loginTimeoutMillis);
+                MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.REGISTER).requestId("register")
+                        .userId(random ? null : userId).nickname(nickname).password(password).usernameMode(random ? "RANDOM" : "MANUAL").build());
+                Message result = new MessageCodec.FrameReader(socket.getInputStream()).read();
+                if (result == null) throw new IOException("注册连接已关闭");
+                callbacks.execute(() -> { if (result.type() == MessageType.REGISTER_OK) listener.onRegistered(result.userId()); else listener.onError(result); });
+            } catch (IOException | RuntimeException ex) { callbacks.execute(() -> listener.onError(Message.error(null, "REGISTER_FAILED", "注册失败：" + ex.getMessage()))); }
+        }).start();
+    }
+
+    public void exportHistory(java.nio.file.Path directory, String format) throws IOException {
+        synchronized (lifecycle) {
+            Connection c = active;
+            if (state != State.CONNECTED || c == null || c.closed.get()) throw new IOException("请先登录");
+            if (!c.exporting.compareAndSet(false, true)) throw new IOException("已有导出任务");
+            try { c.sender.execute(() -> {
+                try { HistoryExport job = new HistoryExport(directory, c.userId, format);
+                    synchronized (c) {
+                        if (c.closed.get()) { job.close(); return; }
+                        c.export = job;
+                    }
+                    requestExport(c, null); }
+                catch (IOException | RuntimeException ex) { exportFailed(c); }
+            }); } catch (RejectedExecutionException ex) { c.exporting.set(false); throw new IOException("发送队列已满"); }
+        }
+    }
+    private void requestExport(Connection c, String cursor) throws IOException {
+        synchronized (c) {
+        if (c.closed.get() || c.export == null) throw new IOException("导出已取消");
+        c.exportRequest = c.nextId();
+        String expected = c.exportRequest;
+        c.exportDeadline = deadlines.schedule(() -> {
+            synchronized (c) { if (expected.equals(c.exportRequest)) exportFailed(c); }
+        }, loginTimeoutMillis, TimeUnit.MILLISECONDS);
+        Message request = Message.of(MessageType.EXPORT_REQUEST).requestId(c.exportRequest).cursor(cursor).build();
+        try { c.sender.execute(() -> {
+            try { if (!c.closed.get()) MessageCodec.write(c.socket.getOutputStream(), request); }
+            catch (IOException ex) { exportFailed(c); }
+        }); } catch (RejectedExecutionException ex) { throw new IOException("导出请求无法入队", ex); }
+        }
+    }
+    private void exportFailed(Connection c) {
+        closeExport(c); emit(c, () -> listener.onError(Message.error(null, "EXPORT_FAILED", "导出失败，请检查连接、目录权限及磁盘空间")));
+    }
+    private void closeExport(Connection c) {
+        synchronized (c) {
+        if (c.exportDeadline != null) c.exportDeadline.cancel(false);
+        HistoryExport job = c.export; c.export = null; c.exportRequest = null; c.exporting.set(false);
+        if (job != null) try { job.close(); } catch (IOException ignored) { }
+        }
+    }
 
     private void submitHeartbeat(Connection connection, Message message) {
         if (connection.closed.get()) return;
@@ -179,6 +255,7 @@ public final class ChatClient implements AutoCloseable {
         try { connection.socket.close(); } catch (IOException ignored) { }
         if (connection.deadline != null) connection.deadline.cancel(false);
         connection.heartbeat.close();
+        closeExport(connection);
         connection.sender.shutdownNow();
         synchronized (lifecycle) {
             if (active != connection) return;
@@ -216,6 +293,10 @@ public final class ChatClient implements AutoCloseable {
                 new ArrayBlockingQueue<>(64), daemonFactory("ltalk-client-send-"), new ThreadPoolExecutor.AbortPolicy());
         volatile ScheduledFuture<?> deadline;
         Heartbeat heartbeat;
+        final AtomicBoolean exporting = new AtomicBoolean();
+        volatile HistoryExport export;
+        volatile String exportRequest;
+        volatile ScheduledFuture<?> exportDeadline;
         boolean loggedIn;
         long lastRevision = -1;
         Connection(String userId) { this.userId = userId; }

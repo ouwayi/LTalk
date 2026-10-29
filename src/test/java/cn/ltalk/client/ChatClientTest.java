@@ -16,14 +16,14 @@ import static org.junit.jupiter.api.Assertions.*;
 @Timeout(20)
 class ChatClientTest {
     private ChatServer server;
-    @BeforeEach void start() throws Exception { server = new ChatServer("127.0.0.1", 0); server.start(); }
+    @BeforeEach void start() throws Exception { server = new ChatServer("127.0.0.1", 0); server.start(); cn.ltalk.support.Peer.seed(server); }
     @AfterEach void stop() { server.close(); }
 
     @Test void realClientSendsReceivesAndReconnectsAfterServerStops() throws Exception {
         Events events = new Events();
         try (ChatClient client = new ChatClient(events, Runnable::run); Peer bob = Peer.login(server.port(), "bob")) {
             assertThrows(IOException.class, () -> client.sendGroup("not connected"));
-            client.connect("127.0.0.1", server.port(), " alice "); events.state(ChatClient.State.CONNECTED);
+            client.connect("127.0.0.1", server.port(), " alice ", "test123!"); events.state(ChatClient.State.CONNECTED);
             Message users = events.message(MessageType.USER_LIST); assertTrue(users.users().contains("alice"));
             client.sendGroup("中文🙂\nnewline");
             assertEquals("中文🙂\nnewline", events.message(MessageType.GROUP_MESSAGE).content());
@@ -38,8 +38,8 @@ class ChatClientTest {
             assertEquals(ChatClient.State.CONNECTED, client.state());
             server.close(); events.state(ChatClient.State.DISCONNECTED);
             assertThrows(IOException.class, () -> client.sendGroup("after shutdown"));
-            server = new ChatServer("127.0.0.1", 0); server.start();
-            client.connect("127.0.0.1", server.port(), "alice"); events.state(ChatClient.State.CONNECTED);
+            server = new ChatServer("127.0.0.1", 0); server.start(); cn.ltalk.support.Peer.seed(server);
+            client.connect("127.0.0.1", server.port(), "alice", "test123!"); events.state(ChatClient.State.CONNECTED);
             client.sendGroup("reconnected"); assertEquals("reconnected", events.message(MessageType.GROUP_MESSAGE).content());
         }
     }
@@ -47,9 +47,9 @@ class ChatClientTest {
     @Test void duplicateLoginSurfacesReasonAndAllowsRetry() throws Exception {
         Events events = new Events();
         try (Peer alice = Peer.login(server.port(), "alice"); ChatClient client = new ChatClient(events, Runnable::run)) {
-            client.connect("127.0.0.1", server.port(), "alice");
+            client.connect("127.0.0.1", server.port(), "alice", "test123!");
             assertEquals("USER_EXISTS", events.message(MessageType.ERROR).code()); events.state(ChatClient.State.DISCONNECTED);
-            client.connect("127.0.0.1", server.port(), "other"); events.state(ChatClient.State.CONNECTED);
+            client.connect("127.0.0.1", server.port(), "other", "test123!"); events.state(ChatClient.State.CONNECTED);
             client.disconnect(); events.state(ChatClient.State.DISCONNECTED);
         }
     }
@@ -59,12 +59,12 @@ class ChatClientTest {
         int unused;
         try (ServerSocket temporary = new ServerSocket(0)) { unused = temporary.getLocalPort(); }
         try (ChatClient client = new ChatClient(events, Runnable::run, 200, 200)) {
-            assertThrows(IllegalArgumentException.class, () -> client.connect("", 9000, "alice"));
-            assertThrows(IllegalArgumentException.class, () -> client.connect("localhost", 0, "alice"));
-            client.connect("127.0.0.1", unused, "alice"); events.state(ChatClient.State.DISCONNECTED);
+            assertThrows(IllegalArgumentException.class, () -> client.connect("", 9000, "alice", "test123!"));
+            assertThrows(IllegalArgumentException.class, () -> client.connect("localhost", 0, "alice", "test123!"));
+            client.connect("127.0.0.1", unused, "alice", "test123!"); events.state(ChatClient.State.DISCONNECTED);
             try (ServerSocket silent = new ServerSocket(0)) {
                 silent.setSoTimeout(4000);
-                client.connect("127.0.0.1", silent.getLocalPort(), "alice");
+                client.connect("127.0.0.1", silent.getLocalPort(), "alice", "test123!");
                 try (Socket accepted = silent.accept()) { events.state(ChatClient.State.DISCONNECTED); }
             }
             assertEquals(ChatClient.State.DISCONNECTED, client.state());
@@ -91,7 +91,7 @@ class ChatClientTest {
                 return null;
             });
             for (long expected : new long[]{5, 1}) {
-                client.connect("127.0.0.1", endpoint.getLocalPort(), "alice"); events.state(ChatClient.State.CONNECTED);
+                client.connect("127.0.0.1", endpoint.getLocalPort(), "alice", "test123!"); events.state(ChatClient.State.CONNECTED);
                 Message list = events.message(MessageType.USER_LIST); assertEquals(expected, list.revision()); assertTrue(list.users().contains("bob"));
                 events.message(MessageType.SYSTEM);
                 assertTrue(events.lists.stream().noneMatch(m -> m.users().contains("stale")));
@@ -105,10 +105,10 @@ class ChatClientTest {
         Queue<Runnable> edt = new ConcurrentLinkedQueue<>();
         Events events = new Events();
         try (ChatClient client = new ChatClient(events, edt::add)) {
-            client.connect("127.0.0.1", server.port(), "old_user");
+            client.connect("127.0.0.1", server.port(), "old_user", "test123!");
             until(() -> client.state() == ChatClient.State.CONNECTED && server.onlineCount() == 1);
             client.disconnect();
-            client.connect("127.0.0.1", server.port(), "new_user");
+            client.connect("127.0.0.1", server.port(), "new_user", "test123!");
             until(() -> client.state() == ChatClient.State.CONNECTED && server.onlineCount() == 1);
             client.sendGroup("barrier");
             until(() -> edt.size() >= 7);
@@ -124,7 +124,7 @@ class ChatClientTest {
         Events events = new Events();
         try (ChatClient client = new ChatClient(events, Runnable::run)) {
             for (int i = 0; i < 10; i++) {
-                client.connect("127.0.0.1", server.port(), "alice"); events.state(ChatClient.State.CONNECTED);
+                client.connect("127.0.0.1", server.port(), "alice", "test123!"); events.state(ChatClient.State.CONNECTED);
                 client.disconnect(); events.state(ChatClient.State.DISCONNECTED);
                 until(() -> server.connectionCount() == 0);
             }

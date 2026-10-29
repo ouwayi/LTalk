@@ -28,15 +28,15 @@ class ChatWindowTest {
     void connectionPrivateTargetLossDraftAndGroupEcho() throws Exception {
         AtomicReference<ChatWindow> windowRef = new AtomicReference<>();
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
-            server.start();
+            server.start(); cn.ltalk.support.Peer.seed(server);
             try (Peer bob = Peer.login(server.port(), "bob")) {
                 SwingUtilities.invokeAndWait(() -> windowRef.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("appearance.properties"))));
                 ChatWindow window = windowRef.get();
                 onEdt(() -> {
                     assertFalse(button(window, "send").isEnabled());
-                    text(window, "port").setText("wrong"); button(window, "connect").doClick();
+                    text(window, "port").setText("wrong"); text(window, "password").setText("test123!"); button(window, "connect").doClick();
                     assertTrue(label(window, "status").getText().contains("端口"));
-                    text(window, "port").setText(Integer.toString(server.port())); button(window, "connect").doClick();
+                    text(window, "port").setText(Integer.toString(server.port())); text(window, "password").setText("test123!"); button(window, "connect").doClick();
                 });
                 awaitEdt(() -> button(window, "send").isEnabled() && list(window).getModel().getSize() == 2);
                 onEdt(() -> {
@@ -81,9 +81,9 @@ class ChatWindowTest {
     void unreadSearchDraftKeyboardAndNarrowNavigationUseExistingNetworkApi() throws Exception {
         AtomicReference<ChatWindow> ref = new AtomicReference<>();
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
-            server.start();
+            server.start(); cn.ltalk.support.Peer.seed(server);
             try (Peer bob = Peer.login(server.port(), "bob"); Peer carol = Peer.login(server.port(), "carol")) {
-                onEdt(() -> { ChatTheme.install(); ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("appearance.properties"))); button(ref.get(), "connect").doClick(); });
+                onEdt(() -> { ChatTheme.install(); ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("appearance.properties"))); text(ref.get(), "password").setText("test123!"); button(ref.get(), "connect").doClick(); });
                 ChatWindow window = ref.get();
                 awaitEdt(() -> button(window, "send").isEnabled() && list(window).getModel().getSize() == 3);
                 bob.group("你好，欢迎来到 LTalk 👋");
@@ -147,9 +147,9 @@ class ChatWindowTest {
         var dark = AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK).withBackground(AppearanceSettings.BackgroundStyle.SOLID,
                 AppearanceSettings.color("#182A3D"), AppearanceSettings.color("#314860"));
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
-            server.start();
+            server.start(); cn.ltalk.support.Peer.seed(server);
             try (Peer bob = Peer.login(server.port(), "bob")) {
-                onEdt(() -> { ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", settings)); button(ref.get(), "connect").doClick(); });
+                onEdt(() -> { ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", settings)); text(ref.get(), "password").setText("test123!"); button(ref.get(), "connect").doClick(); });
                 ChatWindow window = ref.get(); awaitEdt(() -> button(window, "send").isEnabled());
                 bob.group("切换主题之前的消息"); awaitEdt(() -> history(window).contains("之前的消息"));
                 onEdt(() -> {

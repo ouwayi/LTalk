@@ -7,6 +7,8 @@ import java.awt.*;
 /** Connection form only: callers retain the existing connect/disconnect operations. */
 public final class ConnectionPanel extends ChatTheme.RoundedPanel {
     public final JTextField host, port, user;
+    public final JPasswordField password = new JPasswordField();
+    public final JButton register = ChatTheme.pill("注册账号");
     public final JButton connect = ChatTheme.primary("连接聊天室");
     public final JButton disconnect = ChatTheme.iconButton(LineIcon.Kind.LOGOUT, "断开当前连接");
     public ConnectionPanel(String host, String port, String user) {
@@ -24,10 +26,14 @@ public final class ConnectionPanel extends ChatTheme.RoundedPanel {
         c.gridx = 1; c.weightx = .25; this.port.setColumns(4); add(this.port, c);
         c.gridy++; c.gridx = 0; c.gridwidth = 2; add(ChatTheme.label("用户标识 · 字母、数字或下划线", 10, ChatTheme.MUTED, false), c);
         c.gridy++; add(this.user, c);
+        c.gridy++; add(ChatTheme.label("密码", 10, ChatTheme.MUTED, false), c);
+        c.gridy++; password.setName("password"); add(password, c);
+        c.gridy++; register.setName("register"); add(register, c);
         JPanel actions = new JPanel(new BorderLayout(6, 0)); actions.setOpaque(false); actions.add(connect); actions.add(disconnect, BorderLayout.EAST);
         c.gridy++; c.insets = new Insets(10, 3, 2, 3); add(actions, c);
     }
     public void state(boolean disconnected) {
+        password.setEnabled(disconnected); register.setEnabled(disconnected);
         host.setEnabled(disconnected); port.setEnabled(disconnected); user.setEnabled(disconnected);
         connect.setEnabled(disconnected); disconnect.setEnabled(!disconnected);
     }

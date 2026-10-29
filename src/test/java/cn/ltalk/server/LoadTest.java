@@ -25,7 +25,7 @@ class LoadTest {
         long maxRoundTripMillis = 0;
         int rounds = 0;
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
-            server.start();
+            server.start(); cn.ltalk.support.Peer.seed(server);
             try {
                 for (int i = 0; i < 10; i++) peers.add(Peer.login(server.port(), "load" + i));
                 for (Peer peer : peers) peer.users(10);

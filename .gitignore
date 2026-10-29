@@ -5,6 +5,7 @@ out/
 .gradle/
 *.class
 /.tools/
+/data/
 
 # Local IDE settings
 .idea/

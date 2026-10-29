@@ -24,6 +24,7 @@ final class ClientSession implements Runnable {
     volatile String userId;
     volatile boolean ready;
     volatile ScheduledFuture<?> loginDeadline;
+    ChatArchive.Cursor exportCursor;
 
     ClientSession(ChatServer server, Socket socket, HeartbeatSettings settings) {
         this.server = server;
@@ -88,8 +89,13 @@ final class ClientSession implements Runnable {
         try { socket.close(); } catch (IOException ignored) { }
         heartbeat.close();
         heartbeatWriter.shutdownNow();
+        closeExport();
         server.sessionClosed(this, reason);
     }
 
     @Override public String toString() { return userId == null ? socket.getRemoteSocketAddress().toString() : userId; }
+    synchronized void closeExport() {
+        if (exportCursor != null) try { exportCursor.close(); } catch (IOException ignored) { }
+        exportCursor = null;
+    }
 }
