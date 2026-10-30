@@ -122,14 +122,62 @@ class AuthenticationExportTest {
         }
     }
     private List<ChatRecord> records(Peer peer) throws IOException {
+        return records(peer, null);
+    }
+    private List<ChatRecord> records(Peer peer, String scope) throws IOException {
         List<ChatRecord> result = new ArrayList<>(); String cursor = null;
         do {
-            peer.send(Message.of(MessageType.EXPORT_REQUEST).requestId("export").cursor(cursor).build());
+            peer.send(Message.of(MessageType.EXPORT_REQUEST).requestId("export").cursor(cursor).conversationId(scope).build());
             Message m = peer.await(r -> "export".equals(r.requestId()));
             if (m.type() == MessageType.EXPORT_END) return result;
             assertEquals(MessageType.EXPORT_PAGE, m.type()); result.add(m.record()); cursor = m.cursor();
         } while (result.size() < 1000);
         throw new AssertionError("Unbounded export");
+    }
+    @Test void conversationExportsFilterBothDirectionsAndBindScopeToCursor() throws Exception {
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start();
+            try (Peer a = Peer.login(server.port(), "alice"); Peer b = Peer.login(server.port(), "bob"); Peer c = Peer.login(server.port(), "carol")) {
+                a.group("public"); for (Peer p : List.of(a, b, c)) p.type(MessageType.GROUP_MESSAGE);
+                a.privateTo("bob", "outbound"); a.type(MessageType.PRIVATE_MESSAGE); b.type(MessageType.PRIVATE_MESSAGE);
+                b.privateTo("alice", "inbound"); a.type(MessageType.PRIVATE_MESSAGE); b.type(MessageType.PRIVATE_MESSAGE);
+                a.privateTo("carol", "other"); a.type(MessageType.PRIVATE_MESSAGE); c.type(MessageType.PRIVATE_MESSAGE);
+                String scope = ConversationScope.privateChat("alice", "bob");
+                assertEquals(List.of("public"), records(a, ConversationScope.PUBLIC).stream().map(ChatRecord::content).toList());
+                assertEquals(List.of("outbound", "inbound"), records(a, scope).stream().map(ChatRecord::content).toList());
+                assertTrue(records(a, ConversationScope.privateChat("alice", "nobody")).isEmpty());
+                c.send(Message.of(MessageType.EXPORT_REQUEST).requestId("forbidden").conversationId(scope).build()); c.error("FORBIDDEN");
+                a.send(Message.of(MessageType.EXPORT_REQUEST).requestId("start").conversationId(scope).build());
+                String cursor = a.type(MessageType.EXPORT_PAGE).cursor();
+                a.send(Message.of(MessageType.EXPORT_REQUEST).requestId("changed").cursor(cursor).conversationId(ConversationScope.PUBLIC).build()); a.error("FORBIDDEN");
+                a.send(Message.of(MessageType.EXPORT_REQUEST).requestId("continue").cursor(cursor).conversationId(scope).build());
+                assertEquals("inbound", a.type(MessageType.EXPORT_PAGE).record().content());
+                a.send(Message.of(MessageType.EXPORT_REQUEST).requestId("bad").conversationId("PRIVATE:bob:alice").build()); a.error("BAD_MESSAGE");
+            }
+        }
+    }
+    @Test void clientConversationExportWritesOnlySelectedRecords() throws Exception {
+        BlockingQueue<Path> completed = new LinkedBlockingQueue<>(); CountDownLatch ready = new CountDownLatch(1);
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start(); server.accounts().register("alice", "昵称", "pass!12", false);
+            try (ChatClient client = new ChatClient(new ClientEventListener() {
+                public void onStateChanged(ChatClient.State s, String detail) { if (s == ChatClient.State.CONNECTED) ready.countDown(); }
+                public void onExported(Path path) { completed.add(path); }
+            }, Runnable::run); Peer bob = Peer.login(server.port(), "bob")) {
+                client.connect("127.0.0.1", server.port(), "alice", "pass!12"); assertTrue(ready.await(4, TimeUnit.SECONDS));
+                client.sendGroup("group only"); bob.type(MessageType.GROUP_MESSAGE);
+                client.sendPrivate("bob", "private only"); bob.type(MessageType.PRIVATE_MESSAGE);
+                for (String format : List.of("json", "csv")) {
+                    client.exportHistory(directory, format, ConversationScope.PUBLIC);
+                    Path path = completed.poll(4, TimeUnit.SECONDS); assertNotNull(path);
+                    assertTrue(Files.readString(path).contains("group only")); assertFalse(Files.readString(path).contains("private only"));
+                }
+                client.exportHistory(directory, "json", ConversationScope.privateChat("alice", "bob"));
+                Path path = completed.poll(4, TimeUnit.SECONDS); assertNotNull(path);
+                var records = JsonParser.parseString(Files.readString(path)).getAsJsonArray(); assertEquals(1, records.size());
+                assertEquals("private only", records.get(0).getAsJsonObject().get("content").getAsString());
+            }
+        }
     }
     @Test void exportSnapshotAndLargeFilesAreIncrementalAndAbortRemovesPartialFile() throws Exception {
         ChatArchive archive = new ChatArchive(directory.resolve("history"));

@@ -94,9 +94,12 @@ final class MessageRouter {
         synchronized (session) {
             if (session.isClosed()) throw new ProtocolException("NOT_AUTHENTICATED", "登录态已失效");
             if (request.cursor() == null) {
-                session.closeExport(); session.exportCursor = server.archive().open(session.userId);
+                ConversationScope.validate(session.userId, request.conversationId());
+                session.closeExport(); session.exportCursor = server.archive().open(session.userId, request.conversationId());
             } else if (session.exportCursor == null || !session.exportCursor.token.equals(request.cursor()))
                 throw new ProtocolException("FORBIDDEN", "导出游标无效或已过期");
+            if (!java.util.Objects.equals(session.exportCursor.scope, request.conversationId()))
+                throw new ProtocolException("FORBIDDEN", "导出期间不能切换会话范围");
             ChatRecord record = session.exportCursor.next();
             if (record == null) {
                 session.closeExport();

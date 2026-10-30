@@ -20,13 +20,7 @@ public final class AppearancePanel extends JPanel {
 
     public AppearancePanel(AppearanceSettings initial, Consumer<AppearanceSettings> onApply, Runnable onCancel) {
         super(new BorderLayout(0, 16)); draft = initial; ChatTheme.surface(this);
-        setName("appearancePanel"); setBorder(new EmptyBorder(20, 22, 18, 22)); setPreferredSize(new Dimension(460, 572));
-        JPanel heading = new JPanel(new BorderLayout(12, 0)); heading.setOpaque(false);
-        heading.add(new JLabel(new LineIcon(LineIcon.Kind.PALETTE, ChatTheme.BLUE, 30)), BorderLayout.WEST);
-        JPanel titles = new JPanel(new GridLayout(2, 1, 0, 5)); titles.setOpaque(false);
-        titles.add(ChatTheme.label("让界面更适合你", 18, ChatTheme.INK, true));
-        titles.add(ChatTheme.label("颜色与显示模式仅保存在本机", 11, ChatTheme.MUTED, false));
-        heading.add(titles); add(heading, BorderLayout.NORTH);
+        setName("appearancePanel"); setBorder(new EmptyBorder(20, 22, 18, 22)); setPreferredSize(new Dimension(460, 512));
 
         light.setName("modeLight"); dark.setName("modeDark"); solid.setName("backgroundSolid"); gradient.setName("backgroundGradient");
         apply.setName("appearanceApply"); error.setName("appearanceError"); preview = new WallpaperPanel(new GridBagLayout(), initial); preview.setName("appearancePreview");

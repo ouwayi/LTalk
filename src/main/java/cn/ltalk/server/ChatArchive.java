@@ -36,15 +36,27 @@ final class ChatArchive {
                 .content(record.content()).serverTime(record.sentAt()).messageId(id).conversationId(conversation).build();
     }
     synchronized Cursor open(String user) throws IOException {
+        return open(user, null);
+    }
+    synchronized Cursor open(String user, String scope) throws IOException {
+        ConversationScope.validate(user, scope);
         Path path = directory.resolve(AccountStore.fileKey(user) + ".jsonl");
-        return new Cursor(Files.exists(path) ? new RandomAccessFile(path.toFile(), "r") : null);
+        return new Cursor(Files.exists(path) ? new RandomAccessFile(path.toFile(), "r") : null, scope);
     }
     static final class Cursor implements AutoCloseable {
         final String token = UUID.randomUUID().toString();
         final RandomAccessFile file;
         final long end;
-        Cursor(RandomAccessFile file) throws IOException { this.file = file; end = file == null ? 0 : file.length(); }
+        final String scope;
+        Cursor(RandomAccessFile file, String scope) throws IOException {
+            this.file = file; this.scope = scope; end = file == null ? 0 : file.length();
+        }
         ChatRecord next() throws IOException {
+            ChatRecord record;
+            do { record = readNext(); } while (record != null && scope != null && !scope.equals(record.conversationId()));
+            return record;
+        }
+        private ChatRecord readNext() throws IOException {
             if (file == null || file.getFilePointer() >= end) return null;
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             int b;

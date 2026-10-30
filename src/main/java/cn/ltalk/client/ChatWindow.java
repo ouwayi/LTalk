@@ -300,19 +300,22 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     }
     @Override public void onExported(Path path) { setStatus("导出成功：" + path, false); }
     private void exportHistory() {
-        String format = (String) JOptionPane.showInputDialog(this, "导出格式", "导出聊天记录", JOptionPane.QUESTION_MESSAGE,
+        ConversationId selected = store.selectedId();
+        final String scope;
+        try { scope = selected.kind() == ConversationId.Kind.GROUP ? cn.ltalk.common.ConversationScope.PUBLIC
+                : cn.ltalk.common.ConversationScope.privateChat(store.self(), selected.key()); }
+        catch (IOException ex) { showError(ex.getMessage()); return; }
+        String format = (String) JOptionPane.showInputDialog(this, "导出「" + store.selected().title() + "」的聊天记录", "导出聊天记录", JOptionPane.QUESTION_MESSAGE,
                 null, new String[]{"json", "csv"}, "json");
         if (format == null) return;
         JFileChooser chooser = new JFileChooser(); chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
         if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            try { client.exportHistory(chooser.getSelectedFile().toPath(), format); }
+            try { client.exportHistory(chooser.getSelectedFile().toPath(), format, scope); }
             catch (IOException ex) { showError(ex.getMessage()); }
         }
     }
     private void showMenu() {
         ChatPopupMenu popup = new ChatPopupMenu(menu, "LTalk");
-        JMenuItem export = popup.action("menuExport", "导出聊天记录", LineIcon.Kind.SETTINGS, this::exportHistory);
-        export.setEnabled(connectionState == ChatClient.State.CONNECTED);
         popup.action("menuConnection", "连接设置", LineIcon.Kind.SETTINGS, this::toggleConnection);
         popup.action("menuAppearance", "外观设置", LineIcon.Kind.PALETTE, this::showAppearance);
         popup.action("menuMode", appearance.dark() ? "切换浅色模式" : "切换深色模式", appearance.dark() ? LineIcon.Kind.SUN : LineIcon.Kind.MOON,
@@ -336,8 +339,8 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     private void showChatMenu() {
         ChatPopupMenu popup = new ChatPopupMenu(more, store.selected().title());
         popup.action("chatLatest", "回到最新消息", LineIcon.Kind.BACK, timeline::scrollToBottom);
-        popup.action("chatAppearance", "外观设置", LineIcon.Kind.PALETTE, this::showAppearance);
-        popup.action("chatConnection", "连接设置", LineIcon.Kind.SETTINGS, this::toggleConnection);
+        JMenuItem export = popup.action("chatExport", "导出聊天记录", LineIcon.Kind.SETTINGS, this::exportHistory);
+        export.setEnabled(connectionState == ChatClient.State.CONNECTED);
         popup.show(more, more.getWidth() - popup.getPreferredSize().width, more.getHeight() + 4);
     }
     private void showAppearance() {

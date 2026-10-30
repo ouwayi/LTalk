@@ -163,10 +163,15 @@ public final class ChatClient implements AutoCloseable {
     }
 
     public void exportHistory(java.nio.file.Path directory, String format) throws IOException {
+        exportHistory(directory, format, null);
+    }
+    public void exportHistory(java.nio.file.Path directory, String format, String scope) throws IOException {
         synchronized (lifecycle) {
             Connection c = active;
             if (state != State.CONNECTED || c == null || c.closed.get()) throw new IOException("请先登录");
+            ConversationScope.validate(c.userId, scope);
             if (!c.exporting.compareAndSet(false, true)) throw new IOException("已有导出任务");
+            c.exportScope = scope;
             try { c.sender.execute(() -> {
                 try { HistoryExport job = new HistoryExport(directory, c.userId, format);
                     synchronized (c) {
@@ -186,7 +191,7 @@ public final class ChatClient implements AutoCloseable {
         c.exportDeadline = deadlines.schedule(() -> {
             synchronized (c) { if (expected.equals(c.exportRequest)) exportFailed(c); }
         }, loginTimeoutMillis, TimeUnit.MILLISECONDS);
-        Message request = Message.of(MessageType.EXPORT_REQUEST).requestId(c.exportRequest).cursor(cursor).build();
+        Message request = Message.of(MessageType.EXPORT_REQUEST).requestId(c.exportRequest).cursor(cursor).conversationId(c.exportScope).build();
         try { c.sender.execute(() -> {
             try { if (!c.closed.get()) MessageCodec.write(c.socket.getOutputStream(), request); }
             catch (IOException ex) { exportFailed(c); }
@@ -296,6 +301,7 @@ public final class ChatClient implements AutoCloseable {
         final AtomicBoolean exporting = new AtomicBoolean();
         volatile HistoryExport export;
         volatile String exportRequest;
+        volatile String exportScope;
         volatile ScheduledFuture<?> exportDeadline;
         boolean loggedIn;
         long lastRevision = -1;
