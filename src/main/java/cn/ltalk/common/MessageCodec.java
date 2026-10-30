@@ -12,7 +12,7 @@ public final class MessageCodec {
     public static final int MAX_FRAME_BYTES = 16 * 1024;
     private static final Gson GSON = new GsonBuilder().setStrictness(Strictness.STRICT).disableHtmlEscaping().create();
     private static final Set<String> STRING_FIELDS = Set.of("requestId", "userId", "from", "to", "content",
-            "serverTime", "code", "message", "nickname", "password", "usernameMode", "messageId", "conversationId", "cursor");
+            "serverTime", "code", "message", "nickname", "password", "usernameMode", "messageId", "conversationId", "cursor", "avatar", "createdAt");
 
     private MessageCodec() { }
 

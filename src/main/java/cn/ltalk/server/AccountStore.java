@@ -11,7 +11,7 @@ import java.util.*;
 
 /** One server owns the account directory. Passwords never enter persisted JSON. */
 public final class AccountStore {
-    private record Account(String userId, String nickname, String salt, String hash) { }
+    private record Account(String userId, String nickname, String salt, String hash, String avatar, String createdAt) { }
     private final Path directory;
     private final Map<String, Account> accounts = new HashMap<>();
     private final SecureRandom random = new SecureRandom();
@@ -26,6 +26,7 @@ public final class AccountStore {
                     Validation.userId(a.userId());
                     if (a.nickname() == null || Base64.getDecoder().decode(a.salt()).length != 16
                             || Base64.getDecoder().decode(a.hash()).length != 32) throw new IOException("账号文件损坏");
+                    AvatarData.decode(a.avatar());
                     accounts.put(a.userId(), a);
                 } catch (RuntimeException ex) { throw new IOException("账号文件损坏，拒绝覆盖", ex); }
             }
@@ -44,14 +45,32 @@ public final class AccountStore {
         if (accounts.containsKey(id)) throw new ProtocolException("USER_EXISTS", "用户名已注册");
         byte[] salt = new byte[16]; random.nextBytes(salt);
         Account a = new Account(id, nickname.strip(), Base64.getEncoder().encodeToString(salt),
-                Base64.getEncoder().encodeToString(hash(password, salt)));
+                Base64.getEncoder().encodeToString(hash(password, salt)), "", java.time.Instant.now().toString());
+        save(a);
+        return id;
+    }
+    private void save(Account a) throws IOException {
         Path temporary = Files.createTempFile(directory, ".account-", ".tmp");
         try {
             Files.writeString(temporary, gson.toJson(a));
-            Files.move(temporary, directory.resolve(fileKey(id) + ".json"), StandardCopyOption.ATOMIC_MOVE);
-            accounts.put(id, a);
+            Files.move(temporary, directory.resolve(fileKey(a.userId()) + ".json"), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            accounts.put(a.userId(), a);
         } finally { Files.deleteIfExists(temporary); }
-        return id;
+    }
+    public synchronized UserProfile profile(String id) throws ProtocolException {
+        Account a = accounts.get(id);
+        if (a == null) throw new ProtocolException("NOT_AUTHENTICATED", "账号不存在");
+        return new UserProfile(a.userId(), a.nickname(), Objects.toString(a.avatar(), ""), a.createdAt());
+    }
+    public synchronized UserProfile updateProfile(String id, String nickname, String avatar) throws IOException {
+        if (nickname == null || nickname.isBlank()) throw new ProtocolException("MISSING_FIELD", "请填写昵称");
+        if (nickname.strip().length() > 40) throw new ProtocolException("INVALID_NICKNAME", "昵称最多 40 字符");
+        if (avatar == null) throw new ProtocolException("MISSING_FIELD", "缺少头像设置");
+        AvatarData.decode(avatar);
+        Account a = accounts.get(id);
+        if (a == null) throw new ProtocolException("NOT_AUTHENTICATED", "账号不存在");
+        save(new Account(id, nickname.strip(), a.salt(), a.hash(), avatar, a.createdAt()));
+        return profile(id);
     }
     public synchronized String authenticate(String id, String password) throws IOException {
         if (id == null || id.isBlank() || password == null || password.isEmpty())

@@ -23,6 +23,7 @@ final class ClientSession implements Runnable {
     final Heartbeat heartbeat;
     volatile String userId;
     volatile boolean ready;
+    volatile boolean greeted;
     volatile ScheduledFuture<?> loginDeadline;
     ChatArchive.Cursor exportCursor;
 
@@ -53,7 +54,7 @@ final class ClientSession implements Runnable {
 
     void loginTimedOut() {
         // Absolute deadline, including clients that keep trickling bytes without finishing LOGIN.
-        if (!ready) close("登录超时");
+        if (!ready && !greeted) close("登录超时");
     }
 
     @Override public void run() {

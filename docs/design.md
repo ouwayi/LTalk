@@ -19,7 +19,7 @@ flowchart LR
 
 - 一个接受线程执行 ServerSocket.accept。
 - 每连接一个读取任务，线程池仅在**先获得 Semaphore 名额后**分配；默认 20，包含未登录连接。读取执行器的线程数和等待队列也各限制为最大连接数，避免退出中的任务尚未返回时持续新增线程；队列满则清理新连接并释放名额。
-- 一个定时线程维护绝对登录期限。成功登录后取消计时，无聊天空闲超时。
+- 一个定时线程维护绝对握手/直接登录期限。HELLO 或直接登录成功后取消计时，由双向心跳保活；未认证握手连接仍占总连接名额。
 - 每个 ClientSession 有独立写锁，所有输出都走 send，完整 JSON 帧和 flush 在锁内完成。
 - 注册表使用 ConcurrentHashMap，成员变化和快照由短 synchronized 临界区统一保护；临界区内没有网络 I/O。
 
@@ -65,8 +65,16 @@ ChatWindow 只组装界面与调用原有网络入口；client/ui 下的 Convers
 
 AccountStore 独立于路由与 Swing，保存昵称及用户名对应的随机盐/密码散列，账号文件临时写出后原子发布；采用 JDK PBKDF2WithHmacSHA256、600000 次、128 位盐、256 位输出，参考 [OWASP Password Storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)。注册/密码计算在连接后台线程，不进入 EDT。账号文件名和历史文件名以 UTF-8 十六进制用户名作为键，避免 Windows 大小写冲突；ChatServer 独占数据目录文件锁。
 
-MessageRouter 在 REGISTER/LOGIN 外统一检查 ready，密码通过后仍先预留名称、发 LOGIN_OK 再就绪。连接就是会话凭证，不复用请求 userId/from 认证，无 bearer token 或固定会话 TTL；沿现有幂等关闭释放身份。LOGIN 失败不区分账号不存在或密码错误，不发送密码/散列给其他客户端。
+MessageRouter 对所有业务统一检查 ready（HELLO 与握手后的 PING/PONG、REGISTER/LOGIN 为未认证入口），密码通过后仍先预留名称、发 LOGIN_OK 再就绪。连接就是会话凭证，不复用请求 userId/from 认证，无 bearer token 或固定会话 TTL；沿现有幂等关闭释放身份。LOGIN 失败不区分账号不存在或密码错误，不发送密码/散列给其他客户端。
 
-ChatArchive 将路由时在线可访问者的聊天事件追加到其账号 JSONL 文件，稳定 UUID、公共或双方会话 ID、ISO 时间由服务端生成。归档先于网络投递，归档存在不证明已送达；跨多个账号文件的写入没有事务保证，磁盘故障可能部分落盘并返回 STORAGE_ERROR，无自动重试。服务端只提供本人完整历史导出，不提供任意文件或他人用户查询、离线投递和 UI 历史回放。
+ChatArchive 将路由时在线可访问者的聊天事件追加到其账号 JSONL 文件，稳定 UUID、公共或双方会话 ID、ISO 时间由服务端生成。归档先于网络投递，归档存在不证明已送达；跨多个账号文件的写入没有事务保证，磁盘故障可能部分落盘并返回 STORAGE_ERROR，无自动重试。服务端只提供本人授权归档的全量或按会话过滤导出，不提供任意文件或他人用户查询、离线投递和 UI 历史回放。
 
-每连接最多一份 RandomAccessFile 快照，固定末尾和随机游标，单条响应后由客户端请求下一条；文件读取有 16 KiB 行上限，关闭/完成/替换会释放句柄。HistoryExport 逐条写 JSON/CSV，不积累全部记录；ChatClient 按 requestId 关联导出、独立逐页超时，晚到的取消响应忽略；完成原子移动、失败删除临时文件，经回调执行器通知 EDT。注册通过独立短连接返回用户名，不自动登录。昵称暂仅作为账号资料，现有列表/私聊仍按稳定用户名路由。
+每连接最多一份 RandomAccessFile 快照，固定末尾和随机游标，单条响应后由客户端请求下一条；文件读取有 16 KiB 行上限，关闭/完成/替换会释放句柄。HistoryExport 逐条写 JSON/CSV，不积累全部记录；ChatClient 按 requestId 关联导出、独立逐页超时，晚到的取消响应忽略；完成原子移动、失败删除临时文件，经回调执行器通知 EDT。旧短连接注册 API 保留；新版启动页在握手连接注册后自动 LOGIN。本人资料单独展示与编辑，现有列表/私聊仍按稳定用户名路由。
+
+## 启动认证与个人资料组件（2026-10-30）
+
+ChatClient 新增 SERVER_CONNECTED（仅完成 HELLO）与 AUTHENTICATING；保留旧 connect 直登入口供现有调用。连接对象隔离所有状态/资料回调；注册成功只触发下一次 LOGIN，只有 LOGIN_OK 将会话置为 CONNECTED。认证响应超时关闭 Socket，错密码/重名则回到 SERVER_CONNECTED；握手后心跳先于身份启动，不赋予聊天、资料或导出权限。
+
+ChatWindow 通过 CardLayout 在 WelcomePanel 与 ResponsiveShell 之间切换；ConnectionPanel 只负责地址/端口，AuthenticationPanel 管理登录/注册表单，WelcomePanel 桌面分栏、窄屏纵向滚动。UserIdentityButton、ProfilePanel、ProfileAvatar 独立呈现本人资料，避免把会话展示元数据和路由用户名混用。显式退出/切换清除 Store 身份及草稿；故障重连保留原有窗口历史策略。
+
+AccountStore 新增可选头像/创建时间，兼容旧 JSON；资料修改先原子替换文件，再替换内存账号，不重算/返回盐或散列。头像本地选图后由 AvatarImporter 在 SwingWorker 内限制文件/像素、中心裁剪到 48×48 PNG，服务端 AvatarData 再限长、验格式和尺寸；展示解码只用内存，不在 EDT 读取用户文件。资料请求独立计时、忽略迟到响应，不阻断正常聊天。资料仅本人可读写，当前不广播联系人头像/昵称。

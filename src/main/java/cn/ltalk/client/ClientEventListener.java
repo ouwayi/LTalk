@@ -12,4 +12,5 @@ public interface ClientEventListener {
     default void onError(Message message) { }
     default void onRegistered(String userId) { }
     default void onExported(java.nio.file.Path path) { }
+    default void onProfile(cn.ltalk.common.UserProfile profile) { }
 }

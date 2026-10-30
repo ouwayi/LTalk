@@ -9,7 +9,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 public final class ChatClient implements AutoCloseable {
-    public enum State { DISCONNECTED, CONNECTING, CONNECTED }
+    public enum State { DISCONNECTED, CONNECTING, SERVER_CONNECTED, AUTHENTICATING, CONNECTED }
     private final Object lifecycle = new Object();
     private final ClientEventListener listener;
     private final Executor callbacks;
@@ -44,18 +44,23 @@ public final class ChatClient implements AutoCloseable {
     }
 
     public void connect(String host, int port, String userId, String password) throws IOException {
+        startConnection(host, port, Validation.userId(userId), password);
+    }
+    public void connectServer(String host, int port) throws IOException {
+        startConnection(host, port, null, null);
+    }
+    private void startConnection(String host, int port, String userId, String password) throws IOException {
         if (host == null || host.isBlank()) throw new IllegalArgumentException("请输入服务端 IP 或主机名");
         if (port < 1 || port > 65535) throw new IllegalArgumentException("端口必须为 1～65535");
-        String normalized = Validation.userId(userId);
         synchronized (lifecycle) {
             if (disposed) throw new IllegalStateException("客户端已关闭");
             if (state != State.DISCONNECTED) throw new IllegalStateException("请先断开当前连接");
-            Connection connection = new Connection(normalized);
+            Connection connection = new Connection(userId);
             connection.heartbeat = new Heartbeat(heartbeatSettings, message -> submitHeartbeat(connection, message),
                     () -> terminate(connection, "心跳超时，连接已中断，请手动重新连接；待发送消息未确认"));
             active = connection;
             state = State.CONNECTING;
-            emit(connection, () -> listener.onStateChanged(State.CONNECTING, "正在连接并登录…"));
+            emit(connection, () -> listener.onStateChanged(State.CONNECTING, "正在连接服务器…"));
             connection.deadline = deadlines.schedule(() -> terminate(connection, "连接或登录超时，请检查地址后重新连接"),
                     (long) connectTimeoutMillis + loginTimeoutMillis, TimeUnit.MILLISECONDS);
             connection.sender.execute(() -> establish(connection, host.strip(), port, password));
@@ -67,8 +72,10 @@ public final class ChatClient implements AutoCloseable {
             connection.socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis);
             connection.socket.setTcpNoDelay(true);
             connection.socket.setSoTimeout(loginTimeoutMillis);
-            MessageCodec.write(connection.socket.getOutputStream(), Message.of(MessageType.LOGIN)
-                    .requestId(connection.nextId()).userId(connection.userId).password(password).build());
+            String id = connection.nextId();
+            connection.authRequest = id;
+            MessageCodec.write(connection.socket.getOutputStream(), Message.of(connection.gateway ? MessageType.HELLO : MessageType.LOGIN)
+                    .requestId(id).userId(connection.userId).password(password).build());
             Thread reader = daemonFactory("ltalk-client-reader-").newThread(() -> receive(connection));
             reader.start();
         } catch (IOException | RuntimeException ex) { terminate(connection, "连接失败：" + ex.getMessage()); }
@@ -81,7 +88,13 @@ public final class ChatClient implements AutoCloseable {
             while (!connection.closed.get()) {
                 Message message = reader.read();
                 if (message == null) break;
+                if (message.type() == MessageType.PING || message.type() == MessageType.PONG) {
+                    connection.heartbeat.receive(message); continue;
+                }
                 if (!connection.loggedIn) {
+                    if (connection.gateway) {
+                        handleAuthentication(connection, message); continue;
+                    }
                     if (message.type() == MessageType.ERROR) {
                         emit(connection, () -> listener.onError(message));
                         reason = "登录失败：" + message.message();
@@ -96,6 +109,7 @@ public final class ChatClient implements AutoCloseable {
                         connection.deadline.cancel(false);
                         state = State.CONNECTED;
                         connection.heartbeat.start();
+                        emit(connection, () -> listener.onProfile(UserProfile.from(message)));
                         emit(connection, () -> listener.onStateChanged(State.CONNECTED, "已连接 · " + connection.userId));
                     }
                 } else {
@@ -104,6 +118,74 @@ public final class ChatClient implements AutoCloseable {
             }
         } catch (IOException | RuntimeException ex) { reason = "连接中断：" + ex.getMessage() + "，请手动重新连接"; }
         finally { terminate(connection, reason); }
+    }
+
+    private void handleAuthentication(Connection c, Message message) throws IOException {
+        synchronized (lifecycle) {
+            if (active != c || c.closed.get()) return;
+            if (!java.util.Objects.equals(c.authRequest, message.requestId())) throw new IOException("认证响应编号不匹配");
+            if (message.type() == MessageType.HELLO_OK && state == State.CONNECTING) {
+                c.deadline.cancel(false); c.socket.setSoTimeout(0); c.authRequest = null;
+                state = State.SERVER_CONNECTED; c.heartbeat.start();
+                emit(c, () -> listener.onStateChanged(State.SERVER_CONNECTED, "服务器已连接，请登录或注册"));
+            } else if (message.type() == MessageType.REGISTER_OK && c.registrationPassword != null) {
+                String password = c.registrationPassword; c.registrationPassword = null;
+                c.userId = Validation.userId(message.userId());
+                emit(c, () -> listener.onRegistered(c.userId));
+                sendAuthentication(c, Message.of(MessageType.LOGIN).userId(c.userId).password(password));
+            } else if (message.type() == MessageType.LOGIN_OK && c.userId != null && c.userId.equals(message.userId()) && state == State.AUTHENTICATING) {
+                c.deadline.cancel(false); c.authRequest = null; c.loggedIn = true;
+                state = State.CONNECTED;
+                emit(c, () -> listener.onProfile(UserProfile.from(message)));
+                emit(c, () -> listener.onStateChanged(State.CONNECTED, "已登录 · " + c.userId));
+            } else if (message.type() == MessageType.ERROR && state == State.AUTHENTICATING) {
+                c.deadline.cancel(false); c.authRequest = null; c.registrationPassword = null;
+                state = State.SERVER_CONNECTED;
+                emit(c, () -> listener.onStateChanged(State.SERVER_CONNECTED, "服务器已连接，认证未成功"));
+                emit(c, () -> listener.onError(message));
+            } else throw new IOException("服务端返回无效认证响应");
+        }
+    }
+
+    public void login(String userId, String password) throws IOException {
+        String id = Validation.userId(userId);
+        validatePassword(password);
+        synchronized (lifecycle) {
+            Connection c = serverConnection(); c.userId = id;
+            sendAuthentication(c, Message.of(MessageType.LOGIN).userId(id).password(password));
+        }
+    }
+    public void registerAndLogin(String userId, String nickname, String password, boolean random) throws IOException {
+        if (!random) userId = Validation.userId(userId);
+        if (nickname == null || nickname.isBlank() || nickname.strip().length() > 40)
+            throw new ProtocolException("INVALID_NICKNAME", "昵称须为 1～40 字符");
+        validatePassword(password);
+        synchronized (lifecycle) {
+            Connection c = serverConnection(); c.registrationPassword = password;
+            try { sendAuthentication(c, Message.of(MessageType.REGISTER).userId(random ? null : userId)
+                    .nickname(nickname).password(password).usernameMode(random ? "RANDOM" : "MANUAL")); }
+            catch (IOException ex) { c.registrationPassword = null; throw ex; }
+        }
+    }
+    private Connection serverConnection() throws IOException {
+        if (state != State.SERVER_CONNECTED || active == null || active.closed.get()) throw new IOException("请先连接服务器，或等待当前操作完成");
+        return active;
+    }
+    private static void validatePassword(String password) throws ProtocolException {
+        if (password == null || password.length() < 6 || password.length() > 128)
+            throw new ProtocolException("INVALID_PASSWORD", "密码长度须为 6～128 字符");
+    }
+    private void sendAuthentication(Connection c, Message.Builder builder) throws IOException {
+        c.authRequest = c.nextId();
+        Message request = builder.requestId(c.authRequest).build(); MessageCodec.encode(request);
+        state = State.AUTHENTICATING;
+        if (c.deadline != null) c.deadline.cancel(false);
+        c.deadline = deadlines.schedule(() -> terminate(c, "认证响应超时，请重新连接服务器"), loginTimeoutMillis, TimeUnit.MILLISECONDS);
+        try { c.sender.execute(() -> {
+            try { if (!c.closed.get()) MessageCodec.write(c.socket.getOutputStream(), request); }
+            catch (IOException ex) { terminate(c, "认证发送失败，请重新连接服务器"); }
+        }); } catch (RejectedExecutionException ex) { terminate(c, "认证请求无法入队"); throw new IOException("认证请求无法入队", ex); }
+        emit(c, () -> listener.onStateChanged(State.AUTHENTICATING, "正在验证账号…"));
     }
 
     private void dispatch(Connection connection, Message message) throws IOException {
@@ -121,6 +203,16 @@ public final class ChatClient implements AutoCloseable {
                 connection.export.append(message.record()); requestExport(connection, message.cursor()); return;
             } catch (IOException | RuntimeException ex) { exportFailed(connection); return; }
         }
+        }
+        synchronized (lifecycle) {
+            if (message.requestId() != null && message.requestId().equals(connection.profileRequest)) {
+                connection.profileDeadline.cancel(false); connection.profileRequest = null;
+                if (message.type() == MessageType.ERROR) { emit(connection, () -> listener.onError(message)); return; }
+                if (message.type() != MessageType.PROFILE_OK || !connection.userId.equals(message.userId()) || message.nickname() == null)
+                    throw new IOException("无效个人资料响应");
+                AvatarData.decode(message.avatar());
+                emit(connection, () -> listener.onProfile(UserProfile.from(message))); return;
+            }
         }
         switch (message.type()) {
             case PING, PONG -> connection.heartbeat.receive(message);
@@ -142,11 +234,41 @@ public final class ChatClient implements AutoCloseable {
             }
             case SYSTEM -> emit(connection, () -> listener.onSystem(message));
             case ERROR -> emit(connection, () -> listener.onError(message));
+            case PROFILE_OK -> { /* Ignore expired profile responses. */ }
             default -> throw new IOException("服务端发送了不允许的消息类型");
         }
     }
 
     public void sendGroup(String content) throws IOException { submitChat(null, content); }
+
+    public void updateProfile(String nickname, String avatar) throws IOException {
+        profileRequest(Message.of(MessageType.PROFILE_UPDATE).nickname(nickname).avatar(avatar));
+    }
+    public void refreshProfile() throws IOException { profileRequest(Message.of(MessageType.PROFILE_GET)); }
+    private void profileRequest(Message.Builder builder) throws IOException {
+        synchronized (lifecycle) {
+            Connection c = active;
+            if (state != State.CONNECTED || c == null || c.closed.get()) throw new IOException("请先登录");
+            if (c.profileRequest != null) throw new IOException("请等待当前资料操作完成");
+            String id = "profile-" + c.nextId();
+            Message request = builder.requestId(id).build();
+            MessageCodec.encode(request);
+            c.profileRequest = id;
+            c.profileDeadline = deadlines.schedule(() -> {
+                synchronized (lifecycle) {
+                    if (!id.equals(c.profileRequest) || c.closed.get()) return;
+                    c.profileRequest = null;
+                    emit(c, () -> listener.onError(Message.error(id, "PROFILE_FAILED", "资料响应超时，保存结果未确认，请重新登录核对")));
+                }
+            }, loginTimeoutMillis, TimeUnit.MILLISECONDS);
+            try { c.sender.execute(() -> {
+                try { if (!c.closed.get()) MessageCodec.write(c.socket.getOutputStream(), request); }
+                catch (IOException ex) { terminate(c, "资料保存失败，连接已断开"); }
+            }); } catch (RejectedExecutionException ex) {
+                c.profileDeadline.cancel(false); c.profileRequest = null; throw new IOException("发送队列已满，请稍后重试", ex);
+            }
+        }
+    }
 
     public void register(String host, int port, String userId, String nickname, String password, boolean random) {
         if (state != State.DISCONNECTED) throw new IllegalStateException("请先断开当前连接");
@@ -260,6 +382,9 @@ public final class ChatClient implements AutoCloseable {
         try { connection.socket.close(); } catch (IOException ignored) { }
         if (connection.deadline != null) connection.deadline.cancel(false);
         connection.heartbeat.close();
+        connection.registrationPassword = null;
+        if (connection.profileDeadline != null) connection.profileDeadline.cancel(false);
+        connection.profileRequest = null;
         closeExport(connection);
         connection.sender.shutdownNow();
         synchronized (lifecycle) {
@@ -290,7 +415,11 @@ public final class ChatClient implements AutoCloseable {
     }
 
     private static final class Connection {
-        final String userId;
+        volatile String userId;
+        final boolean gateway;
+        volatile String authRequest, registrationPassword;
+        volatile String profileRequest;
+        volatile ScheduledFuture<?> profileDeadline;
         final Socket socket = new Socket();
         final AtomicBoolean closed = new AtomicBoolean();
         final AtomicLong sequence = new AtomicLong();
@@ -305,7 +434,7 @@ public final class ChatClient implements AutoCloseable {
         volatile ScheduledFuture<?> exportDeadline;
         boolean loggedIn;
         long lastRevision = -1;
-        Connection(String userId) { this.userId = userId; }
+        Connection(String userId) { this.userId = userId; gateway = userId == null; }
         String nextId() { return "r" + sequence.incrementAndGet(); }
     }
 }

@@ -6,7 +6,7 @@ import java.util.List;
 public record Message(MessageType type, String requestId, String userId, String from, String to,
                       String content, String serverTime, List<String> users, Long revision,
                       String code, String message, String nickname, String password, String usernameMode,
-                      String messageId, String conversationId, String cursor, ChatRecord record) {
+                      String messageId, String conversationId, String cursor, ChatRecord record, String avatar, String createdAt) {
     public Message {
         if (users != null) users = List.copyOf(users);
     }
@@ -24,6 +24,7 @@ public record Message(MessageType type, String requestId, String userId, String 
         private Long revision;
         private String nickname, password, usernameMode, messageId, conversationId, cursor;
         private ChatRecord record;
+        private String avatar, createdAt;
 
         private Builder(MessageType type) { this.type = type; }
         public Builder requestId(String value) { requestId = value; return this; }
@@ -43,9 +44,11 @@ public record Message(MessageType type, String requestId, String userId, String 
         public Builder conversationId(String value) { conversationId = value; return this; }
         public Builder cursor(String value) { cursor = value; return this; }
         public Builder record(ChatRecord value) { record = value; return this; }
+        public Builder avatar(String value) { avatar = value; return this; }
+        public Builder createdAt(String value) { createdAt = value; return this; }
         public Message build() {
             return new Message(type, requestId, userId, from, to, content, serverTime, users, revision, code, message,
-                    nickname, password, usernameMode, messageId, conversationId, cursor, record);
+                    nickname, password, usernameMode, messageId, conversationId, cursor, record, avatar, createdAt);
         }
     }
 }

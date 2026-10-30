@@ -1,4 +1,4 @@
-# LTalk 协议 v2（账号与导出）
+# LTalk 协议 v3（分离连接认证、个人资料与会话导出）
 
 ## 帧与状态
 
@@ -6,18 +6,20 @@ TCP 长连接，**UTF-8 编码，每行一个 JSON 对象，以 LF (`0x0A`) 结�
 
 单帧最多 **16384 字节**（不含 LF），在读取第 16385 个非 LF 字节时立即拒绝，不使用无界 readLine。非法 UTF-8、非法 JSON、未知类型、已定义字段的错误类型或显式 null 返回 `BAD_MESSAGE`，可继续下一帧；超长帧返回 `FRAME_TOO_LARGE` 后关闭连接。末尾无 LF 的残帧遇到 EOF 直接关闭。未定义额外字段被忽略，以便兼容。
 
-连接先处于未登录状态，允许 `REGISTER` 注册及 `LOGIN` 建立身份；其他请求返回 `NOT_AUTHENTICATED`。合法 LOGIN 校验失败返回错误并关闭新连接。重复 LOGIN 返回 `ALREADY_LOGGED_IN`，保留已有身份。未完成登录的连接在接受后 **10 秒绝对期限**关闭（不保证收到错误帧）；客户端连接超时 3 秒、登录读取超时 5 秒，另有连接开始后 8 秒的总期限。正常登录后取消普通读取超时。
+新客户端先发 HELLO，收到 HELLO_OK 后进入仅服务器已连接状态；双方启动心跳，允许等待用户填写登录/注册信息，仍不具有任何业务权限。服务端接受后 10 秒绝对期限要求完成 HELLO 或直接 LOGIN；HELLO 成功取消该期限，由双向心跳检测静默失联。未认证连接仍占总名额（默认 20），不进入在线列表。重复 HELLO 拒绝。
+
+HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICATED。错密码/注册失败保留这条连接以便重试。保留旧直接 REGISTER/LOGIN 入口及其 10 秒期限，未 HELLO 的直接 LOGIN 失败仍关闭连接。重复 LOGIN 不切换当前身份。客户端连接超时默认 3 秒、握手总期限 8 秒，单次注册/登录响应期限 5 秒；超过期限关闭连接，防止迟到认证结果建立意外身份。
 
 `LOGIN_OK` 一定先于该客户端收到的业务事件；服务端先预留名称、写出 LOGIN_OK，再将会话置为就绪。群聊、私聊和在线列表只路由到就绪会话。
 
 ## 字段与消息类型
 
-所有对象必有字符串 `type`，下面只列相关字段，未使用字段不输出。REGISTER、LOGIN、EXPORT_REQUEST、GROUP_SEND、PRIVATE_SEND 必须携带非空白、最多 64 个字符的 `requestId`；客户端按连接生成递增编号，不重复使用。服务端不把 requestId 当消息去重键，也不提供幂等重试；不同用户的编号可以相同。
+所有对象必有字符串 `type`，下面只列相关字段，未使用字段不输出。HELLO、REGISTER、LOGIN、PROFILE_GET、PROFILE_UPDATE、EXPORT_REQUEST、GROUP_SEND、PRIVATE_SEND 必须携带非空白、最多 64 个字符的 `requestId`；客户端按连接生成递增编号，不重复使用。服务端不把 requestId 当消息去重键，也不提供幂等重试；不同用户的编号可以相同。
 
 | 类型 | 方向 | 字段 | 结果 |
 | --- | --- | --- | --- |
-| LOGIN | C → S | requestId, userId, password | 成功 LOGIN_OK；校验失败 ERROR 后关闭 |
-| LOGIN_OK | S → 当前 C | requestId, userId | 客户端切为 CONNECTED |
+| LOGIN | C → S | requestId, userId, password | 成功 LOGIN_OK；HELLO 模式失败保留连接，直接登录失败关闭 |
+| LOGIN_OK | S → 当前 C | requestId, userId, nickname, avatar, createdAt（旧账号可缺省） | 客户端切为 CONNECTED |
 | GROUP_SEND | C → S | requestId, content | 当前全部就绪会话收到 GROUP_MESSAGE，包括发送者 |
 | GROUP_MESSAGE | S → 在线 C | requestId, from, content, serverTime | 群聊展示，以服务端事件为唯一正式回显 |
 | PRIVATE_SEND | C → S | requestId, to, content | 先写目标，成功后回显发送者；失败只向发送者 ERROR |
@@ -26,7 +28,7 @@ TCP 长连接，**UTF-8 编码，每行一个 JSON 对象，以 LF (`0x0A`) 结�
 | SYSTEM | S → 在线 C | content, serverTime | 上下线提示，不作为列表数据来源 |
 | ERROR | S → 当前 C | code, message, requestId（可选） | 本次请求失败；能识别合法 requestId 时附回 |
 | LOGOUT | C → S | 无其他必需字段 | 关闭连接、幂等清理、推送在线列表 |
-| PING | C ↔ S | requestId | 登录后向当前连接发起探测，对端回复 PONG |
+| PING | C ↔ S | requestId | HELLO 或登录成功后向当前连接发起探测，对端回复 PONG |
 | PONG | C ↔ S | requestId | 原样返回该 PING 的编号，只确认当前连接匹配的待响应探测 |
 
 `userId` strip 首尾空白后必须匹配 `[A-Za-z0-9_]{1,20}`，区分大小写；只代表当前连接的路由名称。`to` 必须是精确匹配的合法用户标识，不做目标名称自动规范化。`content` 不为 null、不能全为空白、最长 2000 个 Java UTF-16 char 单元，保留前后空白和换行。所有字符串都受帧字节上限约束。
@@ -37,7 +39,7 @@ TCP 长连接，**UTF-8 编码，每行一个 JSON 对象，以 LF (`0x0A`) 结�
 
 ## 心跳与失联期限
 
-两端各自在登录成功后启动独立心跳，不依赖聊天活动；未登录的 PING/PONG 返回 `NOT_AUTHENTICATED`，仍受原登录绝对期限限制。PING/PONG 的 `requestId` 必须非空白且最多 64 字符，服务端遇到无效编号返回 `BAD_MESSAGE`，客户端收到无效编号按协议错误断开。心跳仅走当前连接，不广播、不生成聊天记录、未读或业务回调。
+两端各自在 HELLO/HELLO_OK 握手或直接登录成功后启动独立心跳，不依赖聊天活动；未握手且未登录的 PING/PONG 返回 `NOT_AUTHENTICATED`，仍受原绝对期限限制。PING/PONG 的 `requestId` 必须非空白且最多 64 字符，服务端遇到无效编号返回 `BAD_MESSAGE`，客户端收到无效编号按协议错误断开。心跳仅走当前连接，不广播、不生成聊天记录、未读或业务回调。
 
 默认启动后等待 **10 秒**发出第一条 PING，每端最多一个未完成探测；收到编号匹配的 PONG 后，再等待 10 秒发起下一次。每次从探测入队前开始等待 **20 秒**，入队、写入等待都计入响应期限，避免写线程阻塞时失去检测。合法但不匹配、重复或过期的 PONG 被忽略；普通聊天、SYSTEM、ERROR、对方的 PING 和不完整帧均不能延长本端待响应期限。
 
@@ -88,13 +90,13 @@ TCP 长连接，**UTF-8 编码，每行一个 JSON 对象，以 LF (`0x0A`) 结�
 
 ## 注册、身份与导出扩展（2026-10-29）
 
-所有需要身份的请求（含每次导出翻页、PING/PONG、LOGOUT）必须来自已完成密码验证的就绪连接；不采信请求的 userId/from 代替绑定身份。凭证就是服务端持有的连接会话，不能跨 Socket 复用，无独立 token/续签/固定 TTL；LOGOUT、EOF、读写失败、服务端关闭、心跳超时均令会话失效，新连接未认证。注册仍受接受后 10 秒绝对期限限制；注册响应不建立身份，须随后 LOGIN。密码和昵称不写日志/聊天事件。
+所有需要身份的业务请求（含每次导出翻页、个人资料、LOGOUT）必须来自已完成密码验证的就绪连接；握手后的未登录连接仅额外允许心跳。不采信请求的 userId/from 代替绑定身份。凭证就是服务端持有的连接会话，不能跨 Socket 复用，无独立 token/续签/固定 TTL；LOGOUT、EOF、读写失败、服务端关闭、心跳超时均令会话失效，新连接未认证。直接注册仍受接受后 10 秒绝对期限限制；HELLO 后注册由心跳保活。注册响应不建立身份，新客户端自动随后发送 LOGIN，收到 LOGIN_OK 才进入聊天。密码和昵称不写日志/聊天事件。
 
 | 类型 | 方向 | 字段/结果 |
 | --- | --- | --- |
 | REGISTER | C→S，未登录 | requestId, nickname, password；usernameMode 默认 MANUAL，须 userId；RANDOM 模式由服务端生成唯一 userId |
 | REGISTER_OK | S→C | requestId, userId；注册成功，可使用该用户名登录 |
-| LOGIN | C→S | requestId, userId, password；成功 LOGIN_OK，错误 ERROR 后关闭，重复登录保留原身份 |
+| LOGIN | C→S | requestId, userId, password；成功 LOGIN_OK；HELLO 模式错误可重试，直接登录错误关闭；重复登录保留原身份 |
 | EXPORT_REQUEST | C→S，已登录 | requestId；首次省略 cursor 开始自己归档的快照，后续附返回的 cursor；可带自己的 userId，指定其他用户 FORBIDDEN |
 | EXPORT_PAGE | S→C | requestId, cursor, record；每页恰一条记录，客户端流式写出后才请求下一页 |
 | EXPORT_END | S→C | requestId；没有剩余记录，空归档直接返回此帧 |
@@ -114,3 +116,18 @@ record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC �
 EXPORT_REQUEST 可增加 conversationId：GROUP:PUBLIC 或 PRIVATE:按用户名排序的双方，私聊双方必须包含当前认证用户。服务端在本人授权归档内过滤，不扩大历史可见范围。省略字段保留底层全账号导出能力；新版界面只提供当前会话导出。
 
 首次请求固定会话范围和文件末尾；每次翻页须携带相同 conversationId 和 cursor，改变范围返回 FORBIDDEN。无记录直接 EXPORT_END。非法/非本人会话拒绝，过滤不改变时间顺序、流式写出或文件失败清理语义。
+
+## 分离连接认证与本人资料（2026-10-30）
+
+| 类型 | 方向/字段 | 行为 |
+| --- | --- | --- |
+| HELLO / HELLO_OK | C→S / S→C，requestId | 仅建立协议连接和双向心跳，不建立账号身份、不广播 |
+| PROFILE_GET | C→S，requestId；可选自己的 userId | 仅已认证用户查询自己；他人 userId 返回 FORBIDDEN |
+| PROFILE_UPDATE | C→S，requestId, nickname, avatar；可选自己的 userId | 修改本人昵称/头像；用户名、密码材料、注册时间保持不变 |
+| PROFILE_OK | S→本人，requestId, userId, nickname, avatar, createdAt（可缺省） | 读取或原子持久化成功后返回，不广播给其他人 |
+
+avatar 为 Base64 编码的 48×48 PNG，解码后最多 10240 字节；空串恢复字母头像。字段类型、Base64 长度、图片格式/尺寸受校验，非法为 INVALID_AVATAR，不改变旧资料。昵称 strip 后 1～40 UTF-16 char，空/越界沿用 MISSING_FIELD/INVALID_NICKNAME。用户上传图片的路径只在客户端本地处理，不发送给服务端。LOGIN_OK 携带本人这些资料，createdAt 为新账号创建的 ISO UTC；旧账号无记录时不虚构时间。密码/盐/散列永不进入资料响应。
+
+资料写失败返回 STORAGE_ERROR，内存保持旧值；客户端最多一个待响应资料请求，默认 5 秒超时提示结果未确认，忽略迟到响应且不终止健康聊天连接。重登可核对服务端最终资料。退出/切换账号关闭认证 Socket 并清除界面身份、私聊历史/草稿和密码；用户明确操作后可新建未认证连接等待下次登录，不恢复账号身份、不自动重发。
+
+新版客户端需要支持 HELLO/个人资料的服务端，两端一起升级；无版本协商。稳定用户名继续用于联系人列表、私聊路由与归档 ID，修改自己的昵称/头像不改变这些键，也没有新增联系人元数据广播。

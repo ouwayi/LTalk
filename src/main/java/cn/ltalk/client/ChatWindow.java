@@ -17,6 +17,14 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     private final ConversationStore store = new ConversationStore();
     private final ChatClient client = new ChatClient(this, SwingUtilities::invokeLater);
     private final ConnectionPanel connection;
+    private final AuthenticationPanel authentication;
+    private final WelcomePanel welcome;
+    private final JPanel pages = new JPanel(new CardLayout());
+    private UserProfile profile;
+    private JDialog profileDialog;
+    private ProfilePanel profilePanel;
+    private boolean profileSaving;
+    private boolean closed;
     private final JTextField search = ChatTheme.field("", "conversationSearch");
     private final JTextField messageSearch = ChatTheme.field("", "messageSearch");
     private final JTextArea input = new JTextArea(1, 16) {
@@ -35,7 +43,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     private final JLabel onlineTitle = ChatTheme.label("消息", 12, ChatTheme.MUTED, false);
     private final JLabel counter = ChatTheme.label("", 10, ChatTheme.MUTED, false);
     private final JLabel hint = ChatTheme.label("Enter 发送 · Shift+Enter 换行", 10, ChatTheme.MUTED, false);
-    private final JLabel identity = ChatTheme.label("LTalk · 未连接", 12, ChatTheme.INK, true);
+    private final UserIdentityButton identity = new UserIdentityButton();
     private final JButton send = ChatTheme.primary("");
     private final JButton group = ChatTheme.pill("公共聊天室");
     private final JButton back = ChatTheme.iconButton(LineIcon.Kind.BACK, "返回会话列表");
@@ -56,10 +64,8 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     private final JScrollPane editorScroll;
     private final ChatTheme.RoundedPanel header;
     private final ChatTheme.RoundedPanel composer;
-    private JPanel connectionWrapper;
     private ChatClient.State connectionState = ChatClient.State.DISCONNECTED;
     private boolean refreshingList, restoringDraft;
-    private String pendingSelf = "";
     private final AppearancePreferences appearancePreferences;
     private AppearanceSettings appearance;
     private final WallpaperPanel background;
@@ -70,7 +76,9 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     ChatWindow(String initialHost, String initialPort, String initialUser, Path appearanceFile) {
         super("LTalk · 局域网聊天室");
         appearancePreferences = new AppearancePreferences(appearanceFile); appearance = appearancePreferences.load();
-        connection = new ConnectionPanel(initialHost, initialPort, initialUser);
+        connection = new ConnectionPanel(initialHost, initialPort);
+        authentication = new AuthenticationPanel(initialUser);
+        welcome = new WelcomePanel(connection, authentication);
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         setMinimumSize(new Dimension(360, 540)); setSize(1200, 820); setLocationByPlatform(true);
         status.setName("status"); recipient.setName("recipient"); title.setName("conversationTitle");
@@ -80,7 +88,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         chatSearch.setName("chatSearch"); more.setName("chatMore");
         buildSidebar();
         search.putClientProperty("placeholder", "搜索"); messageSearch.putClientProperty("placeholder", "搜索当前会话消息");
-        connection.user.putClientProperty("placeholder", "例如 alice");
+        authentication.user.putClientProperty("placeholder", "例如 alice");
 
         header = new ChatTheme.RoundedPanel(new BorderLayout(8, 0), 24, Color.WHITE, true);
         header.setBorder(new EmptyBorder(10, 10, 10, 12));
@@ -113,16 +121,21 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         composer.add(composeActions, BorderLayout.EAST);
         chatContent.add(header); chatContent.add(timeline); chatContent.add(composer); chatContent.add(hint); chatContent.add(counter);
         background = new WallpaperPanel(new BorderLayout(), appearance); background.setName("chatPane"); background.add(chatContent);
-        shell = new ResponsiveShell(sidebar, background); setContentPane(shell);
+        shell = new ResponsiveShell(sidebar, background);
+        JScrollPane welcomeScroll = new JScrollPane(welcome); ChatTheme.scroll(welcomeScroll, false); welcomeScroll.setName("welcomeScroll");
+        pages.add(welcomeScroll, "welcome"); pages.add(shell, "chat"); setContentPane(pages); showWelcome();
         shell.onLayout(() -> {
             back.setVisible(shell.compact());
             int before = store.selected().unread();
-            store.setVisible(background.isVisible() && (!isVisible() || isFocused()));
+            store.setVisible(shell.isVisible() && background.isVisible() && (!isVisible() || isFocused()));
             if (before != store.selected().unread()) SwingUtilities.invokeLater(this::refreshList);
         });
 
-        connection.register.addActionListener(e -> registerAccount());
-        connection.connect.addActionListener(e -> connect()); connection.disconnect.addActionListener(e -> client.disconnect());
+        connection.connect.addActionListener(e -> connectServer()); connection.disconnect.addActionListener(e -> client.disconnect());
+        authentication.submit.addActionListener(e -> authenticate());
+        authentication.password.addActionListener(e -> { if (authentication.submit.isEnabled()) authenticate(); });
+        authentication.confirmation.addActionListener(e -> { if (authentication.submit.isEnabled()) authenticate(); });
+        welcome.back.addActionListener(e -> showChat()); identity.addActionListener(e -> showIdentityMenu());
         send.addActionListener(e -> send()); group.addActionListener(e -> selectConversation(ConversationId.PUBLIC));
         back.addActionListener(e -> { shell.openList(); refreshList(); });
         menu.addActionListener(e -> showMenu()); create.addActionListener(e -> showNewConversation()); more.addActionListener(e -> showChatMenu());
@@ -160,13 +173,17 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         input.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.SHIFT_DOWN_MASK), "insert-break");
         input.getActionMap().put("send-message", action(() -> { if (send.isEnabled()) send(); }));
         addWindowListener(new WindowAdapter() {
-            @Override public void windowClosing(WindowEvent e) { store.saveDraft(input.getText()); client.close(); dispose(); }
+            @Override public void windowClosing(WindowEvent e) { closed = true; store.saveDraft(input.getText()); closeProfile(); client.close(); dispose(); }
         });
         addWindowFocusListener(new WindowAdapter() {
-            @Override public void windowGainedFocus(WindowEvent e) { store.setVisible(!shell.compact() || shell.chatOpen()); refreshList(); }
+            @Override public void windowGainedFocus(WindowEvent e) { store.setVisible(shell.isVisible() && (!shell.compact() || shell.chatOpen())); refreshList(); }
             @Override public void windowLostFocus(WindowEvent e) { store.setVisible(false); }
         });
-        connection.state(true); applyAppearance(appearance, false); refreshList(); refreshConversation();
+        connection.state(true, false); authentication.state(false, false);
+        applyAppearance(appearance, false); refreshList(); refreshConversation();
+        if (initialHost != null && !initialHost.isBlank()) SwingUtilities.invokeLater(() -> {
+            if (!closed && client.state() == ChatClient.State.DISCONNECTED) connectServer();
+        });
     }
 
     private void buildSidebar() {
@@ -180,8 +197,6 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         searchRow.add(menu, BorderLayout.WEST); searchRow.add(searchPill); searchRow.add(create, BorderLayout.EAST); top.add(searchRow);
         JPanel brand = new JPanel(new BorderLayout()); ChatTheme.surface(brand); brand.setBorder(new EmptyBorder(4, 21, 10, 19));
         brand.add(ChatTheme.label("LTalk", 22, ChatTheme.INK, true)); brand.add(onlineTitle, BorderLayout.EAST); top.add(brand);
-        connectionWrapper = new JPanel(new BorderLayout()); ChatTheme.surface(connectionWrapper); connectionWrapper.setBorder(new EmptyBorder(0, 14, 10, 14));
-        connectionWrapper.add(connection); top.add(connectionWrapper);
         JPanel tabs = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 4)); ChatTheme.surface(tabs);
         group.setFocusPainted(false); group.setBorder(new EmptyBorder(8, 14, 8, 14)); group.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         group.setToolTipText("选择公共群聊"); tabs.add(group); tabs.add(ChatTheme.label("全部会话", 11, ChatTheme.MUTED, false)); top.add(tabs);
@@ -191,18 +206,24 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         JPanel empty = new JPanel(new GridBagLayout()); ChatTheme.surface(empty); empty.add(ChatTheme.label("没有匹配的会话", 13, ChatTheme.MUTED, false)); listCards.add(empty, "empty");
         sidebar.add(listCards, BorderLayout.CENTER);
         JPanel footer = new JPanel(new BorderLayout(4, 5)); ChatTheme.surface(footer); footer.setBorder(new EmptyBorder(11, 20, 13, 14));
-        footer.add(identity, BorderLayout.NORTH); footer.add(status, BorderLayout.CENTER);
-        JButton settings = ChatTheme.iconButton(LineIcon.Kind.MORE, "显示连接设置"); settings.setName("connectionSettings");
-        settings.addActionListener(e -> toggleConnection()); footer.add(settings, BorderLayout.EAST); sidebar.add(footer, BorderLayout.SOUTH);
+        footer.add(identity, BorderLayout.CENTER); footer.add(status, BorderLayout.SOUTH); sidebar.add(footer, BorderLayout.SOUTH);
     }
 
-    private void connect() {
-        try {
-            pendingSelf = Validation.userId(connection.user.getText());
-            client.connect(connection.host.getText(), Integer.parseInt(connection.port.getText().strip()), pendingSelf, new String(connection.password.getPassword()));
-        } catch (IOException | IllegalArgumentException | IllegalStateException ex) {
-            showError(ex instanceof NumberFormatException ? "端口必须是 1～65535 的整数" : ex.getMessage());
+    private void connectServer() {
+        try { client.connectServer(connection.host.getText(), Integer.parseInt(connection.port.getText().strip())); }
+        catch (IOException | IllegalArgumentException | IllegalStateException ex) {
+            String detail = ex instanceof NumberFormatException ? "端口必须是 1～65535 的整数" : ex.getMessage();
+            showError(detail); connection.status.setText(detail); connection.status.setToolTipText(detail);
         }
+    }
+    private void authenticate() {
+        try {
+            String password = new String(authentication.password.getPassword());
+            if (authentication.registering()) {
+                if (!password.equals(new String(authentication.confirmation.getPassword()))) throw new IllegalArgumentException("两次密码不一致");
+                client.registerAndLogin(authentication.user.getText(), authentication.nickname.getText(), password, authentication.random.isSelected());
+            } else client.login(authentication.user.getText(), password);
+        } catch (IOException | IllegalArgumentException | IllegalStateException ex) { showError(ex.getMessage()); }
     }
     private void send() {
         if (!store.canSend()) { showError("请明确重新选择在线私聊对象或公共聊天室"); return; }
@@ -244,18 +265,33 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
 
     @Override public void onStateChanged(ChatClient.State state, String detail) {
         connectionState = state;
-        if (state == ChatClient.State.CONNECTED) {
-            store.saveDraft(input.getText()); store.useIdentity(pendingSelf); showConnection(false);
+        boolean loggedIn = state == ChatClient.State.CONNECTED;
+        if (loggedIn) {
+            store.saveDraft(input.getText()); store.useIdentity(profile.userId());
+            hint.setText("Enter 发送 · Shift+Enter 换行"); hint.setToolTipText(null); ChatTheme.foreground(hint, ThemePalette.Role.MUTED);
+            authentication.clearCredentials(false); showChat();
         } else {
             boolean lost = store.updateUsers(List.of());
             if (lost) store.notice(store.selectedId(), "私聊对象已离线，草稿保留；请重新选择会话。", false);
-            if (state == ChatClient.State.DISCONNECTED) { store.notice(store.selectedId(), detail, false); showConnection(true); }
+            if (state == ChatClient.State.DISCONNECTED) {
+                store.notice(store.selectedId(), detail, false); profile = null; closeProfile();
+                authentication.password.setText(""); authentication.confirmation.setText("");
+            }
+            showWelcome();
         }
-        connection.state(state == ChatClient.State.DISCONNECTED);
-        identity.setText(state == ChatClient.State.CONNECTED ? "●  " + store.self() + "  ·  已连接" : state == ChatClient.State.CONNECTING ? "◌  正在连接…" : "LTalk · 未连接");
-        ChatTheme.foreground(identity, state == ChatClient.State.CONNECTED ? ThemePalette.Role.ACCENT : ThemePalette.Role.TEXT);
-        setTitle("LTalk · 局域网聊天室" + (state == ChatClient.State.CONNECTED ? " · " + store.self() : ""));
+        connection.state(state == ChatClient.State.DISCONNECTED, state == ChatClient.State.CONNECTING);
+        authentication.state(state == ChatClient.State.SERVER_CONNECTED, state == ChatClient.State.AUTHENTICATING);
+        authentication.feedback(detail, false); welcome.back.setVisible(loggedIn);
+        identity.showProfile(loggedIn ? profile : null);
+        setTitle("LTalk · 局域网聊天室" + (loggedIn ? " · " + profile.nickname() : ""));
         setStatus(detail, false); refreshList(); refreshConversation();
+    }
+    @Override public void onProfile(UserProfile value) {
+        profile = value;
+        if (connectionState == ChatClient.State.CONNECTED) {
+            identity.showProfile(value); setTitle("LTalk · 局域网聊天室 · " + value.nickname());
+            if (profileSaving) { closeProfile(); setStatus("个人资料已保存", false); }
+        }
     }
     @Override public void onGroup(Message message) { receiveChat(message); }
     @Override public void onPrivate(Message message) { receiveChat(message); }
@@ -271,10 +307,15 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         store.system(message.content()); if (store.selectedId().equals(ConversationId.PUBLIC)) renderTimeline();
     }
     @Override public void onError(Message message) {
-        ConversationId target = store.error(message); feedback(message.code() + "：" + message.message(), true);
+        String detail = message.code() + "：" + message.message();
+        authentication.feedback(detail, true);
+        if (profilePanel != null && profileSaving && message.requestId() != null && message.requestId().startsWith("profile-")) {
+            profileSaving = false; profilePanel.failed(detail);
+        }
+        ConversationId target = store.error(message); feedback(detail, true);
         if (target.equals(store.selectedId())) renderTimeline();
     }
-    private void showError(String detail) { store.notice(store.selectedId(), detail, true); feedback(detail, true); renderTimeline(); }
+    private void showError(String detail) { authentication.feedback(detail, true); store.notice(store.selectedId(), detail, true); feedback(detail, true); renderTimeline(); }
     private void feedback(String detail, boolean error) {
         setStatus(detail, error); hint.setText(detail); hint.setToolTipText(detail);
         ChatTheme.foreground(hint, error ? ThemePalette.Role.DANGER : ThemePalette.Role.MUTED);
@@ -283,20 +324,54 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         status.setText(detail); status.setToolTipText(detail); ChatTheme.foreground(status, error ? ThemePalette.Role.DANGER : ThemePalette.Role.MUTED);
     }
 
-    private void showConnection(boolean visible) { connection.setVisible(visible); connectionWrapper.setVisible(visible); sidebar.revalidate(); sidebar.repaint(); }
-    private void toggleConnection() { showConnection(!connection.isVisible()); shell.openList(); }
-    private void registerAccount() {
-        JTextField nickname = new JTextField();
-        JCheckBox random = new JCheckBox("系统随机生成用户名");
-        JPanel form = new JPanel(new GridLayout(0, 1, 4, 4));
-        form.add(new JLabel("昵称（用户名/密码填写在连接设置中）")); form.add(nickname); form.add(random);
-        if (JOptionPane.showConfirmDialog(this, form, "注册账号", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION) return;
-        try { client.register(connection.host.getText(), Integer.parseInt(connection.port.getText().strip()),
-                connection.user.getText(), nickname.getText(), new String(connection.password.getPassword()), random.isSelected()); }
-        catch (RuntimeException ex) { showError(ex.getMessage()); }
+    private void showWelcome() { ((CardLayout) pages.getLayout()).show(pages, "welcome"); store.setVisible(false); }
+    private void showChat() {
+        if (connectionState != ChatClient.State.CONNECTED) return;
+        ((CardLayout) pages.getLayout()).show(pages, "chat");
+        store.setVisible(!shell.compact() || shell.chatOpen()); pages.revalidate(); pages.repaint();
     }
+    private void toggleConnection() { showWelcome(); }
     @Override public void onRegistered(String userId) {
-        connection.user.setText(userId); setStatus("注册成功，用户名：" + userId + "，请点击连接登录", false);
+        authentication.user.setText(userId); authentication.feedback("注册成功，正在登录…", false);
+    }
+    ChatPopupMenu identityMenu() {
+        ChatPopupMenu popup = new ChatPopupMenu(identity, profile == null ? "未登录" : profile.nickname());
+        if (connectionState != ChatClient.State.CONNECTED) popup.action("accountLogin", "登录账号", LineIcon.Kind.USERS, this::showWelcome);
+        else {
+            popup.action("accountProfile", "个人信息", LineIcon.Kind.USERS, this::showProfile);
+            popup.action("accountLogout", "退出登录", LineIcon.Kind.LOGOUT, () -> logout(false));
+            popup.action("accountSwitch", "切换账号", LineIcon.Kind.USERS, () -> logout(true));
+        }
+        return popup;
+    }
+    private void showIdentityMenu() { ChatPopupMenu popup = identityMenu(); popup.show(identity, 0, -popup.getPreferredSize().height - 4); }
+    private void logout(boolean switchAccount) {
+        client.disconnect(); connectionState = ChatClient.State.DISCONNECTED; closeProfile(); profile = null; identity.showProfile(null);
+        store.useIdentity(""); input.setText(""); search.setText(""); messageSearch.setText("");
+        authentication.clearCredentials(switchAccount); showWelcome(); refreshList(); refreshConversation();
+        // Re-establish only the unauthenticated transport after an explicit account action.
+        connectServer();
+    }
+    private void showProfile() {
+        if (profile == null || connectionState != ChatClient.State.CONNECTED) return;
+        closeProfile();
+        JDialog dialog = new JDialog(this, "个人信息", Dialog.ModalityType.MODELESS); profileDialog = dialog; dialog.setName("profileDialog");
+        profilePanel = new ProfilePanel(profile, connection.host.getText() + ":" + connection.port.getText(), (nickname, avatar) -> {
+            try { profileSaving = true; client.updateProfile(nickname, avatar); }
+            catch (IOException ex) { profileSaving = false; profilePanel.failed(ex.getMessage()); }
+        }, this::closeProfile);
+        ChatTheme.apply(profilePanel, ThemePalette.of(appearance));
+        JScrollPane scroll = new JScrollPane(profilePanel); ChatTheme.scroll(scroll, false); dialog.setContentPane(scroll);
+        dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
+        dialog.addWindowListener(new WindowAdapter() { @Override public void windowClosed(WindowEvent e) { if (profileDialog == dialog) closeProfile(); } });
+        dialog.pack(); Rectangle screen = getGraphicsConfiguration().getBounds();
+        dialog.setSize(Math.min(dialog.getWidth() + 12, screen.width - 48), Math.min(dialog.getHeight() + 12, screen.height - 80));
+        dialog.setLocationRelativeTo(this); dialog.setVisible(true);
+    }
+    private void closeProfile() {
+        JDialog dialog = profileDialog; profileDialog = null;
+        if (profilePanel != null) profilePanel.close(); profilePanel = null; profileSaving = false;
+        if (dialog != null) dialog.dispose();
     }
     @Override public void onExported(Path path) { setStatus("导出成功：" + path, false); }
     private void exportHistory() {
@@ -314,7 +389,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
             catch (IOException ex) { showError(ex.getMessage()); }
         }
     }
-    private void showMenu() {
+    ChatPopupMenu mainMenu() {
         ChatPopupMenu popup = new ChatPopupMenu(menu, "LTalk");
         popup.action("menuConnection", "连接设置", LineIcon.Kind.SETTINGS, this::toggleConnection);
         popup.action("menuAppearance", "外观设置", LineIcon.Kind.PALETTE, this::showAppearance);
@@ -324,8 +399,9 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         JMenuItem disconnect = popup.action("menuDisconnect", "断开连接", LineIcon.Kind.LOGOUT, client::disconnect);
         disconnect.setEnabled(connectionState != ChatClient.State.DISCONNECTED);
         popup.action("menuAbout", "关于 LTalk", LineIcon.Kind.USERS, () -> setStatus("LTalk · 局域网聊天，群聊与私聊由服务端转发", false));
-        popup.show(menu, 0, menu.getHeight() + 4);
+        return popup;
     }
+    private void showMenu() { ChatPopupMenu popup = mainMenu(); popup.show(menu, 0, menu.getHeight() + 4); }
     private void showNewConversation() {
         ChatPopupMenu popup = new ChatPopupMenu(create, "新建会话");
         popup.action("newPublic", "进入公共聊天室", LineIcon.Kind.USERS, () -> selectConversation(ConversationId.PUBLIC));
@@ -336,24 +412,25 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         popup.addSeparator(); popup.action("newFuture", "添加好友 / 创建群组 · 待接入", LineIcon.Kind.USERS, () -> showPendingTool("好友与群组管理"));
         popup.show(create, 0, create.getHeight() + 4);
     }
-    private void showChatMenu() {
+    ChatPopupMenu conversationMenu() {
         ChatPopupMenu popup = new ChatPopupMenu(more, store.selected().title());
         popup.action("chatLatest", "回到最新消息", LineIcon.Kind.BACK, timeline::scrollToBottom);
         JMenuItem export = popup.action("chatExport", "导出聊天记录", LineIcon.Kind.SETTINGS, this::exportHistory);
         export.setEnabled(connectionState == ChatClient.State.CONNECTED);
-        popup.show(more, more.getWidth() - popup.getPreferredSize().width, more.getHeight() + 4);
+        return popup;
     }
+    private void showChatMenu() { ChatPopupMenu popup = conversationMenu(); popup.show(more, more.getWidth() - popup.getPreferredSize().width, more.getHeight() + 4); }
     private void showAppearance() {
         JDialog dialog = new JDialog(this, "外观设置", Dialog.ModalityType.APPLICATION_MODAL); dialog.setName("appearanceDialog");
         AppearancePanel panel = new AppearancePanel(appearance, value -> { applyAppearance(value, true); dialog.dispose(); }, dialog::dispose);
         dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE); dialog.setContentPane(panel); dialog.pack();
-        dialog.setResizable(false); dialog.setLocationRelativeTo(this);
+        dialog.setResizable(true); dialog.setLocationRelativeTo(this);
         dialog.getRootPane().registerKeyboardAction(e -> dialog.dispose(), KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
         dialog.setVisible(true);
     }
     void applyAppearance(AppearanceSettings value, boolean persist) {
         appearance = value; ThemePalette palette = ThemePalette.of(value); background.setAppearance(value);
-        ChatTheme.apply(shell, palette); sidebar.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, palette.line()));
+        ChatTheme.apply(pages, palette); sidebar.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, palette.line()));
         conversations.repaint(); renderTimeline();
         if (persist) {
             try { appearancePreferences.save(value); setStatus("外观设置已保存到本机", false); }

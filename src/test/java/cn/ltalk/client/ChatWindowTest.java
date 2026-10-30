@@ -30,14 +30,16 @@ class ChatWindowTest {
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.start(); cn.ltalk.support.Peer.seed(server);
             try (Peer bob = Peer.login(server.port(), "bob")) {
-                SwingUtilities.invokeAndWait(() -> windowRef.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("appearance.properties"))));
+                SwingUtilities.invokeAndWait(() -> windowRef.set(new ChatWindow(null, Integer.toString(server.port()), "alice", appearanceDirectory.resolve("appearance.properties"))));
                 ChatWindow window = windowRef.get();
                 onEdt(() -> {
                     assertFalse(button(window, "send").isEnabled());
-                    text(window, "port").setText("wrong"); text(window, "password").setText("test123!"); button(window, "connect").doClick();
+                    text(window, "port").setText("wrong"); button(window, "connectServer").doClick();
                     assertTrue(label(window, "status").getText().contains("端口"));
-                    text(window, "port").setText(Integer.toString(server.port())); text(window, "password").setText("test123!"); button(window, "connect").doClick();
+                    text(window, "port").setText(Integer.toString(server.port())); button(window, "connectServer").doClick();
                 });
+                awaitEdt(() -> button(window, "connect").isEnabled());
+                onEdt(() -> { text(window, "password").setText("test123!"); button(window, "connect").doClick(); });
                 awaitEdt(() -> button(window, "send").isEnabled() && list(window).getModel().getSize() == 2);
                 onEdt(() -> {
                     assertFalse(text(window, "host").isEnabled());
@@ -69,7 +71,7 @@ class ChatWindowTest {
                     renderComponentPreview(window);
                     button(window, "disconnect").doClick();
                 });
-                awaitEdt(() -> button(window, "connect").isEnabled());
+                awaitEdt(() -> button(window, "connectServer").isEnabled());
                 onEdt(() -> { assertFalse(button(window, "send").isEnabled()); assertTrue(text(window, "host").isEnabled()); });
             }
         } finally {
@@ -83,8 +85,8 @@ class ChatWindowTest {
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.start(); cn.ltalk.support.Peer.seed(server);
             try (Peer bob = Peer.login(server.port(), "bob"); Peer carol = Peer.login(server.port(), "carol")) {
-                onEdt(() -> { ChatTheme.install(); ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("appearance.properties"))); text(ref.get(), "password").setText("test123!"); button(ref.get(), "connect").doClick(); });
-                ChatWindow window = ref.get();
+                onEdt(() -> { ChatTheme.install(); ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("appearance.properties"))); });
+                ChatWindow window = ref.get(); login(window);
                 awaitEdt(() -> button(window, "send").isEnabled() && list(window).getModel().getSize() == 3);
                 bob.group("你好，欢迎来到 LTalk 👋");
                 awaitEdt(() -> history(window).contains("欢迎来到"));
@@ -149,8 +151,8 @@ class ChatWindowTest {
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.start(); cn.ltalk.support.Peer.seed(server);
             try (Peer bob = Peer.login(server.port(), "bob")) {
-                onEdt(() -> { ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", settings)); text(ref.get(), "password").setText("test123!"); button(ref.get(), "connect").doClick(); });
-                ChatWindow window = ref.get(); awaitEdt(() -> button(window, "send").isEnabled());
+                onEdt(() -> { ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", settings)); });
+                ChatWindow window = ref.get(); login(window); awaitEdt(() -> button(window, "send").isEnabled());
                 bob.group("切换主题之前的消息"); awaitEdt(() -> history(window).contains("之前的消息"));
                 onEdt(() -> {
                     area(window, "input").setText("不应丢失的草稿"); window.applyAppearance(dark, true);
@@ -189,6 +191,84 @@ class ChatWindowTest {
         });
     }
 
+    @Test @Timeout(25)
+    void startupRegistrationProfileEditingAndAccountSwitchUseDedicatedPage() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start(); Peer.seed(server);
+            onEdt(() -> {
+                ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), null, appearanceDirectory.resolve("new-ui.properties")));
+                ChatWindow window = ref.get();
+                assertTrue(find(window, "welcomeScroll").isVisible()); assertFalse(button(window, "send").isEnabled());
+                assertEquals("未登录", label(window, "identityNickname").getText());
+                assertNull(find(window, "connectionSettings"));
+                assertNull(find(window.mainMenu(), "menuExport")); assertNotNull(find(window.mainMenu(), "menuAppearance"));
+                assertNull(find(window.conversationMenu(), "chatAppearance")); assertNull(find(window.conversationMenu(), "chatConnection"));
+                assertFalse(((JMenuItem) find(window.conversationMenu(), "chatExport")).isEnabled());
+                render(window, 1000, 760, "welcome-login.png");
+            });
+            ChatWindow window = ref.get(); awaitEdt(() -> button(window, "connect").isEnabled());
+            onEdt(() -> {
+                assertTrue(text(window, "password").isEnabled()); button(window, "register").doClick();
+                assertTrue(text(window, "nickname").getParent().isVisible());
+                text(window, "userId").setText("newUI"); text(window, "nickname").setText("新用户");
+                text(window, "password").setText("pass!12"); text(window, "passwordConfirmation").setText("wrong!12");
+                button(window, "connect").doClick(); assertTrue(label(window, "authFeedback").getText().contains("不一致"));
+                text(window, "passwordConfirmation").setText("pass!12");
+                render(window, 1000, 760, "welcome-register.png"); render(window, 420, 700, "welcome-narrow.png");
+                JScrollPane scroll = (JScrollPane) find(window, "welcomeScroll");
+                assertTrue(scroll.getViewport().getViewSize().height > scroll.getViewport().getExtentSize().height);
+                scroll.getVerticalScrollBar().setValue(scroll.getVerticalScrollBar().getMaximum());
+                render(window, 420, 700, "welcome-narrow-bottom.png");
+                assertTrue(scroll.getViewport().getViewRect().intersects(SwingUtilities.convertRectangle(button(window, "connect").getParent(), button(window, "connect").getBounds(), (Container) scroll.getViewport().getView())));
+                window.applyAppearance(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK), false);
+                assertEquals(ThemePalette.of(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK)).text(), find(window, "randomUsername").getForeground());
+                render(window, 1000, 760, "welcome-dark.png"); window.applyAppearance(AppearanceSettings.defaults(), false);
+                button(window, "connect").doClick();
+            });
+            awaitEdt(() -> button(window, "send").isEnabled());
+            onEdt(() -> {
+                assertFalse(find(window, "welcomeScroll").isVisible()); assertEquals("新用户", label(window, "identityNickname").getText());
+                assertEquals("@newUI", label(window, "identityUsername").getText()); assertEquals("", text(window, "password").getText());
+                assertTrue(((JMenuItem) find(window.conversationMenu(), "chatExport")).isEnabled());
+                ((JMenuItem) find(window.identityMenu(), "accountProfile")).doClick();
+                JDialog dialog = profileDialog(window); assertNotNull(dialog);
+                renderContainer(dialog.getContentPane(), 480, 570, "profile-editor.png");
+                ((JTextField) find(dialog, "profileNickname")).setText("修改后的昵称");
+                ((JButton) find(dialog, "profileSave")).doClick();
+            });
+            awaitEdt(() -> "修改后的昵称".equals(label(window, "identityNickname").getText()) && profileDialog(window) == null);
+            assertEquals("修改后的昵称", server.accounts().profile("newUI").nickname());
+            onEdt(() -> {
+                button(window, "group").doClick(); area(window, "input").setText("上一账号的草稿");
+                render(window, 1000, 760, "profile-footer.png");
+                ((JMenuItem) find(window.identityMenu(), "accountLogout")).doClick();
+                assertFalse(button(window, "send").isEnabled()); assertEquals("", area(window, "input").getText());
+                assertEquals("newUI", text(window, "userId").getText());
+            });
+            awaitEdt(() -> button(window, "connect").isEnabled() && server.onlineCount() == 0);
+            onEdt(() -> { text(window, "password").setText("pass!12"); button(window, "connect").doClick(); });
+            awaitEdt(() -> button(window, "send").isEnabled());
+            onEdt(() -> {
+                ((JMenuItem) find(window.identityMenu(), "accountSwitch")).doClick();
+                assertEquals("", text(window, "userId").getText()); assertEquals("", text(window, "password").getText());
+                assertEquals("未登录", label(window, "identityNickname").getText());
+            });
+            awaitEdt(() -> button(window, "connect").isEnabled() && server.onlineCount() == 0);
+            onEdt(() -> { text(window, "userId").setText("other"); text(window, "password").setText("test123!"); button(window, "connect").doClick(); });
+            awaitEdt(() -> button(window, "send").isEnabled());
+            onEdt(() -> { assertEquals("@other", label(window, "identityUsername").getText()); assertEquals("", area(window, "input").getText()); });
+        } finally { if (ref.get() != null) onEdt(() -> ref.get().dispatchEvent(new WindowEvent(ref.get(), WindowEvent.WINDOW_CLOSING))); }
+    }
+    private static JDialog profileDialog(ChatWindow window) {
+        for (Window child : window.getOwnedWindows()) if (child instanceof JDialog dialog && "profileDialog".equals(dialog.getName()) && dialog.isDisplayable()) return dialog;
+        return null;
+    }
+
+    private static void login(ChatWindow window) throws Exception {
+        awaitEdt(() -> button(window, "connect").isEnabled());
+        onEdt(() -> { text(window, "password").setText("test123!"); button(window, "connect").doClick(); });
+    }
     private static void invokeKey(JTextArea editor, int key, int modifiers) {
         Object binding = editor.getInputMap().get(KeyStroke.getKeyStroke(key, modifiers));
         editor.getActionMap().get(binding).actionPerformed(new java.awt.event.ActionEvent(editor, 0, binding.toString()));
@@ -230,8 +310,11 @@ class ChatWindowTest {
         render(window, 960, 680, "chat-window.png");
     }
     private static void render(ChatWindow window, int width, int height, String filename) {
+        renderContainer(window.getContentPane(), width, height, filename);
+    }
+    private static void renderContainer(Container root, int width, int height, String filename) {
         try {
-            Container root = window.getContentPane(); root.setSize(width, height); layout(root);
+            root.setSize(width, height); layout(root);
             BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
             Graphics2D graphics = image.createGraphics(); root.printAll(graphics); graphics.dispose();
             Path directory = Path.of("target", "ui-preview"); Files.createDirectories(directory);

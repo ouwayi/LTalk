@@ -15,6 +15,18 @@ final class MessageRouter {
 
     void handle(ClientSession session, Message request) {
         try {
+            if (request.type() == MessageType.HELLO) {
+                Validation.requestId(request.requestId());
+                if (session.greeted || session.userId != null) throw new ProtocolException("BAD_MESSAGE", "不能重复建立连接");
+                session.greeted = true;
+                if (session.loginDeadline != null) session.loginDeadline.cancel(false);
+                server.deliver(session, Message.of(MessageType.HELLO_OK).requestId(request.requestId()).build());
+                session.heartbeat.start();
+                return;
+            }
+            if (session.greeted && (request.type() == MessageType.PING || request.type() == MessageType.PONG)) {
+                session.heartbeat.receive(request); return;
+            }
             if (request.type() == MessageType.REGISTER) {
                 if (session.ready) throw new ProtocolException("BAD_MESSAGE", "请先退出当前登录");
                 Validation.requestId(request.requestId());
@@ -35,6 +47,14 @@ final class MessageRouter {
                 case PING, PONG -> session.heartbeat.receive(request);
                 case LOGOUT -> session.close("用户主动退出");
                 case EXPORT_REQUEST -> export(session, request);
+                case PROFILE_GET, PROFILE_UPDATE -> {
+                    Validation.requestId(request.requestId());
+                    if (request.userId() != null && !session.userId.equals(request.userId()))
+                        throw new ProtocolException("FORBIDDEN", "只能查看和修改本人的资料");
+                    UserProfile profile = request.type() == MessageType.PROFILE_GET ? server.accounts().profile(session.userId)
+                            : server.accounts().updateProfile(session.userId, request.nickname(), request.avatar());
+                    server.deliver(session, profileMessage(MessageType.PROFILE_OK, request.requestId(), profile));
+                }
                 case GROUP_SEND -> {
                     validateChat(request);
                     var recipients = registry.readySessions();
@@ -63,7 +83,7 @@ final class MessageRouter {
             String requestId = request.requestId();
             if (requestId != null && (requestId.isBlank() || requestId.length() > 64)) requestId = null;
             server.deliver(session, Message.error(requestId, ex.code(), ex.getMessage()));
-            if (request.type() == MessageType.LOGIN && session.userId == null) session.close("登录失败：" + ex.code());
+            if (request.type() == MessageType.LOGIN && session.userId == null && !session.greeted) session.close("登录失败：" + ex.code());
         } catch (IOException ex) {
             if (request.type() == MessageType.EXPORT_REQUEST) session.closeExport();
             server.deliver(session, Message.error(request.requestId(), request.type() == MessageType.EXPORT_REQUEST ? "EXPORT_FAILED" : "STORAGE_ERROR",
@@ -77,7 +97,7 @@ final class MessageRouter {
         if (!registry.reserve(userId, session))
             throw new ProtocolException("USER_EXISTS", "用户标识已在线，请换一个名称");
         // Reserved sessions are invisible to routing until LOGIN_OK has been flushed.
-        if (!server.deliver(session, Message.of(MessageType.LOGIN_OK).requestId(request.requestId()).userId(userId).build())) return;
+        if (!server.deliver(session, profileMessage(MessageType.LOGIN_OK, request.requestId(), server.accounts().profile(userId)))) return;
         Message list = registry.activate(session);
         if (list == null) return;
         LOG.info(() -> "登录成功 user=" + userId);
@@ -112,6 +132,10 @@ final class MessageRouter {
     private static void validateChat(Message request) throws ProtocolException {
         Validation.requestId(request.requestId());
         Validation.content(request.content());
+    }
+    private static Message profileMessage(MessageType type, String requestId, UserProfile profile) {
+        return Message.of(type).requestId(requestId).userId(profile.userId()).nickname(profile.nickname())
+                .avatar(profile.avatar()).createdAt(profile.createdAt()).build();
     }
 
 }

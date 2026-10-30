@@ -116,6 +116,8 @@ class ChatClientTest {
             while ((task = edt.poll()) != null) task.run();
             assertTrue(events.details.stream().noneMatch(s -> s.contains("old_user")));
             assertTrue(events.details.stream().anyMatch(s -> s.contains("new_user")));
+            assertTrue(events.profiles.stream().noneMatch(p -> p.userId().equals("old_user")));
+            assertTrue(events.profiles.stream().anyMatch(p -> p.userId().equals("new_user")));
             assertEquals(ChatClient.State.CONNECTED, client.state());
         }
     }
@@ -144,6 +146,8 @@ class ChatClientTest {
         final BlockingQueue<Message> messages = new LinkedBlockingQueue<>();
         final List<String> details = new CopyOnWriteArrayList<>();
         final List<Message> lists = new CopyOnWriteArrayList<>();
+        final List<UserProfile> profiles = new CopyOnWriteArrayList<>();
+        @Override public void onProfile(UserProfile profile) { profiles.add(profile); }
         @Override public void onStateChanged(ChatClient.State state, String detail) { details.add(detail); states.add(state); }
         @Override public void onGroup(Message message) { messages.add(message); }
         @Override public void onPrivate(Message message) { messages.add(message); }

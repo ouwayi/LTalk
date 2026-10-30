@@ -1,5 +1,22 @@
 # 测试报告与验收记录
 
+## 本轮最新结果（2026-10-30）
+
+阶段 12（cdf5927）完整离线构建 **63/0/0/0，57.306 秒**，会话导出与入口精简；阶段 13 完整 `build.ps1 -o package` **72/0/0/0，BUILD SUCCESS，约 1 分 5 秒**，日志 `.tools/account-workspace-final.log`。环境 Windows/JDK 25.0.4/Maven 3.9.9、release 17。首次沙箱网络/原子移动受限的阶段 12 回归在授权环境保留原断言重跑，不删测、不放宽断言。
+
+完整回归后仅调整深色注册复选框文字及资料时间展示，再执行 `-Dtest=ChatWindowTest,AppearancePanelTest package`：**7/0/0/0，13.359 秒**，重新打包；日志 `.tools/account-workspace-ui-final.log`。不把定向 7 项描述成再次全量 72 项。
+
+| 新增/更新测试 | 本轮行为证据 |
+| --- | --- |
+| AuthenticationExportTest（阶段 12 新增 2 项） | 服务端群/双向私聊/空会话筛选、他人会话拒绝、游标范围绑定、客户端 JSON/CSV 内容 |
+| ProfileConnectionTest（新增 4 项） | HELLO 后未认证拒绝业务且心跳保活；错密码重试；资料仅本人、持久化/重启/恢复头像、旧账号兼容、保存失败保留原资料及密码、图片/字段类型限值 |
+| AccountFlowTest（新增 4 项） | 握手与登录分离、手填/随机注册自动登录、重名不误登录、资料更新/重登、握手/认证超时关闭、资料超时忽略迟到回复且聊天仍可用 |
+| ChatWindowTest（新增 1 项、原 4 项保留） | 自动连接启动页、菜单迁移、登录/注册和密码确认、资料编辑确认后更新栏、退出/切换账号清理、窄屏滚到提交按钮、深色文字；原聊天/外观/键盘/未读/草稿/离线等回归 |
+| ChatClientTest（更新原测试） | 补查旧连接已排队的资料回调不污染新身份，原状态与列表隔离断言保留 |
+
+已人工查看自动化生成的组件渲染图：welcome-login/register/dark/narrow/narrow-bottom、profile-editor/footer，以及原聊天桌面/窄屏预览；发现并修复启动页裁切、成功登录后残留认证错误和深色复选框文字对比度。自动化曾显示个人信息窗口并操作自有 Swing 控件，**不是用户手动原生验收**。本轮未做多机、独立 JDK 17、完整高 DPI、文件选择器手动上传、长时压力或全链路磁盘故障恢复。新流程待用户人工验收；下列 2026-10-29 及更早结果保持历史归属。
+
+
 ## 账号认证与记录导出（2026-10-29）
 
 Windows/JDK 25.0.4、Maven 3.9.9，release 17。`powershell -NoProfile -File .\build.ps1 -o package`：**61 项、0 失败/错误/跳过，BUILD SUCCESS，57.236 秒**，含依赖 JAR 生成；日志 `.tools/auth-export-final.log`，JUnit 在 `target/surefire-reports/`（可覆盖）。原 54 项全部保留，将测试账号显式注册/预置并携带密码，未放宽旧行为断言。首轮两处 UI 测试缺密码而失败，补充登录准备后通过；工具链/打包警告仍保留。
