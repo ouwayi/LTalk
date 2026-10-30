@@ -4,7 +4,7 @@
 
 继续开发前请先读 [当前状态与交接](docs/STATUS.md)，再按需查阅 [开发日志](docs/DEVLOG.md) 的相关阶段；每完成功能或开发阶段追加日志并更新状态。STATUS 保存当前结论，DEVLOG 保存决策、问题及验证的演变，协议、设计与测试证据仍保留在各自文档中。
 
-已实现：多人群聊（含发送者回显）、服务端中转私聊（只发双方）、在线列表、账号密码登录、输入与协议校验、主动退出、异常断线清理、双向心跳与失联检测、手动重连。网络连接、收发均在后台，界面在 Swing EDT 更新。私聊对象离线时保留草稿并禁用发送，必须明确重新选择目标。
+已实现：多人群聊（含发送者回显）、服务端中转私聊（只发双方）、在线列表、账号密码登录、输入与协议校验、主动退出、异常断线清理、双向心跳与失联检测、手动重连、昵称/账号注册和本人归档的 JSON/CSV 导出。网络连接、收发均在后台，界面在 Swing EDT 更新。私聊对象离线时保留草稿并禁用发送，必须明确重新选择目标。
 
 ## 环境与构建
 
@@ -16,7 +16,7 @@
 
 构建前确认 `java -version` 与 `javac -version` 均可运行，并将 `JAVA_HOME`（如设置）指向 JDK。运行已打包 JAR 只需 Java 运行环境；编译和测试需要完整 JDK。其他操作系统可使用已安装 Maven，尚无独立运行验收记录。
 
-在项目根目录运行：
+以下命令均在项目根目录 `D:\Agent\AllProjects\LTalk` 运行（先 `Set-Location D:\Agent\AllProjects\LTalk`）。首次下载需要联网；缓存齐全后可用 `-o package`，离线 `clean` 另需已缓存 clean 插件。
 
 ```powershell
 # Windows PowerShell：自动准备 Maven，构建并执行所有测试
@@ -48,7 +48,13 @@ java -jar target/ltalk-1.0.0.jar
 java -jar target/ltalk-1.0.0.jar 9000 0.0.0.0 20
 ```
 
-默认监听所有网卡的 TCP **9000** 端口、最多 **20** 个连接；按 Ctrl+C 关闭。未完成登录的连接在 **10 秒**绝对期限后关闭，正常登录用户不会因聊天空闲被断开。
+默认账号/归档使用启动时工作目录的 `data/`。长期使用可固定数据位置，避免换工作目录后误以为账号丢失（JVM 属性在 `-jar` 前）：
+
+```powershell
+java "-Dltalk.dataDir=D:\Agent\AllProjects\LTalk\data" -jar target/ltalk-1.0.0.jar
+```
+
+默认监听所有网卡的 TCP **9000** 端口、最多 **20** 个连接；按 Ctrl+C 关闭。未完成登录的连接在 **10 秒**绝对期限后关闭，正常登录用户在心跳响应正常时不会因聊天空闲被断开。
 
 登录后两端独立探测：默认等待 **10 秒**发送 PING，收到匹配 PONG 后等待下一轮，响应超时 **20 秒**。持续静默失联按本端配置在间隔 + 响应超时 + 调度容差内断开（默认约 30 秒加容差）；界面提示手动重连，服务端清理同名与连接名额。正常聊天空闲时自动响应心跳。服务端和客户端须一起更新到支持心跳的版本。
 
@@ -67,7 +73,7 @@ java -Dltalk.heartbeat.intervalMillis=5000 -Dltalk.heartbeat.timeoutMillis=15000
 java -Djava.util.logging.config.file=docs/logging.properties -jar target/ltalk-1.0.0.jar
 ```
 
-分别在三个终端启动客户端，也可只启动一个后手动填写连接信息：
+分别在三个终端启动客户端，也可只启动一个后手动填写连接信息。下面参数只预填地址/用户名，**不会创建账号或自动登录**；首次须注册，密码在窗口填写，不放进命令行：
 
 ```sh
 java -cp target/ltalk-1.0.0.jar cn.ltalk.client.ChatWindow 127.0.0.1 9000 alice
@@ -110,6 +116,8 @@ java -cp target/ltalk-1.0.0.jar cn.ltalk.client.ChatWindow 127.0.0.1 9000 carol
 
 ## 测试
 
+2026-10-30 交接仅核对代码、已有构建日志与留存 JUnit（61/0/0/0），未重新运行测试；下述 61 项结果属于 2026-10-29。新增注册/导出原生弹窗和 v2 多机流程尚未人工验收。
+
 日常回归使用上面的 `build.ps1 test` / `mvn test`；交付打包使用 `build.ps1` / `mvn clean package`。2026-10-29 账号与导出阶段执行离线完整构建，**61 项测试通过，0 失败、0 错误、0 跳过**；包含本机真实 Socket 心跳/聊天集成测试与 Swing EDT 组件测试。运行测试需要允许本机 TCP，完整 UI 回归需图形桌面环境。结果与未验证范围见 [当前状态](docs/STATUS.md) 和 [测试报告](docs/test-report.md)。
 
 ```powershell
@@ -128,9 +136,9 @@ mvn -Dtest=LoadTest -Dltalk.soak.seconds=600 test
 
 ```text
 src/main/java/cn/ltalk/
-  common/   消息模型、Gson JSON 编解码、有限长读取、公共校验
-  server/   监听、连接会话、注册表、消息路由
-  client/   异步网络客户端、事件接口、Swing 窗口适配层
+  common/   消息/导出模型、JSON 帧、有限长读取、校验与心跳
+  server/   监听、认证会话、账号存储、消息路由、授权归档
+  client/   异步网络/注册/导出、事件接口、Swing 窗口适配层
     ui/     会话状态、列表、消息气泡、主题与窄屏布局
 src/test/java/cn/ltalk/  单元测试、真实 TCP 集成测试、负载观察
 docs/                   需求、协议、设计、测试与演示
@@ -151,7 +159,12 @@ docs/                   需求、协议、设计、测试与演示
 | --- | --- |
 | 服务端启动失败/Address already in use | 检查端口占用，或换端口并同步修改客户端配置 |
 | 连接被拒绝或超时 | 确认服务端已启动、IP/端口正确；检查防火墙和设备互访 |
-| USER_EXISTS | 更换名称，或等待旧连接被服务端检测清理后重试 |
+| USER_EXISTS | 注册时表示用户名已永久注册，请换名或登录原账号；登录时可能是原会话仍在线，先退出旧会话或等待心跳清理 |
+| MISSING_FIELD / INVALID_PASSWORD | 填齐昵称（注册）、用户名和密码；密码长度为 6～128 char，服务端也会校验 |
+| LOGIN_FAILED | 用户名或密码错误，检查输入及是否连接到原服务端数据目录；不区分账号不存在与密码错误 |
+| NOT_AUTHENTICATED / FORBIDDEN | 前者须重新登录；后者为无权导出其他账号/无效游标，不绕过权限 |
+| EXPORT_FAILED / STORAGE_ERROR | 检查输出目录、服务端数据目录权限及磁盘/历史文件；不自动重发，不删除真实账号数据试错 |
+| 数据目录被占用 | 先停止使用同目录的另一个服务端；每实例使用独立目录，不靠删除锁文件绕过 |
 | USER_OFFLINE | 目标已离线，重新选择当前在线用户 |
 | 超过连接上限后立即断开 | 默认包含未登录连接共 20 个，退出部分连接或调整启动参数 |
 | 桌面客户端启动失败 | 需要图形桌面；服务器无桌面时仅运行服务端 |
