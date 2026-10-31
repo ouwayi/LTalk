@@ -1,6 +1,13 @@
 # 当前状态与开发交接
 
-更新：**2026-10-30（Asia/Shanghai）**。接续先读本文件，再读 [README](../README.md)，按需查 [DEVLOG](DEVLOG.md)、[协议](protocol.md)、[设计](design.md)、[UI](ui-design.md)、[测试报告](test-report.md)。下一步建议不代表自动授权开发。
+更新：**2026-10-31（Asia/Shanghai）**。接续先读本文件，再读 [README](../README.md)，按需查 [DEVLOG](DEVLOG.md)、[协议](protocol.md)、[设计](design.md)、[UI](ui-design.md)、[测试报告](test-report.md)。下一步建议不代表自动授权开发。
+
+## 2026-10-31 当前增量
+
+- 阶段 14 已将头像/导出选择接入 Windows 现代系统对话框；新增 JNA 5.14.0，仍随单 JAR 打包。非 Windows 保留原选择器，Windows 原生失败明确报错。
+- 密码与确认密码可分别显示/隐藏，切换表单或清理凭据时恢复隐藏；不保存明文。
+- 本轮完整回归 **74/0/0/0，约 1 分 11 秒**，日志 `.tools/native-picker-password-build.log`。隔离原生预览观察图片/目录现代界面和图片取消；目录实际选定路径未完成 UI 自动化，不能当已验收。
+- 用户本轮要求的保留旧会话切换账号将在阶段 15 实现，下方切换即退出暂为阶段 13 现状。
 
 ## 仓库与本轮范围
 

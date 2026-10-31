@@ -47,10 +47,15 @@ public final class ProfilePanel extends JPanel {
         catch (java.time.DateTimeException ex) { return "未记录"; }
     }
     private void chooseAvatar() {
-        JFileChooser chooser = new JFileChooser(); chooser.setDialogTitle("选择头像图片");
-        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("图片 (PNG / JPEG / GIF / BMP)", "png", "jpg", "jpeg", "gif", "bmp"));
-        if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
-        var path = chooser.getSelectedFile().toPath(); setBusy(true); feedback.setText("正在处理图片…");
+        setBusy(true);
+        new FileDialogs().choose(this, FileDialogs.Kind.IMAGE, path -> {
+            if (closed) return;
+            if (path == null) { setBusy(false); return; }
+            importAvatar(path);
+        }, detail -> { if (!closed) failed(detail); });
+    }
+    private void importAvatar(java.nio.file.Path path) {
+        feedback.setText("正在处理图片…");
         importer = new SwingWorker<>() {
             protected String doInBackground() throws Exception { return AvatarImporter.load(path); }
             protected void done() {

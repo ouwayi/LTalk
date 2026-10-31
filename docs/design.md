@@ -78,3 +78,9 @@ ChatClient 新增 SERVER_CONNECTED（仅完成 HELLO）与 AUTHENTICATING；保�
 ChatWindow 通过 CardLayout 在 WelcomePanel 与 ResponsiveShell 之间切换；ConnectionPanel 只负责地址/端口，AuthenticationPanel 管理登录/注册表单，WelcomePanel 桌面分栏、窄屏纵向滚动。UserIdentityButton、ProfilePanel、ProfileAvatar 独立呈现本人资料，避免把会话展示元数据和路由用户名混用。显式退出/切换清除 Store 身份及草稿；故障重连保留原有窗口历史策略。
 
 AccountStore 新增可选头像/创建时间，兼容旧 JSON；资料修改先原子替换文件，再替换内存账号，不重算/返回盐或散列。头像本地选图后由 AvatarImporter 在 SwingWorker 内限制文件/像素、中心裁剪到 48×48 PNG，服务端 AvatarData 再限长、验格式和尺寸；展示解码只用内存，不在 EDT 读取用户文件。资料请求独立计时、忽略迟到响应，不阻断正常聊天。资料仅本人可读写，当前不广播联系人头像/昵称。
+
+## 系统文件对话框与密码显隐（2026-10-31）
+
+FileDialogs 将异步完成统一回调到 EDT；WindowsFilePicker 在后台 STA 调用原生 IFileOpenDialog，关闭后释放 IShellItem、CoTaskMem 路径和 COM 对象，最终 CoUninitialize。图片过滤与目录选择只影响选择界面，导出文件命名/安全发布和后台头像校验不变，Windows 失败明确报错。参考 [Microsoft IFileOpenDialog](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-ifileopendialog)、[选项定义](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/ne-shobjidl_core-_fileopendialogoptions) 与 [JNA Ole32](https://github.com/java-native-access/jna/blob/5.14.0/contrib/platform/src/com/sun/jna/platform/win32/Ole32.java)。
+
+PasswordInput 仅切换 JPasswordField echoChar；两框独立，清理凭据/换模式/断线恢复默认遮罩。密码不新增持久化/日志，不修改认证协议。

@@ -264,3 +264,7 @@ carol 的“已连接”是客户端尚未收到错误时保留的本地状态�
 ## 当前会话导出回归（2026-10-30）
 
 本轮 `build.ps1 -o package` 在授权环境通过 **63/0/0/0，57.306 秒**，含原 61 项及新增两项：当前公共群聊/双向私聊过滤、空会话、第三方拒绝、游标范围绑定及客户端 JSON/CSV 文件内容。首次沙箱 TCP/原子移动被禁止，原断言重跑，无删测或放宽。日志 `.tools/conversation-export-build.log`；本阶段无原生 UI/多机/长测人工证据。
+
+## 系统选择器与密码显隐（2026-10-31，阶段 14）
+
+完整 package **74/0/0/0，约 1 分 11 秒**，日志 `.tools/native-picker-password-build.log`；新增 FileDialogsTest 与 AuthenticationPanelTest。computer-use 隔离预览确认现代图片/目录界面（原生导航、地址、搜索、图片筛选）及图片取消恢复；目录路径选择因自动化焦点问题未完成，不宣称实际文件/目录返回验收。未做所有 Windows 版本/DPI/非 Windows 验证，历史 72 项结果不作为本轮重跑。

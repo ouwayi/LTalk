@@ -25,6 +25,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     private ProfilePanel profilePanel;
     private boolean profileSaving;
     private boolean closed;
+    private boolean choosingExport;
     private final JTextField search = ChatTheme.field("", "conversationSearch");
     private final JTextField messageSearch = ChatTheme.field("", "messageSearch");
     private final JTextArea input = new JTextArea(1, 16) {
@@ -276,6 +277,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
             if (state == ChatClient.State.DISCONNECTED) {
                 store.notice(store.selectedId(), detail, false); profile = null; closeProfile();
                 authentication.password.setText(""); authentication.confirmation.setText("");
+                authentication.hidePasswords();
             }
             showWelcome();
         }
@@ -375,6 +377,8 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     }
     @Override public void onExported(Path path) { setStatus("导出成功：" + path, false); }
     private void exportHistory() {
+        if (choosingExport) return;
+        String exportingUser = store.self();
         ConversationId selected = store.selectedId();
         final String scope;
         try { scope = selected.kind() == ConversationId.Kind.GROUP ? cn.ltalk.common.ConversationScope.PUBLIC
@@ -383,11 +387,16 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         String format = (String) JOptionPane.showInputDialog(this, "导出「" + store.selected().title() + "」的聊天记录", "导出聊天记录", JOptionPane.QUESTION_MESSAGE,
                 null, new String[]{"json", "csv"}, "json");
         if (format == null) return;
-        JFileChooser chooser = new JFileChooser(); chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
-        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            try { client.exportHistory(chooser.getSelectedFile().toPath(), format, scope); }
+        choosingExport = true;
+        new FileDialogs().choose(this, FileDialogs.Kind.DIRECTORY, path -> {
+            choosingExport = false;
+            if (closed || path == null) return;
+            if (!exportingUser.equals(store.self()) || connectionState != ChatClient.State.CONNECTED) {
+                showError("登录身份已改变，请重新选择会话导出"); return;
+            }
+            try { client.exportHistory(path, format, scope); }
             catch (IOException ex) { showError(ex.getMessage()); }
-        }
+        }, detail -> { choosingExport = false; if (!closed) showError(detail); });
     }
     ChatPopupMenu mainMenu() {
         ChatPopupMenu popup = new ChatPopupMenu(menu, "LTalk");

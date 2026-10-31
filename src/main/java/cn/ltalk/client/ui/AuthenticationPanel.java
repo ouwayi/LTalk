@@ -8,6 +8,7 @@ import java.awt.*;
 public final class AuthenticationPanel extends JPanel {
     public final JTextField user, nickname = ChatTheme.field("", "nickname");
     public final JPasswordField password = new JPasswordField(), confirmation = new JPasswordField();
+    private final PasswordInput passwordInput, confirmationInput;
     public final JCheckBox random = new JCheckBox("随机生成用户名");
     public final JButton submit = ChatTheme.primary("登录"), switchMode = ChatTheme.pill("立即注册");
     public final JLabel feedback = ChatTheme.label("请先连接左侧服务器", 12, ChatTheme.MUTED, false);
@@ -20,13 +21,14 @@ public final class AuthenticationPanel extends JPanel {
         setName("authenticationPanel"); user = ChatTheme.field(initialUser == null ? "" : initialUser, "userId");
         password.setName("password"); confirmation.setName("passwordConfirmation");
         stylePassword(password); stylePassword(confirmation); random.setName("randomUsername"); random.setOpaque(false);
+        passwordInput = new PasswordInput(password, "showPassword"); confirmationInput = new PasswordInput(confirmation, "showPasswordConfirmation");
         ChatTheme.foreground(random, ThemePalette.Role.TEXT);
         submit.setName("connect"); switchMode.setName("register"); feedback.setName("authFeedback");
         GridBagConstraints c = new GridBagConstraints(); c.gridx = 0; c.weightx = 1; c.fill = GridBagConstraints.HORIZONTAL;
         addRow(heading, c); addRow(field("用户名", user), c);
         randomRow = new JPanel(new BorderLayout()); randomRow.setOpaque(false); randomRow.add(random); addRow(randomRow, c);
         nicknameRow = field("昵称", nickname); addRow(nicknameRow, c);
-        addRow(field("密码", password), c); confirmationRow = field("确认密码", confirmation); addRow(confirmationRow, c);
+        addRow(field("密码", passwordInput), c); confirmationRow = field("确认密码", confirmationInput); addRow(confirmationRow, c);
         addRow(submit, c);
         JPanel links = new JPanel(new FlowLayout(FlowLayout.CENTER, 5, 0)); links.setOpaque(false);
         links.add(switchHint); links.add(switchMode); addRow(links, c); addRow(feedback, c);
@@ -46,6 +48,7 @@ public final class AuthenticationPanel extends JPanel {
     public boolean registering() { return registering; }
     public void setRegistering(boolean value) {
         registering = value; password.setText(""); confirmation.setText("");
+        hidePasswords();
         nicknameRow.setVisible(value); confirmationRow.setVisible(value); randomRow.setVisible(value);
         heading.setText(value ? "注册账号" : "登录 LTalk"); submit.setText(value ? "注册并登录" : "登录");
         switchHint.setText(value ? "已有账号？" : "还没有账号？"); switchMode.setText(value ? "立即登录" : "立即注册");
@@ -55,7 +58,7 @@ public final class AuthenticationPanel extends JPanel {
     private void update() {
         submit.setEnabled(available && !busy); switchMode.setEnabled(!busy);
         user.setEnabled(!busy && !(registering && random.isSelected()));
-        password.setEnabled(!busy); nickname.setEnabled(!busy); confirmation.setEnabled(!busy); random.setEnabled(!busy);
+        passwordInput.setEnabled(!busy); nickname.setEnabled(!busy); confirmationInput.setEnabled(!busy); random.setEnabled(!busy);
     }
     public void feedback(String text, boolean error) {
         feedback.setText(text); feedback.setToolTipText(text);
@@ -65,4 +68,5 @@ public final class AuthenticationPanel extends JPanel {
         password.setText(""); confirmation.setText(""); nickname.setText(""); random.setSelected(false);
         if (clearUser) user.setText(""); setRegistering(false);
     }
+    public void hidePasswords() { passwordInput.setRevealed(false); confirmationInput.setRevealed(false); }
 }
