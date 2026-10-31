@@ -13,9 +13,9 @@ import java.nio.file.Path;
 import java.util.List;
 
 /** Swing presentation adapter; account and export operations stay in the background client. */
-public final class ChatWindow extends JFrame implements ClientEventListener {
+public final class ChatWindow extends JFrame implements ClientSessions.Listener {
     private final ConversationStore store = new ConversationStore();
-    private final ChatClient client = new ChatClient(this, SwingUtilities::invokeLater);
+    private final ClientSessions client = new ClientSessions(this);
     private final ConnectionPanel connection;
     private final AuthenticationPanel authentication;
     private final WelcomePanel welcome;
@@ -26,6 +26,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     private boolean profileSaving;
     private boolean closed;
     private boolean choosingExport;
+    private long sessionRevision;
     private final JTextField search = ChatTheme.field("", "conversationSearch");
     private final JTextField messageSearch = ChatTheme.field("", "messageSearch");
     private final JTextArea input = new JTextArea(1, 16) {
@@ -224,7 +225,10 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
                 if (!password.equals(new String(authentication.confirmation.getPassword()))) throw new IllegalArgumentException("两次密码不一致");
                 client.registerAndLogin(authentication.user.getText(), authentication.nickname.getText(), password, authentication.random.isSelected());
             } else client.login(authentication.user.getText(), password);
-        } catch (IOException | IllegalArgumentException | IllegalStateException ex) { showError(ex.getMessage()); }
+        } catch (IOException | IllegalArgumentException | IllegalStateException ex) {
+            if (client.switching()) authentication.feedback(ex.getMessage(), true);
+            else showError(ex.getMessage());
+        }
     }
     private void send() {
         if (!store.canSend()) { showError("请明确重新选择在线私聊对象或公共聊天室"); return; }
@@ -268,7 +272,10 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         connectionState = state;
         boolean loggedIn = state == ChatClient.State.CONNECTED;
         if (loggedIn) {
-            store.saveDraft(input.getText()); store.useIdentity(profile.userId());
+            store.saveDraft(input.getText());
+            boolean changedIdentity = !store.self().equals(profile.userId()); store.useIdentity(profile.userId());
+            if (changedIdentity) { search.setText(""); messageSearch.setText(""); }
+            restoreAddress(); authentication.switching(false);
             hint.setText("Enter 发送 · Shift+Enter 换行"); hint.setToolTipText(null); ChatTheme.foreground(hint, ThemePalette.Role.MUTED);
             authentication.clearCredentials(false); showChat();
         } else {
@@ -276,17 +283,32 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
             if (lost) store.notice(store.selectedId(), "私聊对象已离线，草稿保留；请重新选择会话。", false);
             if (state == ChatClient.State.DISCONNECTED) {
                 store.notice(store.selectedId(), detail, false); profile = null; closeProfile();
-                authentication.password.setText(""); authentication.confirmation.setText("");
-                authentication.hidePasswords();
+                if (!client.switching()) {
+                    authentication.password.setText(""); authentication.confirmation.setText(""); authentication.hidePasswords();
+                }
             }
             showWelcome();
         }
-        connection.state(state == ChatClient.State.DISCONNECTED, state == ChatClient.State.CONNECTING);
-        authentication.state(state == ChatClient.State.SERVER_CONNECTED, state == ChatClient.State.AUTHENTICATING);
-        authentication.feedback(detail, false); welcome.back.setVisible(loggedIn);
+        if (client.switching()) updateAuthentication(client.authenticationState(), "正在切换账号，原连接已断开");
+        else updateAuthentication(state, detail);
+        welcome.back.setVisible(loggedIn);
         identity.showProfile(loggedIn ? profile : null);
         setTitle("LTalk · 局域网聊天室" + (loggedIn ? " · " + profile.nickname() : ""));
         setStatus(detail, false); refreshList(); refreshConversation();
+    }
+    private void updateAuthentication(ChatClient.State state, String detail) {
+        connection.state(state == ChatClient.State.DISCONNECTED, state == ChatClient.State.CONNECTING);
+        authentication.state(state == ChatClient.State.SERVER_CONNECTED, state == ChatClient.State.AUTHENTICATING);
+        authentication.feedback(detail, false);
+    }
+    @Override public void onSwitchState(ChatClient.State state, String detail) {
+        updateAuthentication(state, connectionState == ChatClient.State.CONNECTED ? "原账号保持在线；" + detail : detail);
+        welcome.back.setVisible(connectionState == ChatClient.State.CONNECTED);
+    }
+    @Override public void onSwitchError(Message message) { authentication.feedback(message.code() + "：" + message.message(), true); }
+    @Override public void onSwitchRegistered(String userId) { onRegistered(userId); }
+    @Override public void onSessionReplaced() {
+        sessionRevision++; closeProfile(); store.useIdentity(""); input.setText(""); search.setText(""); messageSearch.setText("");
     }
     @Override public void onProfile(UserProfile value) {
         profile = value;
@@ -329,8 +351,17 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     private void showWelcome() { ((CardLayout) pages.getLayout()).show(pages, "welcome"); store.setVisible(false); }
     private void showChat() {
         if (connectionState != ChatClient.State.CONNECTED) return;
+        if (client.switching()) {
+            client.cancelSwitch(); restoreAddress(); authentication.clearCredentials(true); authentication.switching(false);
+            updateAuthentication(connectionState, "已返回原账号聊天");
+        }
         ((CardLayout) pages.getLayout()).show(pages, "chat");
         store.setVisible(!shell.compact() || shell.chatOpen()); pages.revalidate(); pages.repaint();
+        refreshList(); refreshConversation();
+    }
+    private void restoreAddress() {
+        ClientSessions.Address address = client.address();
+        if (address != null) { connection.host.setText(address.host()); connection.port.setText(Integer.toString(address.port())); }
     }
     private void toggleConnection() { showWelcome(); }
     @Override public void onRegistered(String userId) {
@@ -341,16 +372,24 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         if (connectionState != ChatClient.State.CONNECTED) popup.action("accountLogin", "登录账号", LineIcon.Kind.USERS, this::showWelcome);
         else {
             popup.action("accountProfile", "个人信息", LineIcon.Kind.USERS, this::showProfile);
-            popup.action("accountLogout", "退出登录", LineIcon.Kind.LOGOUT, () -> logout(false));
-            popup.action("accountSwitch", "切换账号", LineIcon.Kind.USERS, () -> logout(true));
+            popup.action("accountLogout", "退出登录", LineIcon.Kind.LOGOUT, this::logout);
+            popup.action("accountSwitch", "切换账号", LineIcon.Kind.USERS, this::switchAccount);
         }
         return popup;
     }
     private void showIdentityMenu() { ChatPopupMenu popup = identityMenu(); popup.show(identity, 0, -popup.getPreferredSize().height - 4); }
-    private void logout(boolean switchAccount) {
+    private void switchAccount() {
+        try {
+            store.saveDraft(input.getText()); closeProfile();
+            client.beginSwitch(); authentication.clearCredentials(true); authentication.switching(true);
+            showWelcome(); welcome.back.setVisible(true); updateAuthentication(client.authenticationState(), "原账号保持在线，请登录新账号");
+        } catch (IOException | RuntimeException ex) { showError(ex.getMessage()); }
+    }
+    private void logout() {
+        client.cancelSwitch();
         client.disconnect(); connectionState = ChatClient.State.DISCONNECTED; closeProfile(); profile = null; identity.showProfile(null);
         store.useIdentity(""); input.setText(""); search.setText(""); messageSearch.setText("");
-        authentication.clearCredentials(switchAccount); showWelcome(); refreshList(); refreshConversation();
+        authentication.clearCredentials(false); authentication.switching(false); showWelcome(); refreshList(); refreshConversation();
         // Re-establish only the unauthenticated transport after an explicit account action.
         connectServer();
     }
@@ -379,6 +418,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
     private void exportHistory() {
         if (choosingExport) return;
         String exportingUser = store.self();
+        long exportingSession = sessionRevision;
         ConversationId selected = store.selectedId();
         final String scope;
         try { scope = selected.kind() == ConversationId.Kind.GROUP ? cn.ltalk.common.ConversationScope.PUBLIC
@@ -391,7 +431,7 @@ public final class ChatWindow extends JFrame implements ClientEventListener {
         new FileDialogs().choose(this, FileDialogs.Kind.DIRECTORY, path -> {
             choosingExport = false;
             if (closed || path == null) return;
-            if (!exportingUser.equals(store.self()) || connectionState != ChatClient.State.CONNECTED) {
+            if (exportingSession != sessionRevision || !exportingUser.equals(store.self()) || connectionState != ChatClient.State.CONNECTED) {
                 showError("登录身份已改变，请重新选择会话导出"); return;
             }
             try { client.exportHistory(path, format, scope); }

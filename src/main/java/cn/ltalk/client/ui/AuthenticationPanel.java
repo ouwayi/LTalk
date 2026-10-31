@@ -15,7 +15,7 @@ public final class AuthenticationPanel extends JPanel {
     private final JLabel heading = ChatTheme.label("登录 LTalk", 23, ChatTheme.INK, true);
     private final JLabel switchHint = ChatTheme.label("还没有账号？", 12, ChatTheme.MUTED, false);
     private final JPanel nicknameRow, confirmationRow, randomRow;
-    private boolean registering, available, busy;
+    private boolean registering, available, busy, switching;
     public AuthenticationPanel(String initialUser) {
         super(new GridBagLayout()); ChatTheme.surface(this); setBorder(new EmptyBorder(24, 24, 24, 24));
         setName("authenticationPanel"); user = ChatTheme.field(initialUser == null ? "" : initialUser, "userId");
@@ -50,7 +50,7 @@ public final class AuthenticationPanel extends JPanel {
         registering = value; password.setText(""); confirmation.setText("");
         hidePasswords();
         nicknameRow.setVisible(value); confirmationRow.setVisible(value); randomRow.setVisible(value);
-        heading.setText(value ? "注册账号" : "登录 LTalk"); submit.setText(value ? "注册并登录" : "登录");
+        heading.setText(value ? "注册账号" : switching ? "切换账号" : "登录 LTalk"); submit.setText(value ? "注册并登录" : switching ? "登录并切换" : "登录");
         switchHint.setText(value ? "已有账号？" : "还没有账号？"); switchMode.setText(value ? "立即登录" : "立即注册");
         feedback.setText(available ? " " : "请先连接左侧服务器"); update(); revalidate(); repaint();
     }
@@ -69,4 +69,5 @@ public final class AuthenticationPanel extends JPanel {
         if (clearUser) user.setText(""); setRegistering(false);
     }
     public void hidePasswords() { passwordInput.setRevealed(false); confirmationInput.setRevealed(false); }
+    public void switching(boolean value) { switching = value; setRegistering(false); }
 }

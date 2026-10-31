@@ -252,17 +252,68 @@ class ChatWindowTest {
             onEdt(() -> {
                 ((JMenuItem) find(window.identityMenu(), "accountSwitch")).doClick();
                 assertEquals("", text(window, "userId").getText()); assertEquals("", text(window, "password").getText());
-                assertEquals("未登录", label(window, "identityNickname").getText());
+                assertEquals("修改后的昵称", label(window, "identityNickname").getText());
+                assertTrue(button(window, "backToChat").isVisible()); assertEquals(1, server.onlineCount());
             });
-            awaitEdt(() -> button(window, "connect").isEnabled() && server.onlineCount() == 0);
+            awaitEdt(() -> button(window, "connect").isEnabled() && server.onlineCount() == 1);
             onEdt(() -> { text(window, "userId").setText("other"); text(window, "password").setText("test123!"); button(window, "connect").doClick(); });
-            awaitEdt(() -> button(window, "send").isEnabled());
+            awaitEdt(() -> "@other".equals(label(window, "identityUsername").getText()) && !find(window, "welcomeScroll").isVisible());
             onEdt(() -> { assertEquals("@other", label(window, "identityUsername").getText()); assertEquals("", area(window, "input").getText()); });
         } finally { if (ref.get() != null) onEdt(() -> ref.get().dispatchEvent(new WindowEvent(ref.get(), WindowEvent.WINDOW_CLOSING))); }
     }
     private static JDialog profileDialog(ChatWindow window) {
         for (Window child : window.getOwnedWindows()) if (child instanceof JDialog dialog && "profileDialog".equals(dialog.getName()) && dialog.isDisplayable()) return dialog;
         return null;
+    }
+
+    @Test @Timeout(30)
+    void accountSwitchKeepsOldChatThroughFailureAndCancelAndOnlyClearsItAfterSuccess() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start(); Peer.seed(server);
+            try (Peer bob = Peer.login(server.port(), "bob")) {
+                onEdt(() -> ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("switch.properties"))));
+                ChatWindow window = ref.get(); login(window); awaitEdt(() -> button(window, "send").isEnabled());
+                onEdt(() -> {
+                    button(window, "group").doClick(); area(window, "input").setText("原账号的草稿");
+                    ((JMenuItem) find(window.identityMenu(), "accountSwitch")).doClick();
+                    assertTrue(button(window, "backToChat").isVisible()); assertEquals("@alice", label(window, "identityUsername").getText());
+                });
+                awaitEdt(() -> button(window, "connect").isEnabled()); assertEquals(2, server.onlineCount());
+                bob.group("在切换页继续收到的消息"); awaitEdt(() -> history(window).contains("切换页继续收到"));
+                onEdt(() -> { text(window, "userId").setText("other"); text(window, "password").setText("wrong!12"); button(window, "connect").doClick(); });
+                awaitEdt(() -> label(window, "authFeedback").getText().contains("LOGIN_FAILED"));
+                onEdt(() -> {
+                    assertEquals("@alice", label(window, "identityUsername").getText()); button(window, "backToChat").doClick();
+                    assertFalse(find(window, "welcomeScroll").isVisible()); assertEquals("原账号的草稿", area(window, "input").getText());
+                    assertTrue(history(window).contains("切换页继续收到")); assertEquals("", text(window, "password").getText());
+                    ((JMenuItem) find(window.identityMenu(), "accountSwitch")).doClick();
+                });
+                awaitEdt(() -> button(window, "connect").isEnabled());
+                onEdt(() -> {
+                    text(window, "userId").setText("other"); text(window, "password").setText("test123!"); button(window, "connect").doClick();
+                    button(window, "backToChat").doClick(); // Cancel even while authentication is in flight.
+                    assertEquals("@alice", label(window, "identityUsername").getText());
+                    button(window, "send").doClick();
+                });
+                assertEquals("alice", bob.await(m -> m.type() == MessageType.GROUP_MESSAGE && "原账号的草稿".equals(m.content())).from());
+                awaitEdt(() -> server.onlineCount() == 2 && server.connectionCount() == 2);
+                onEdt(() -> ((JMenuItem) find(window.identityMenu(), "accountSwitch")).doClick());
+                awaitEdt(() -> button(window, "connect").isEnabled());
+                onEdt(() -> {
+                    area(window, "input").setText("成功切换才清除这条草稿");
+                    text(window, "userId").setText("other"); text(window, "password").setText("test123!"); button(window, "connect").doClick();
+                    assertEquals("@alice", label(window, "identityUsername").getText());
+                });
+                awaitEdt(() -> "@other".equals(label(window, "identityUsername").getText()) && !find(window, "welcomeScroll").isVisible());
+                awaitEdt(() -> server.onlineCount() == 2 && server.connectionCount() == 2);
+                onEdt(() -> {
+                    assertEquals("", area(window, "input").getText()); assertFalse(history(window).contains("切换页继续收到"));
+                    assertEquals("", text(window, "password").getText()); render(window, 1000, 760, "account-switch-success.png");
+                });
+                bob.privateTo("alice", "old session gone"); bob.error("USER_OFFLINE");
+            }
+        } finally { if (ref.get() != null) onEdt(() -> ref.get().dispatchEvent(new WindowEvent(ref.get(), WindowEvent.WINDOW_CLOSING))); }
     }
 
     private static void login(ChatWindow window) throws Exception {

@@ -75,7 +75,7 @@ ChatArchive 将路由时在线可访问者的聊天事件追加到其账号 JSON
 
 ChatClient 新增 SERVER_CONNECTED（仅完成 HELLO）与 AUTHENTICATING；保留旧 connect 直登入口供现有调用。连接对象隔离所有状态/资料回调；注册成功只触发下一次 LOGIN，只有 LOGIN_OK 将会话置为 CONNECTED。认证响应超时关闭 Socket，错密码/重名则回到 SERVER_CONNECTED；握手后心跳先于身份启动，不赋予聊天、资料或导出权限。
 
-ChatWindow 通过 CardLayout 在 WelcomePanel 与 ResponsiveShell 之间切换；ConnectionPanel 只负责地址/端口，AuthenticationPanel 管理登录/注册表单，WelcomePanel 桌面分栏、窄屏纵向滚动。UserIdentityButton、ProfilePanel、ProfileAvatar 独立呈现本人资料，避免把会话展示元数据和路由用户名混用。显式退出/切换清除 Store 身份及草稿；故障重连保留原有窗口历史策略。
+ChatWindow 通过 CardLayout 在 WelcomePanel 与 ResponsiveShell 之间切换；ConnectionPanel 只负责地址/端口，AuthenticationPanel 管理登录/注册表单，WelcomePanel 桌面分栏、窄屏纵向滚动。UserIdentityButton、ProfilePanel、ProfileAvatar 独立呈现本人资料，避免把会话展示元数据和路由用户名混用。显式退出清除 Store 身份及草稿；切换账号改由下节 ClientSessions 延迟交接，故障重连保留原有窗口历史策略。
 
 AccountStore 新增可选头像/创建时间，兼容旧 JSON；资料修改先原子替换文件，再替换内存账号，不重算/返回盐或散列。头像本地选图后由 AvatarImporter 在 SwingWorker 内限制文件/像素、中心裁剪到 48×48 PNG，服务端 AvatarData 再限长、验格式和尺寸；展示解码只用内存，不在 EDT 读取用户文件。资料请求独立计时、忽略迟到响应，不阻断正常聊天。资料仅本人可读写，当前不广播联系人头像/昵称。
 
@@ -84,3 +84,11 @@ AccountStore 新增可选头像/创建时间，兼容旧 JSON；资料修改先�
 FileDialogs 将异步完成统一回调到 EDT；WindowsFilePicker 在后台 STA 调用原生 IFileOpenDialog，关闭后释放 IShellItem、CoTaskMem 路径和 COM 对象，最终 CoUninitialize。图片过滤与目录选择只影响选择界面，导出文件命名/安全发布和后台头像校验不变，Windows 失败明确报错。参考 [Microsoft IFileOpenDialog](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-ifileopendialog)、[选项定义](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/ne-shobjidl_core-_fileopendialogoptions) 与 [JNA Ole32](https://github.com/java-native-access/jna/blob/5.14.0/contrib/platform/src/com/sun/jna/platform/win32/Ole32.java)。
 
 PasswordInput 仅切换 JPasswordField echoChar；两框独立，清理凭据/换模式/断线恢复默认遮罩。密码不新增持久化/日志，不修改认证协议。
+
+## 账号成功后交接（2026-10-31）
+
+ClientSessions 在 EDT 分离当前 Slot 与待切换 Slot，分别持有独立 ChatClient；网络/心跳仍在各自后台任务，旧账号保持接收与授权归档。切换页只处理候选连接的认证状态/错误，不覆盖旧 ConversationStore、本人资料或连接状态。失败/取消保留旧会话，返回聊天取消候选并清理其凭据、恢复旧服务端地址；认证过程中也可返回。
+
+收到候选 LOGIN_OK 的有效本人资料后，在同一次 EDT 回调中将其设为当前 Slot、失效旧回调路由，再关闭旧客户端并通知窗口清除旧 Store/搜索/草稿。即使跨服务端使用相同用户名，也按会话替换清理，防止仅比较用户名泄露旧记录；异步文件选择完成时另检查会话代数。候选失败、连接上限、取消后迟到事件均不能关闭原会话或恢复已取消候选。
+
+未改变协议 v3；切换期间额外占一个连接名额，新身份成功前旧身份继续在线。服务端拒绝额外连接时保留旧账号并提示重试；原连接若自身网络故障，则无法保证继续在线，此时不再提供返回失效聊天的按钮，候选仍可重连/登录。

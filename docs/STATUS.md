@@ -4,15 +4,16 @@
 
 ## 2026-10-31 当前增量
 
-- 阶段 14 已将头像/导出选择接入 Windows 现代系统对话框；新增 JNA 5.14.0，仍随单 JAR 打包。非 Windows 保留原选择器，Windows 原生失败明确报错。
-- 密码与确认密码可分别显示/隐藏，切换表单或清理凭据时恢复隐藏；不保存明文。
-- 本轮完整回归 **74/0/0/0，约 1 分 11 秒**，日志 `.tools/native-picker-password-build.log`。隔离原生预览观察图片/目录现代界面和图片取消；目录实际选定路径未完成 UI 自动化，不能当已验收。
-- 用户本轮要求的保留旧会话切换账号将在阶段 15 实现，下方切换即退出暂为阶段 13 现状。
+- 阶段 14（5daabc3）已将头像/导出选择接入 Windows 现代系统对话框；新增 JNA 5.14.0，仍随单 JAR 打包。非 Windows 保留原选择器，Windows 原生失败明确报错。密码与确认密码可分别显示/隐藏，切换表单、取消切换或清理凭据时恢复隐藏，不保存明文。
+- 阶段 15 已改为成功后切换：旧账号继续在线收消息，候选独立认证；失败/返回聊天不退出旧账号，认证中也可取消。新账号 LOGIN_OK 后才退出旧账号、清理旧展示记录和草稿；跨服务端同名也隔离，期间多占一个连接名额。
+- 本轮最终完整回归 **78/0/0/0，约 1 分 12 秒**，日志 `.tools/account-handoff-final.log`；先前阶段 14 完整 74 项及阶段 15 专项 9 项也通过。
+- 原生文件选择在隔离预览中检查现代导航/路径/搜索/图片筛选及图片取消；后续以无父窗预览补验真实目录返回及含中文、空格的测试图片路径返回。初次有父窗预览的自动化焦点问题已绕过取证，不修改产品协议/行为，不把此观察写成用户人工全流程验收。
+- 本轮起点 00426cb、干净工作区。阶段 15 最终提交号见 git log，后续仍核对实时工作区。
 
 ## 仓库与本轮范围
 
 - 仓库 `D:\Agent\AllProjects\LTalk`，分支 master，无远端。接手为干净工作区、交接 `842ff8c`，此前业务基线 `0d2d83e`。
-- 本轮按用户明确选择完成两阶段：阶段 12 当前会话导出/菜单精简（`cdf5927`）；阶段 13 独立连接认证页与本人资料。阶段 13 提交号以 `git log -1 --oneline` 为准，接续仍检查实时 `git status`。
+- 2026-10-30 按用户明确选择完成两阶段：阶段 12 当前会话导出/菜单精简（`cdf5927`）；阶段 13 独立连接认证页与本人资料。阶段 13 提交号以 `git log -1 --oneline` 为准，接续仍检查实时 `git status`。
 - `target/`、`.tools/`、默认 `data/` 为忽略生成物/数据，不提交 JAR、日志、账号、头像或归档。自定义仓库内数据目录需另行忽略。
 
 ## 当前功能
@@ -33,9 +34,9 @@
 
 ## 状态与设计约定
 
-- 保持 Java 17 release、Swing/Java2D、阻塞 TCP、Gson/JUnit；网络、密码计算、头像文件处理、导出在后台，展示与会话状态在 EDT。
+- 保持 Java 17 release、Swing/Java2D、阻塞 TCP、Gson/JUnit；网络、密码计算、头像文件处理、导出在后台，展示与会话状态在 EDT；JNA 仅用于 Windows 本地文件对话框，不参与协议/服务端路由。
 - ChatClient 状态为 DISCONNECTED → CONNECTING → SERVER_CONNECTED → AUTHENTICATING → CONNECTED；错密码回 SERVER_CONNECTED；故障回 DISCONNECTED，需手动连接。旧直接 connect 登录 API 保留。
-- 用户明确退出/切换账号：关闭认证 Socket，清空展示身份、历史/草稿与密码；退出保留用户名，切换另清用户名。随后新建未认证服务器连接等待用户操作，不自动恢复身份。普通故障重连仍保留同用户名的本窗口历史/草稿；成功换身份清除前身份数据。
+- 用户明确退出登录：关闭认证 Socket，清空展示身份、历史/草稿与密码，保留用户名，随后新建未认证连接。切换账号：ClientSessions 保留当前会话并新建候选，成功才交接和清理旧数据；返回聊天关闭候选、清凭据、恢复旧地址，旧账号自身断线时不显示返回失效聊天入口。不自动恢复账号身份。普通故障重连仍保留同用户名的本窗口历史/草稿；成功换身份清除前身份数据。
 - 私聊对象离线保留会话/草稿并禁发，重新上线必须明确重选。发送入队/归档/回显不等于已读或可靠送达，不自动重发。
 - 协议 **v3**：新增 HELLO、PROFILE_GET/UPDATE/OK，LOGIN_OK 带本人资料；客户端/服务端一起升级，无版本协商。UTF-8/LF JSON、16 KiB 帧、2000 UTF-16 char 正文；用户名 strip 后 1～20 ASCII 字母/数字/下划线且区分大小写，昵称 strip 后 1～40 char，密码 6～128 char 不 strip。
 - 默认端口 9000、监听 0.0.0.0、20 个连接（含未认证）。接受后 10 秒内须 HELLO 或直接登录；握手后心跳保活。客户端连接/认证响应默认 3/5 秒。
@@ -53,8 +54,10 @@
 | server/AccountStore、ChatArchive | 账号/资料持久化、本人授权归档/过滤快照 |
 | server/MessageRouter、ClientSession、SessionRegistry、ChatServer | 握手/认证/权限路由、心跳、资源与名称清理 |
 | client/ChatClient、ClientEventListener、HistoryExport、AvatarImporter | 后台连接认证/资料/分页导出、旧连接隔离、图片导入 |
+| client/ClientSessions | EDT 当前/候选会话协调，成功后交接与过期回调隔离 |
 | client/ChatWindow | 组装启动/聊天卡片、菜单与回调；不继续堆独立业务组件 |
 | client/ui/WelcomePanel、ConnectionPanel、AuthenticationPanel | 响应式启动页、纯服务器配置、登录/注册表单 |
+| client/ui/FileDialogs、WindowsFilePicker、PasswordInput | 系统文件选择桥接、独立密码显隐 |
 | client/ui/UserIdentityButton、ProfilePanel、ProfileAvatar | 本人资料栏、资料草稿编辑与头像展示 |
 | client/ui/ConversationStore、ConversationId、ConversationList、MessageTimeline、ResponsiveShell | EDT 分会话状态与聊天布局；旧 ConversationSelection 不是窗口状态源 |
 | client/ui/Appearance*、ThemePalette、ChatTheme、WallpaperPanel、ChatPopupMenu | 外观/纯色渐变、窗口独立色板、协调菜单 |
@@ -64,6 +67,7 @@
 
 | 来源 | 结果与范围 |
 | --- | --- |
+| 2026-10-31 阶段 14/15 | 完整 74 项（约 1:11）→专项 9 项（20.924 秒）→最终完整 **78 项（约 1:12）**全过；见本轮增量及 DEVLOG 阶段 14/15。仅本机，不是多机/长期堆验证 |
 | 2026-10-30 阶段 12 | 完整离线 package **63/0/0/0，57.306 秒**；新增当前会话过滤、第三方权限/游标范围及客户端 JSON/CSV 内容验证。首次沙箱 TCP/原子移动受限失败，授权环境原断言重跑通过；日志 `.tools/conversation-export-build.log` |
 | 2026-10-30 阶段 13 | 完整离线 package **72/0/0/0，约 1 分 5 秒**；本机 TCP、Swing EDT、启动页/注册自动登录/错密码和重名重试、本人资料权限/持久化/旧账号/失败保存、头像校验、认证/资料超时/迟到响应、身份清理及原有聊天/心跳/导出回归；日志 `.tools/account-workspace-final.log` |
 | 最终显示小修 | 完整回归后修正深色注册复选框文字及资料时间显示，再定向运行 ChatWindowTest/AppearancePanelTest **7/0/0/0，13.359 秒**并重新打包，日志 `.tools/account-workspace-ui-final.log`；没有将它表述为再次全量回归 |
