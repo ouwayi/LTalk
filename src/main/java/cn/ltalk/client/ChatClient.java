@@ -288,6 +288,12 @@ public final class ChatClient implements AutoCloseable {
         exportHistory(directory, format, null);
     }
     public void exportHistory(java.nio.file.Path directory, String format, String scope) throws IOException {
+        export(directory, format, scope, false, false);
+    }
+    public void exportTo(java.nio.file.Path path, String format, String scope, boolean replace) throws IOException {
+        export(path, format, scope, true, replace);
+    }
+    private void export(java.nio.file.Path directory, String format, String scope, boolean explicit, boolean replace) throws IOException {
         synchronized (lifecycle) {
             Connection c = active;
             if (state != State.CONNECTED || c == null || c.closed.get()) throw new IOException("请先登录");
@@ -295,7 +301,7 @@ public final class ChatClient implements AutoCloseable {
             if (!c.exporting.compareAndSet(false, true)) throw new IOException("已有导出任务");
             c.exportScope = scope;
             try { c.sender.execute(() -> {
-                try { HistoryExport job = new HistoryExport(directory, c.userId, format);
+                try { HistoryExport job = explicit ? new HistoryExport(directory, format, replace) : new HistoryExport(directory, c.userId, format);
                     synchronized (c) {
                         if (c.closed.get()) { job.close(); return; }
                         c.export = job;

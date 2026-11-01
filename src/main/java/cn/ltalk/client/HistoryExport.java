@@ -14,14 +14,22 @@ public final class HistoryExport implements AutoCloseable {
     private final Path temporary, destination;
     private final BufferedWriter writer;
     private final boolean csv;
+    private final boolean replace;
     private boolean first = true, closed;
     public HistoryExport(Path directory, String user, String format) throws IOException {
-        if (!List.of("json", "csv").contains(format)) throw new IllegalArgumentException("导出格式须为 json 或 csv");
+        this(directory.resolve(defaultName(user, format)), format, false);
+    }
+    public static String defaultName(String user, String format) throws IOException {
         user = cn.ltalk.common.Validation.userId(user);
-        csv = format.equals("csv");
         String stamp = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmssSSS'Z'").withZone(ZoneOffset.UTC).format(Instant.now());
-        destination = directory.resolve(user + "_" + stamp + "_" + UUID.randomUUID().toString().substring(0, 8) + "." + format);
-        temporary = Files.createTempFile(directory, ".ltalk-export-", ".tmp");
+        return user + "_" + stamp + "_" + UUID.randomUUID().toString().substring(0, 8) + "." + format;
+    }
+    /** Explicit destination; replacement is permitted only after the save dialog's confirmation. */
+    public HistoryExport(Path destination, String format, boolean replace) throws IOException {
+        if (!List.of("json", "csv").contains(format)) throw new IllegalArgumentException("导出格式须为 json 或 csv");
+        csv = format.equals("csv");
+        this.destination = destination.toAbsolutePath(); this.replace = replace;
+        temporary = Files.createTempFile(this.destination.getParent(), ".ltalk-export-", ".tmp");
         try { writer = Files.newBufferedWriter(temporary); }
         catch (IOException ex) { Files.deleteIfExists(temporary); throw ex; }
         try { writer.write(csv ? "messageId,conversationId,sender,recipient,content,messageType,sentAt\r\n" : "["); }
@@ -37,14 +45,18 @@ public final class HistoryExport implements AutoCloseable {
                 writer.write('"'); writer.write(Objects.toString(values[i], "").replace("\"", "\"\"")); writer.write('"');
             }
             writer.write("\r\n");
-        } else { if (!first) writer.write(','); writer.write(new com.google.gson.GsonBuilder().serializeNulls().create().toJson(record)); }
+        } else {
+            if (!first) writer.write(','); writer.write('\n');
+            writer.write(new com.google.gson.GsonBuilder().serializeNulls().create().toJson(record));
+        }
         first = false;
     }
     public synchronized Path finish() throws IOException {
         if (closed) throw new IOException("导出已结束");
-        if (!csv) writer.write(']');
+        if (!csv) { if (!first) writer.write('\n'); writer.write(']'); }
         writer.close();
-        Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE);
+        if (replace) Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        else Files.move(temporary, destination); // Must fail if another process creates the destination meanwhile.
         closed = true; return destination;
     }
     @Override public synchronized void close() throws IOException {

@@ -277,3 +277,7 @@ carol 的“已连接”是客户端尚未收到错误时保留的本地状态�
 ## 系统选择器与密码显隐（2026-10-31，阶段 14）
 
 完整 package **74/0/0/0，约 1 分 11 秒**，日志 `.tools/native-picker-password-build.log`；新增 FileDialogsTest 与 AuthenticationPanelTest。computer-use 隔离预览确认现代图片/目录界面（原生导航、地址、搜索、图片筛选）及图片取消恢复；目录路径选择因自动化焦点问题未完成，不宣称实际文件/目录返回验收。未做所有 Windows 版本/DPI/非 Windows 验证，历史 72 项结果不作为本轮重跑。
+
+## 直接另存为与 JSON 排版（2026-11-01，阶段 16）
+
+完整离线 package **81/0/0/0，约 1:12**，日志 .tools/export-save-final.log。HistoryExportTest 覆盖每条一行、合法数组、中文自定义文件名、未授权覆盖拒绝/失败取消不改原文件；FileDialogsTest 新增类型/扩展名一致性。新保存对话框原生交互尚未验收，旧目录选择证据不混用。

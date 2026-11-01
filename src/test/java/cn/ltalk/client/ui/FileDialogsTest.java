@@ -9,6 +9,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 class FileDialogsTest {
+    @Test void selectedTypeDeterminesExtensionWithoutLosingCustomNames() {
+        assertEquals(Path.of("中文 名称.csv"), FileDialogs.exportPath(Path.of("中文 名称.json"), "csv"));
+        assertEquals(Path.of("中文 名称.json"), FileDialogs.exportPath(Path.of("中文 名称"), "json"));
+        assertEquals(Path.of("报告.JSON"), FileDialogs.exportPath(Path.of("报告.JSON"), "json"));
+        assertThrows(IllegalArgumentException.class, () -> FileDialogs.exportPath(Path.of("x"), "exe"));
+    }
     @Test void selectionCancellationAndFailureReturnOnEdtWithoutDoingWorkThere() throws Exception {
         for (int scenario = 0; scenario < 3; scenario++) {
             int value = scenario; CountDownLatch done = new CountDownLatch(1);

@@ -50,6 +50,7 @@ public final class ClientSessions implements AutoCloseable {
     public void sendGroup(String text) throws IOException { current.client.sendGroup(text); }
     public void sendPrivate(String target, String text) throws IOException { current.client.sendPrivate(target, text); }
     public void exportHistory(Path directory, String format, String scope) throws IOException { current.client.exportHistory(directory, format, scope); }
+    public void exportTo(Path path, String format, String scope, boolean replace) throws IOException { current.client.exportTo(path, format, scope, replace); }
     public void updateProfile(String nickname, String avatar) throws IOException { current.client.updateProfile(nickname, avatar); }
     @Override public void close() {
         closed = true; cancelSwitch(); current.client.close();

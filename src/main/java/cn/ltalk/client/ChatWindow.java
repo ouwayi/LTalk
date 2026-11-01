@@ -424,17 +424,16 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         try { scope = selected.kind() == ConversationId.Kind.GROUP ? cn.ltalk.common.ConversationScope.PUBLIC
                 : cn.ltalk.common.ConversationScope.privateChat(store.self(), selected.key()); }
         catch (IOException ex) { showError(ex.getMessage()); return; }
-        String format = (String) JOptionPane.showInputDialog(this, "导出「" + store.selected().title() + "」的聊天记录", "导出聊天记录", JOptionPane.QUESTION_MESSAGE,
-                null, new String[]{"json", "csv"}, "json");
-        if (format == null) return;
+        final String suggested;
+        try { suggested = HistoryExport.defaultName(exportingUser, "json"); } catch (IOException ex) { showError(ex.getMessage()); return; }
         choosingExport = true;
-        new FileDialogs().choose(this, FileDialogs.Kind.DIRECTORY, path -> {
+        new FileDialogs().saveExport(this, suggested, choice -> {
             choosingExport = false;
-            if (closed || path == null) return;
+            if (closed || choice == null) return;
             if (exportingSession != sessionRevision || !exportingUser.equals(store.self()) || connectionState != ChatClient.State.CONNECTED) {
                 showError("登录身份已改变，请重新选择会话导出"); return;
             }
-            try { client.exportHistory(path, format, scope); }
+            try { client.exportTo(choice.path(), choice.format(), scope, choice.replace()); }
             catch (IOException ex) { showError(ex.getMessage()); }
         }, detail -> { choosingExport = false; if (!closed) showError(detail); });
     }
