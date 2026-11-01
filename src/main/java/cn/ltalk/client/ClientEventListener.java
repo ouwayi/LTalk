@@ -13,4 +13,8 @@ public interface ClientEventListener {
     default void onRegistered(String userId) { }
     default void onExported(java.nio.file.Path path) { }
     default void onProfile(cn.ltalk.common.UserProfile profile) { }
+    default void onHistoryStarted() { }
+    default void onHistoryRecord(cn.ltalk.common.ChatRecord record) { }
+    default void onHistoryComplete() { }
+    default void onHistoryDeleted(String scope, String messageId) { }
 }

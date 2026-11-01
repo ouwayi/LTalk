@@ -52,6 +52,8 @@ public final class ClientSessions implements AutoCloseable {
     public void exportHistory(Path directory, String format, String scope) throws IOException { current.client.exportHistory(directory, format, scope); }
     public void exportTo(Path path, String format, String scope, boolean replace) throws IOException { current.client.exportTo(path, format, scope, replace); }
     public void updateProfile(String nickname, String avatar) throws IOException { current.client.updateProfile(nickname, avatar); }
+    public void loadHistory() throws IOException { current.client.loadHistory(); }
+    public void deleteHistory(String scope, String id) throws IOException { current.client.deleteHistory(scope, id); }
     @Override public void close() {
         closed = true; cancelSwitch(); current.client.close();
     }
@@ -90,5 +92,9 @@ public final class ClientSessions implements AutoCloseable {
         @Override public void onUserList(Message message) { if (active()) listener.onUserList(message); }
         @Override public void onSystem(Message message) { if (active()) listener.onSystem(message); }
         @Override public void onExported(Path path) { if (active()) listener.onExported(path); }
+        @Override public void onHistoryStarted() { if (active()) listener.onHistoryStarted(); }
+        @Override public void onHistoryRecord(ChatRecord record) { if (active()) listener.onHistoryRecord(record); }
+        @Override public void onHistoryComplete() { if (active()) listener.onHistoryComplete(); }
+        @Override public void onHistoryDeleted(String scope, String id) { if (active()) listener.onHistoryDeleted(scope, id); }
     }
 }

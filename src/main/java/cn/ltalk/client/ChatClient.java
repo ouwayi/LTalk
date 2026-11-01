@@ -13,7 +13,11 @@ public final class ChatClient implements AutoCloseable {
     private final Object lifecycle = new Object();
     private final ClientEventListener listener;
     private final Executor callbacks;
-    private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(daemonFactory("ltalk-client-deadline-"));
+    private final ScheduledExecutorService deadlines = deadlineExecutor();
+    private static ScheduledExecutorService deadlineExecutor() {
+        ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, daemonFactory("ltalk-client-deadline-"));
+        executor.setRemoveOnCancelPolicy(true); return executor;
+    }
     private final int connectTimeoutMillis;
     private final int loginTimeoutMillis;
     private final HeartbeatSettings heartbeatSettings;
@@ -56,6 +60,8 @@ public final class ChatClient implements AutoCloseable {
             if (disposed) throw new IllegalStateException("客户端已关闭");
             if (state != State.DISCONNECTED) throw new IllegalStateException("请先断开当前连接");
             Connection connection = new Connection(userId);
+            connection.history = new HistoryChannel(message -> submitControl(connection, message), event -> emit(connection, event), listener,
+                    deadlines, connection::nextId, () -> connection.userId, loginTimeoutMillis);
             connection.heartbeat = new Heartbeat(heartbeatSettings, message -> submitHeartbeat(connection, message),
                     () -> terminate(connection, "心跳超时，连接已中断，请手动重新连接；待发送消息未确认"));
             active = connection;
@@ -189,6 +195,7 @@ public final class ChatClient implements AutoCloseable {
     }
 
     private void dispatch(Connection connection, Message message) throws IOException {
+        if (connection.history.receive(message)) return;
         synchronized (connection) {
         if (message.requestId() != null && message.requestId().equals(connection.exportRequest)) {
             if (connection.exportDeadline != null) connection.exportDeadline.cancel(false);
@@ -240,6 +247,24 @@ public final class ChatClient implements AutoCloseable {
     }
 
     public void sendGroup(String content) throws IOException { submitChat(null, content); }
+    private Connection authenticated() throws IOException {
+        synchronized (lifecycle) {
+            if (state != State.CONNECTED || active == null || active.closed.get()) throw new IOException("请先登录");
+            return active;
+        }
+    }
+    public void loadHistory() throws IOException { authenticated().history.load(); }
+    public void deleteHistory(String scope, String id) throws IOException {
+        // The server invalidates affected export cursors; their background response/timeout path cleans files.
+        Connection c = authenticated(); c.history.delete(scope, id);
+    }
+    private void submitControl(Connection c, Message message) throws IOException {
+        if (c.closed.get()) throw new IOException("连接已关闭"); MessageCodec.encode(message);
+        try { c.sender.execute(() -> {
+            try { if (!c.closed.get()) MessageCodec.write(c.socket.getOutputStream(), message); }
+            catch (IOException ex) { terminate(c, "历史请求发送失败，请重新连接"); }
+        }); } catch (RejectedExecutionException ex) { throw new IOException("请求无法入队", ex); }
+    }
 
     public void updateProfile(String nickname, String avatar) throws IOException {
         profileRequest(Message.of(MessageType.PROFILE_UPDATE).nickname(nickname).avatar(avatar));
@@ -388,6 +413,7 @@ public final class ChatClient implements AutoCloseable {
         try { connection.socket.close(); } catch (IOException ignored) { }
         if (connection.deadline != null) connection.deadline.cancel(false);
         connection.heartbeat.close();
+        connection.history.close();
         connection.registrationPassword = null;
         if (connection.profileDeadline != null) connection.profileDeadline.cancel(false);
         connection.profileRequest = null;
@@ -433,6 +459,7 @@ public final class ChatClient implements AutoCloseable {
                 new ArrayBlockingQueue<>(64), daemonFactory("ltalk-client-send-"), new ThreadPoolExecutor.AbortPolicy());
         volatile ScheduledFuture<?> deadline;
         Heartbeat heartbeat;
+        HistoryChannel history;
         final AtomicBoolean exporting = new AtomicBoolean();
         volatile HistoryExport export;
         volatile String exportRequest;

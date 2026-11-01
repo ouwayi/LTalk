@@ -320,6 +320,66 @@ class ChatWindowTest {
         awaitEdt(() -> button(window, "connect").isEnabled());
         onEdt(() -> { text(window, "password").setText("test123!"); button(window, "connect").doClick(); });
     }
+    @Test @Timeout(35)
+    void loginRestoresPreviousMessagesAndOfflinePrivateChatAndDeletionPersists() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        try (ChatServer server = new ChatServer("127.0.0.1",0)) {
+            server.start(); Peer.seed(server);
+            try (Peer alice = Peer.login(server.port(),"alice"); Peer bob = Peer.login(server.port(),"bob")) {
+                alice.group("历史公共一"); alice.type(MessageType.GROUP_MESSAGE); bob.type(MessageType.GROUP_MESSAGE);
+                bob.group("历史公共二"); alice.type(MessageType.GROUP_MESSAGE); bob.type(MessageType.GROUP_MESSAGE);
+                bob.privateTo("alice","离线联系人历史"); alice.type(MessageType.PRIVATE_MESSAGE); bob.type(MessageType.PRIVATE_MESSAGE);
+            }
+            awaitEdt(() -> server.onlineCount()==0);
+            onEdt(() -> ref.set(new ChatWindow("127.0.0.1",Integer.toString(server.port()),"alice",appearanceDirectory.resolve("history.properties"))));
+            ChatWindow window=ref.get(); login(window);
+            awaitEdt(() -> history(window).contains("历史公共一") && history(window).contains("历史公共二") && label(window,"status").getText().contains("已加载"));
+            onEdt(() -> {
+                selectPeer(window,"bob"); assertTrue(history(window).contains("离线联系人历史")); assertFalse(button(window,"send").isEnabled());
+                button(window,"group").doClick(); area(window,"input").setText("删除不影响草稿");
+                render(window,1000,760,"history-restored.png");
+                JMenuItem item=messageDelete(window,"历史公共一"); assertNotNull(item); assertTrue(item.isEnabled());
+                confirmNext(window); item.doClick();
+            });
+            awaitEdt(() -> !history(window).contains("历史公共一") && history(window).contains("历史公共二") && label(window,"status").getText().contains("已加载"));
+            onEdt(() -> {
+                assertEquals("删除不影响草稿",area(window,"input").getText()); confirmNext(window);
+                ((JMenuItem)find(window.conversationMenu(),"chatClearHistory")).doClick();
+            });
+            awaitEdt(() -> !history(window).contains("历史公共二") && label(window,"status").getText().contains("已加载"));
+            onEdt(() -> window.dispatchEvent(new WindowEvent(window,WindowEvent.WINDOW_CLOSING))); ref.set(null); awaitEdt(() -> server.onlineCount()==0);
+            onEdt(() -> ref.set(new ChatWindow("127.0.0.1",Integer.toString(server.port()),"alice",appearanceDirectory.resolve("history.properties"))));
+            ChatWindow reopened=ref.get(); login(reopened);
+            awaitEdt(() -> label(reopened,"status").getText().contains("已加载"));
+            onEdt(() -> { assertFalse(history(reopened).contains("历史公共")); selectPeer(reopened,"bob"); assertTrue(history(reopened).contains("离线联系人历史")); });
+            try (Peer bob=Peer.login(server.port(),"bob")) {
+                bob.send(Message.of(MessageType.HISTORY_REQUEST).requestId("other-copy").build());
+                assertEquals("历史公共一",bob.type(MessageType.HISTORY_PAGE).record().content());
+            }
+        } finally { if(ref.get()!=null) onEdt(() -> ref.get().dispatchEvent(new WindowEvent(ref.get(),WindowEvent.WINDOW_CLOSING))); }
+    }
+    private static void confirmNext(ChatWindow window) {
+        javax.swing.Timer timer=new javax.swing.Timer(50,null);
+        timer.addActionListener(e -> {
+            for(Window child:window.getOwnedWindows()) if(child instanceof JDialog dialog && dialog.isVisible()) {
+                JOptionPane pane=findOptionPane(dialog);
+                if(pane!=null) { timer.stop(); pane.setValue(JOptionPane.YES_OPTION); return; }
+            }
+        }); timer.start();
+    }
+    private static JOptionPane findOptionPane(Container root) {
+        for(Component child:root.getComponents()) {
+            if(child instanceof JOptionPane pane) return pane;
+            if(child instanceof Container nested) { JOptionPane pane=findOptionPane(nested); if(pane!=null) return pane; }
+        } return null;
+    }
+    private static JMenuItem messageDelete(Container root,String content) {
+        for(Component child:root.getComponents()) {
+            if(child instanceof JTextPane text && text.getText().equals(content) && text.getComponentPopupMenu()!=null)
+                return (JMenuItem)find(text.getComponentPopupMenu(),"deleteMessage");
+            if(child instanceof Container nested) { JMenuItem item=messageDelete(nested,content); if(item!=null) return item; }
+        } return null;
+    }
     private static void invokeKey(JTextArea editor, int key, int modifiers) {
         Object binding = editor.getInputMap().get(KeyStroke.getKeyStroke(key, modifiers));
         editor.getActionMap().get(binding).actionPerformed(new java.awt.event.ActionEvent(editor, 0, binding.toString()));

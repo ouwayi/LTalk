@@ -2,6 +2,8 @@ package cn.ltalk.client.ui;
 
 import cn.ltalk.common.Message;
 import cn.ltalk.common.MessageType;
+import cn.ltalk.common.ChatRecord;
+import cn.ltalk.common.ConversationScope;
 
 import java.time.Instant;
 import java.util.*;
@@ -9,7 +11,9 @@ import java.util.*;
 /** EDT-confined presentation state; no sockets, protocol changes, persistence or delivery claims. */
 public final class ConversationStore {
     public enum EntryKind { MESSAGE, SYSTEM, ERROR }
-    public record Entry(EntryKind kind, String from, String to, String content, Instant time) { }
+    public record Entry(EntryKind kind, String from, String to, String content, Instant time, String messageId) {
+        public Entry(EntryKind kind, String from, String to, String content, Instant time) { this(kind, from, to, content, time, null); }
+    }
     public record Summary(ConversationId id, String title, String preview, Instant time, int unread, boolean online) { }
 
     private static final class Conversation {
@@ -26,6 +30,8 @@ public final class ConversationStore {
     }
 
     private final Map<ConversationId, Conversation> conversations = new LinkedHashMap<>();
+    private final Set<String> messageIds = new HashSet<>();
+    private final Set<String> liveIds = new HashSet<>();
     private String self = "";
     private ConversationId selected = ConversationId.PUBLIC;
     private boolean visible = true;
@@ -35,6 +41,8 @@ public final class ConversationStore {
     public ConversationStore() { reset(); }
     private void reset() {
         conversations.clear();
+        messageIds.clear();
+        liveIds.clear();
         Conversation group = new Conversation(ConversationId.PUBLIC, "公共聊天室");
         group.preview = "和局域网里的伙伴开始聊天";
         conversations.put(group.id, group);
@@ -97,17 +105,54 @@ public final class ConversationStore {
     }
 
     public ConversationId receive(Message message) {
+        return receive(message, false);
+    }
+    public void beginHistory() {
+        messageIds.clear();
+        for (Conversation conversation : conversations.values()) {
+            conversation.entries.removeIf(e -> e.kind() == EntryKind.MESSAGE);
+            updateSummary(conversation);
+        }
+    }
+    public ConversationId restore(ChatRecord record) {
+        return receive(Message.of(MessageType.valueOf(record.messageType())).messageId(record.messageId()).from(record.sender())
+                .to(record.recipient()).content(record.content()).serverTime(record.sentAt()).build(), true);
+    }
+    private ConversationId receive(Message message, boolean historical) {
         boolean group = message.type() == MessageType.GROUP_MESSAGE;
         String peer = self.equals(message.from()) ? message.to() : message.from();
         Conversation conversation = group ? conversations.get(ConversationId.PUBLIC) : ensurePrivate(peer);
+        boolean firstLive = !historical && (message.messageId() == null || liveIds.add(message.messageId()));
+        if (firstLive && !self.equals(message.from()) && !(visible && selected.equals(conversation.id))) conversation.unread++;
+        if (message.messageId() != null && !messageIds.add(message.messageId())) return conversation.id;
         Instant time = parseTime(message.serverTime());
-        Entry entry = new Entry(EntryKind.MESSAGE, message.from(), message.to(), message.content(), time);
-        conversation.entries.add(entry);
-        conversation.lastMessage = time;
-        conversation.preview = (self.equals(message.from()) ? "你：" : group ? message.from() + "：" : "") + message.content();
-        boolean own = self.equals(message.from());
-        if (!own && !(visible && selected.equals(conversation.id))) conversation.unread++;
+        Entry entry = new Entry(EntryKind.MESSAGE, message.from(), message.to(), message.content(), time, message.messageId());
+        int index = Collections.binarySearch(conversation.entries, entry, Comparator.comparing(Entry::time));
+        if (index < 0) index = -index - 1;
+        else while (index < conversation.entries.size() && !conversation.entries.get(index).time().isAfter(time)) index++;
+        conversation.entries.add(index, entry);
+        if (conversation.lastMessage == null || !time.isBefore(conversation.lastMessage)) {
+            conversation.lastMessage = time;
+            conversation.preview = (self.equals(message.from()) ? "你：" : group ? message.from() + "：" : "") + message.content();
+        }
         return conversation.id;
+    }
+    public void deleteHistory(String scope, String id) {
+        ConversationId target = ConversationScope.PUBLIC.equals(scope) ? ConversationId.PUBLIC
+                : ConversationId.privateWith(Arrays.stream(scope.split(":" )).skip(1).filter(p -> !p.equals(self)).findFirst().orElseThrow());
+        Conversation conversation = conversations.get(target); if (conversation == null) return;
+        conversation.entries.removeIf(entry -> {
+            boolean remove = id == null || id.equals(entry.messageId());
+            if (remove && entry.messageId() != null) { messageIds.remove(entry.messageId()); liveIds.remove(entry.messageId()); } return remove;
+        });
+        conversation.unread = Math.min(conversation.unread, (int) conversation.entries.stream().filter(e -> e.kind() == EntryKind.MESSAGE && !self.equals(e.from())).count());
+        updateSummary(conversation);
+    }
+    private void updateSummary(Conversation conversation) {
+        Entry last = null;
+        for (Entry entry : conversation.entries) if (entry.kind() == EntryKind.MESSAGE) last = entry;
+        conversation.lastMessage = last == null ? null : last.time();
+        conversation.preview = last == null ? "" : (self.equals(last.from()) ? "你：" : conversation.id.kind() == ConversationId.Kind.GROUP ? last.from() + "：" : "") + last.content();
     }
 
     public void system(String text) {

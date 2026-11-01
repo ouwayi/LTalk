@@ -10,10 +10,17 @@ final class MessageRouter {
     private static final Logger LOG = Logger.getLogger(MessageRouter.class.getName());
     private final ChatServer server;
     private final SessionRegistry registry;
+    private final Object mutationOrder = new Object();
 
     MessageRouter(ChatServer server, SessionRegistry registry) { this.server = server; this.registry = registry; }
 
     void handle(ClientSession session, Message request) {
+        if (request.type() == MessageType.GROUP_SEND || request.type() == MessageType.PRIVATE_SEND || request.type() == MessageType.HISTORY_DELETE) {
+            // A deleted record's earlier live delivery must not overtake the deletion acknowledgement.
+            synchronized (mutationOrder) { handleRequest(session, request); }
+        } else handleRequest(session, request);
+    }
+    private void handleRequest(ClientSession session, Message request) {
         try {
             if (request.type() == MessageType.HELLO) {
                 Validation.requestId(request.requestId());
@@ -47,6 +54,14 @@ final class MessageRouter {
                 case PING, PONG -> session.heartbeat.receive(request);
                 case LOGOUT -> session.close("用户主动退出");
                 case EXPORT_REQUEST -> export(session, request);
+                case HISTORY_REQUEST -> history(session, request);
+                case HISTORY_DELETE -> {
+                    Validation.requestId(request.requestId()); ownArchive(session, request);
+                    server.archive().delete(session.userId, request.conversationId(), request.messageId());
+                    session.closeHistory(); session.closeExport();
+                    server.deliver(session, Message.of(MessageType.HISTORY_DELETED).requestId(request.requestId())
+                            .conversationId(request.conversationId()).messageId(request.messageId()).build());
+                }
                 case PROFILE_GET, PROFILE_UPDATE -> {
                     Validation.requestId(request.requestId());
                     if (request.userId() != null && !session.userId.equals(request.userId()))
@@ -86,6 +101,7 @@ final class MessageRouter {
             if (request.type() == MessageType.LOGIN && session.userId == null && !session.greeted) session.close("登录失败：" + ex.code());
         } catch (IOException ex) {
             if (request.type() == MessageType.EXPORT_REQUEST) session.closeExport();
+            if (request.type() == MessageType.HISTORY_REQUEST) session.closeHistory();
             server.deliver(session, Message.error(request.requestId(), request.type() == MessageType.EXPORT_REQUEST ? "EXPORT_FAILED" : "STORAGE_ERROR",
                     "服务端文件操作失败，请稍后重试"));
         }
@@ -126,6 +142,24 @@ final class MessageRouter {
                 server.deliver(session, Message.of(MessageType.EXPORT_END).requestId(request.requestId()).build());
             } else server.deliver(session, Message.of(MessageType.EXPORT_PAGE).requestId(request.requestId())
                     .cursor(session.exportCursor.token).record(record).build());
+        }
+    }
+    private static void ownArchive(ClientSession session, Message request) throws ProtocolException {
+        if (request.userId() != null && !request.userId().equals(session.userId))
+            throw new ProtocolException("FORBIDDEN", "只能操作本人聊天记录");
+    }
+    private void history(ClientSession session, Message request) throws IOException {
+        Validation.requestId(request.requestId()); ownArchive(session, request);
+        synchronized (session) {
+            if (request.cursor() == null) {
+                session.closeHistory(); session.historyCursor = server.archive().open(session.userId, request.conversationId());
+            } else if (session.historyCursor == null || !session.historyCursor.token.equals(request.cursor())
+                    || !java.util.Objects.equals(session.historyCursor.scope, request.conversationId()))
+                throw new ProtocolException("FORBIDDEN", "历史游标无效或会话范围不匹配");
+            ChatRecord record = session.historyCursor.next();
+            if (record == null) {
+                session.closeHistory(); server.deliver(session, Message.of(MessageType.HISTORY_END).requestId(request.requestId()).build());
+            } else server.deliver(session, Message.of(MessageType.HISTORY_PAGE).requestId(request.requestId()).cursor(session.historyCursor.token).record(record).build());
         }
     }
 

@@ -1,6 +1,15 @@
 # 测试报告与验收记录
 
-## 当前最新回归（2026-10-31）
+## 当前最新回归（2026-11-01）
+
+导出阶段完整 **81/0/0/0，约 1:12**；历史/删除阶段完整 **89/0/0/0，约 1:20**，日志 .tools/export-save-final.log / .tools/history-final.log。最终只将删除期间导出临时文件清理留在后台，相关 **14/0/0/0，22.449 秒**通过并重打包，日志 .tools/history-final-focused.log；不把这次定向回归称作再次全量 89 项。环境仍 Windows/JDK 25.0.4/Maven 3.9.9、release 17。
+
+新增 HistoryExportTest 2 项、FileDialogsTest 1 项、HistoryPersistenceTest 4 项、HistoryClientTest 2 项、HistoryStoreTest 1 项、ChatWindowTest 1 项；旧 78 项核心断言保留。覆盖逐行标准 JSON、文件类型与扩展名/中文自定义名、不确认不覆盖/失败不改旧文件；历史加载、本人删除权限/他人字节不变、快照失效、重启持久化、并发删除投递顺序、超时取消与迟到页面、历史/实时重复与未读、离线会话恢复及确认框删除/清空后重登。新 UI 测试曾因 lambda 捕获变量重新赋值而编译失败，修正变量后运行，不删测或放宽。
+
+原生隔离 SaveDialogPreview 确认现代保存窗口同窗包含文件名/类型，JSON/CSV 可切换、建议扩展名随类型更新。首轮仅 UIA SetValue 改显示未提交，返回默认名；后实际键盘输入中文/空格自定义文件名和目录，返回一致路径/JSON 类型，未写文件。历史恢复组件图也已检查。不是用户手动的完整账号/删除/导出或多机验收；其他系统、完整 DPI、独立 JDK 17 与长期堆/慢端专项仍未完成。
+
+
+## 历史回归（2026-10-31）
 
 最终 `build.ps1 -o package`：**78/0/0/0，BUILD SUCCESS，约 1 分 12 秒**，日志 `.tools/account-handoff-final.log`；环境 Windows/JDK 25.0.4/Maven 3.9.9、release 17。阶段 14 完整 74 项（约 1:11）与阶段 15 专项 9 项（20.924 秒）均通过；旧日期结果不是今日证据。
 

@@ -18,6 +18,9 @@ public final class MessageTimeline extends JScrollPane {
     private Map<ConversationStore.Entry, Component> renderedRows = new IdentityHashMap<>();
     private String renderedSelf = "";
     private ThemePalette renderedPalette;
+    private java.util.function.Consumer<ConversationStore.Entry> onDelete = entry -> { };
+    private boolean deletionEnabled;
+    public void deletion(boolean enabled, java.util.function.Consumer<ConversationStore.Entry> action) { deletionEnabled = enabled; onDelete = action; }
 
     public MessageTimeline() {
         super(); setName("timeline"); setViewportView(column); ChatTheme.scroll(this, true);
@@ -50,7 +53,8 @@ public final class MessageTimeline extends JScrollPane {
                 if (entry.kind() == ConversationStore.EntryKind.MESSAGE) {
                     boolean own = entry.from().equals(self);
                     Component row = previous.get(entry);
-                    if (row == null) row = new BubbleRow(entry, own, palette);
+                    if (row == null) row = new BubbleRow(entry, own, palette, () -> onDelete.accept(entry));
+                    ((BubbleRow) row).delete.setEnabled(deletionEnabled && entry.messageId() != null);
                     renderedRows.put(entry, row); column.add(row);
                     plain.append(own ? "[我] " : "[" + entry.from() + "] ");
                 } else {
@@ -114,13 +118,17 @@ public final class MessageTimeline extends JScrollPane {
         private final ChatTheme.RoundedPanel bubble;
         private final MessageText body;
         private final JLabel sender;
+        private final JMenuItem delete;
         private Dimension measured;
         private int measuredWidth = -1;
-        BubbleRow(ConversationStore.Entry entry, boolean own, ThemePalette palette) {
+        BubbleRow(ConversationStore.Entry entry, boolean own, ThemePalette palette, Runnable onDelete) {
             super(null); this.entry = entry; this.own = own; setOpaque(false);
             bubble = new ChatTheme.RoundedPanel(new BorderLayout(0, 3), 20, own ? palette.outgoing() : palette.surface(), true);
             bubble.setBorder(new EmptyBorder(9, 13, 7, 13));
             body = new MessageText(entry.content(), palette);
+            ChatPopupMenu actions = new ChatPopupMenu(body, "聊天记录");
+            delete = actions.action("deleteMessage", "删除这条记录（仅本人）", LineIcon.Kind.CLOSE, onDelete);
+            body.setComponentPopupMenu(actions); bubble.setComponentPopupMenu(actions); setComponentPopupMenu(actions);
             body.getAccessibleContext().setAccessibleName((own ? "我" : entry.from()) + "的消息");
             bubble.add(body, BorderLayout.CENTER);
             sender = ChatTheme.label(entry.from(), 12, avatarColor(entry.from(), palette.dark()), true);

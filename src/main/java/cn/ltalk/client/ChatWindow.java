@@ -27,6 +27,9 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private boolean closed;
     private boolean choosingExport;
     private long sessionRevision;
+    private boolean historyLoading, deletingHistory;
+    private int historyCount;
+    private final Timer historyRender = new Timer(60, e -> refreshHistoryView());
     private final JTextField search = ChatTheme.field("", "conversationSearch");
     private final JTextField messageSearch = ChatTheme.field("", "messageSearch");
     private final JTextArea input = new JTextArea(1, 16) {
@@ -175,13 +178,14 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         input.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.SHIFT_DOWN_MASK), "insert-break");
         input.getActionMap().put("send-message", action(() -> { if (send.isEnabled()) send(); }));
         addWindowListener(new WindowAdapter() {
-            @Override public void windowClosing(WindowEvent e) { closed = true; store.saveDraft(input.getText()); closeProfile(); client.close(); dispose(); }
+            @Override public void windowClosing(WindowEvent e) { closed = true; historyRender.stop(); store.saveDraft(input.getText()); closeProfile(); client.close(); dispose(); }
         });
         addWindowFocusListener(new WindowAdapter() {
             @Override public void windowGainedFocus(WindowEvent e) { store.setVisible(shell.isVisible() && (!shell.compact() || shell.chatOpen())); refreshList(); }
             @Override public void windowLostFocus(WindowEvent e) { store.setVisible(false); }
         });
         connection.state(true, false); authentication.state(false, false);
+        historyRender.setRepeats(false);
         applyAppearance(appearance, false); refreshList(); refreshConversation();
         if (initialHost != null && !initialHost.isBlank()) SwingUtilities.invokeLater(() -> {
             if (!closed && client.state() == ChatClient.State.DISCONNECTED) connectServer();
@@ -256,7 +260,10 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         input.setToolTipText(store.canSend() ? "消息 · Enter 发送，Shift+Enter 换行" : "草稿已保留；请明确重新选择在线联系人或群聊");
         renderTimeline();
     }
-    private void renderTimeline() { timeline.showEntries(store.entries(), store.self(), messageSearch.getText(), connectionState == ChatClient.State.CONNECTED); }
+    private void renderTimeline() {
+        timeline.deletion(connectionState == ChatClient.State.CONNECTED && !historyLoading && !deletingHistory, this::deleteMessage);
+        timeline.showEntries(store.entries(), store.self(), messageSearch.getText(), connectionState == ChatClient.State.CONNECTED);
+    }
     private void refreshList() {
         refreshingList = true;
         try {
@@ -295,6 +302,46 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         identity.showProfile(loggedIn ? profile : null);
         setTitle("LTalk · 局域网聊天室" + (loggedIn ? " · " + profile.nickname() : ""));
         setStatus(detail, false); refreshList(); refreshConversation();
+        if (loggedIn) reloadHistory();
+        else if (state == ChatClient.State.DISCONNECTED) { historyLoading = false; deletingHistory = false; historyRender.stop(); }
+    }
+    private void reloadHistory() {
+        try { client.loadHistory(); } catch (IOException ex) { showError(ex.getMessage()); }
+    }
+    private void refreshHistoryView() { refreshList(); renderTimeline(); }
+    @Override public void onHistoryStarted() {
+        historyLoading = true; historyCount = 0; store.beginHistory(); setStatus("正在加载本人聊天记录…", false); refreshHistoryView();
+    }
+    @Override public void onHistoryRecord(ChatRecord record) {
+        store.restore(record); historyCount++; if (!historyRender.isRunning()) historyRender.start();
+    }
+    @Override public void onHistoryComplete() {
+        historyLoading = false; historyRender.stop(); refreshHistoryView(); setStatus("聊天记录已加载 · " + historyCount + " 条", false);
+    }
+    @Override public void onHistoryDeleted(String scope, String id) {
+        deletingHistory = false; historyLoading = false; store.deleteHistory(scope, id); refreshHistoryView(); reloadHistory();
+    }
+    private String scope(ConversationId id) throws IOException {
+        return id.kind() == ConversationId.Kind.GROUP ? ConversationScope.PUBLIC : ConversationScope.privateChat(store.self(), id.key());
+    }
+    private void deleteMessage(ConversationStore.Entry entry) {
+        if (entry.messageId() == null) return;
+        try {
+            String target = entry.to() == null ? ConversationScope.PUBLIC : ConversationScope.privateChat(entry.from(), entry.to());
+            confirmDelete(target, entry.messageId(), "删除这条记录？");
+        } catch (IOException ex) { showError(ex.getMessage()); }
+    }
+    private void clearHistory() {
+        try { confirmDelete(scope(store.selectedId()), null, "清空「" + store.selected().title() + "」的本人聊天记录？"); }
+        catch (IOException ex) { showError(ex.getMessage()); }
+    }
+    private void confirmDelete(String scope, String id, String prompt) {
+        if (historyLoading || deletingHistory || connectionState != ChatClient.State.CONNECTED) return;
+        long revision = sessionRevision; String user = store.self();
+        if (JOptionPane.showConfirmDialog(this, prompt + "\n只删除本人的副本，不影响对方或其他成员。删除后无法恢复。", "确认删除聊天记录", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION) return;
+        if (revision != sessionRevision || !user.equals(store.self()) || connectionState != ChatClient.State.CONNECTED) return;
+        try { client.deleteHistory(scope, id); deletingHistory = true; renderTimeline(); setStatus("正在删除本人记录…", false); }
+        catch (IOException ex) { showError(ex.getMessage()); }
     }
     private void updateAuthentication(ChatClient.State state, String detail) {
         connection.state(state == ChatClient.State.DISCONNECTED, state == ChatClient.State.CONNECTING);
@@ -308,6 +355,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     @Override public void onSwitchError(Message message) { authentication.feedback(message.code() + "：" + message.message(), true); }
     @Override public void onSwitchRegistered(String userId) { onRegistered(userId); }
     @Override public void onSessionReplaced() {
+        historyLoading = false; deletingHistory = false; historyRender.stop();
         sessionRevision++; closeProfile(); store.useIdentity(""); input.setText(""); search.setText(""); messageSearch.setText("");
     }
     @Override public void onProfile(UserProfile value) {
@@ -331,6 +379,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         store.system(message.content()); if (store.selectedId().equals(ConversationId.PUBLIC)) renderTimeline();
     }
     @Override public void onError(Message message) {
+        if (message.code() != null && message.code().startsWith("HISTORY_")) { historyLoading = false; deletingHistory = false; historyRender.stop(); }
         String detail = message.code() + "：" + message.message();
         authentication.feedback(detail, true);
         if (profilePanel != null && profileSaving && message.requestId() != null && message.requestId().startsWith("profile-")) {
@@ -465,6 +514,10 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         popup.action("chatLatest", "回到最新消息", LineIcon.Kind.BACK, timeline::scrollToBottom);
         JMenuItem export = popup.action("chatExport", "导出聊天记录", LineIcon.Kind.SETTINGS, this::exportHistory);
         export.setEnabled(connectionState == ChatClient.State.CONNECTED);
+        JMenuItem clear = popup.action("chatClearHistory", "清空当前会话记录（仅本人）", LineIcon.Kind.CLOSE, this::clearHistory);
+        clear.setEnabled(connectionState == ChatClient.State.CONNECTED && !historyLoading && !deletingHistory);
+        JMenuItem reload = popup.action("chatReloadHistory", "重新加载聊天记录", LineIcon.Kind.BACK, this::reloadHistory);
+        reload.setEnabled(connectionState == ChatClient.State.CONNECTED && !deletingHistory);
         return popup;
     }
     private void showChatMenu() { ChatPopupMenu popup = conversationMenu(); popup.show(more, more.getWidth() - popup.getPreferredSize().width, more.getHeight() + 4); }

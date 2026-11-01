@@ -26,6 +26,7 @@ final class ClientSession implements Runnable {
     volatile boolean greeted;
     volatile ScheduledFuture<?> loginDeadline;
     ChatArchive.Cursor exportCursor;
+    ChatArchive.Cursor historyCursor;
 
     ClientSession(ChatServer server, Socket socket, HeartbeatSettings settings) {
         this.server = server;
@@ -91,6 +92,7 @@ final class ClientSession implements Runnable {
         heartbeat.close();
         heartbeatWriter.shutdownNow();
         closeExport();
+        closeHistory();
         server.sessionClosed(this, reason);
     }
 
@@ -98,5 +100,9 @@ final class ClientSession implements Runnable {
     synchronized void closeExport() {
         if (exportCursor != null) try { exportCursor.close(); } catch (IOException ignored) { }
         exportCursor = null;
+    }
+    synchronized void closeHistory() {
+        if (historyCursor != null) try { historyCursor.close(); } catch (IOException ignored) { }
+        historyCursor = null;
     }
 }
