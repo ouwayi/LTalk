@@ -3,6 +3,9 @@ package cn.ltalk.client.ui;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.plaf.basic.BasicScrollBarUI;
+import javax.swing.plaf.basic.BasicButtonUI;
+import javax.swing.plaf.basic.BasicToggleButtonUI;
+import javax.swing.plaf.basic.BasicGraphicsUtils;
 import javax.swing.text.JTextComponent;
 import java.awt.*;
 import static cn.ltalk.client.ui.ThemePalette.Role;
@@ -79,7 +82,7 @@ public final class ChatTheme {
         button.setPreferredSize(new Dimension(40, 40));
         button.setBorder(new EmptyBorder(8, 8, 8, 8)); button.setContentAreaFilled(false); button.setFocusPainted(false);
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)); button.setRolloverEnabled(true);
-        button.setUI(new javax.swing.plaf.basic.BasicButtonUI() {
+        button.setUI(new TextButtonUI() {
             @Override public void paint(Graphics graphics, JComponent component) {
                 Graphics2D g = (Graphics2D) graphics.create(); quality(g);
                 if (button.getModel().isRollover() || button.hasFocus()) {
@@ -95,7 +98,7 @@ public final class ChatTheme {
         button.setFont(FONT.deriveFont(Font.BOLD)); button.setForeground(Color.WHITE);
         button.setBorder(new EmptyBorder(10, 18, 10, 18)); button.setFocusPainted(false); button.setContentAreaFilled(false);
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        button.setUI(new javax.swing.plaf.basic.BasicButtonUI() {
+        button.setUI(new TextButtonUI() {
             @Override public void paint(Graphics graphics, JComponent component) {
                 Graphics2D g = (Graphics2D) graphics.create(); quality(g);
                 g.setColor(!button.isEnabled() ? palette(button).disabled() : button.getModel().isRollover() ? BLUE.darker() : BLUE);
@@ -108,10 +111,10 @@ public final class ChatTheme {
         JButton button = iconButton(LineIcon.Kind.USERS, title); button.setIcon(null); button.setText(title);
         button.setPreferredSize(null); button.setFont(FONT.deriveFont(Font.BOLD, 12f));
         button.setBorder(new EmptyBorder(8, 14, 8, 14)); foreground(button, Role.ACCENT);
-        button.setUI(new javax.swing.plaf.basic.BasicButtonUI() {
+        button.setUI(new TextButtonUI() {
             @Override public void paint(Graphics graphics, JComponent c) {
                 Graphics2D g = (Graphics2D) graphics.create(); quality(g);
-                g.setColor(button.getModel().isRollover() ? palette(button).hover() : palette(button).accentSoft());
+                g.setColor(button.isEnabled() && button.getModel().isRollover() ? palette(button).hover() : palette(button).accentSoft());
                 g.fillRoundRect(0, 0, button.getWidth(), button.getHeight(), 16, 16); g.dispose(); super.paint(graphics, c);
             }
         });
@@ -121,15 +124,30 @@ public final class ChatTheme {
         JToggleButton button = new JToggleButton(title); button.setFont(FONT); button.setFocusPainted(false);
         button.setBorder(new EmptyBorder(10, 14, 10, 14)); button.setContentAreaFilled(false);
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        button.setUI(new javax.swing.plaf.basic.BasicToggleButtonUI() {
+        button.setUI(new BasicToggleButtonUI() {
+            @Override protected void paintText(Graphics g, AbstractButton b, Rectangle bounds, String text) {
+                buttonText(g, b, bounds, text);
+            }
             @Override public void paint(Graphics graphics, JComponent c) {
                 ThemePalette p = palette(button); Graphics2D g = (Graphics2D) graphics.create(); quality(g);
-                g.setColor(button.isSelected() ? p.accentSoft() : button.getModel().isRollover() ? p.hover() : p.soft());
+                g.setColor(button.isSelected() ? p.accentSoft() : button.isEnabled() && button.getModel().isRollover() ? p.hover() : p.soft());
                 g.fillRoundRect(0, 0, button.getWidth(), button.getHeight(), 16, 16); g.dispose();
                 button.setForeground(button.isSelected() ? BLUE : p.text()); super.paint(graphics, c);
             }
         });
         return button;
+    }
+    private static class TextButtonUI extends BasicButtonUI {
+        @Override protected void paintText(Graphics g, AbstractButton b, Rectangle bounds, String text) {
+            buttonText(g, b, bounds, text);
+        }
+    }
+    // BasicButtonUI embosses disabled text with two offset draws. Use one theme-aware pass for every button family.
+    private static void buttonText(Graphics graphics, AbstractButton button, Rectangle bounds, String text) {
+        Graphics2D g = (Graphics2D) graphics.create(); quality(g); g.setFont(button.getFont());
+        g.setColor(button.isEnabled() ? button.getForeground() : palette(button).muted());
+        BasicGraphicsUtils.drawStringUnderlineCharAt(g, text, button.getDisplayedMnemonicIndex(),
+                bounds.x, bounds.y + g.getFontMetrics().getAscent()); g.dispose();
     }
     public static JTextField field(String value, String name) {
         JTextField field = new JTextField(value) {

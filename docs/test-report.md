@@ -1,6 +1,18 @@
 # 测试报告与验收记录
 
-## 当前最新回归（2026-11-01）
+## 当前最新回归（2026-11-02）
+
+阶段 18 最终 `powershell -NoProfile -File .\build.ps1 -o package`：**94/0/0/0，BUILD SUCCESS，约 1:18**，日志 `.tools/appearance-final.log`，已重新打包。Windows/JDK 25.0.4/Maven 3.9.9、release 17。原 89 项保留，新增 ColorPickerTest 3 项、ThemeRenderingTest 1 项、AppearancePreferencesTest 1 项；没有协议变更。
+
+覆盖色盘/色相条联动、拖动越界钳制、黑白端点、方向键离开黑色、HEX 错误修正、两模式两色独立、纯色结束色禁用、只应用发布/取消隔离；中性暗色色板、连接/登录/发送/资料保存/注册/密码开关的禁用文字无亮色偏移副本、禁用主按钮文字对比度大于 4.5；旧 v1 默认色迁移、其他自选色保留、v2 明确自选旧色对及读取不改文件。
+
+首次完整 93 项通过后，补查浮层上下文入口也应同步当前色值/主题且遵守禁用条件，统一其打开初始化；增加自有 Swing 窗口组件测试，确认打开、切换模式关闭、纯色禁用入口和窗口销毁关闭。随后重跑最终完整 94 项，最终 JAR 包含该修复，不把前一轮结果当最终结果。
+
+首轮沙箱专项 14 项中 2 项配置保存因临时目录原子移动 AccessDenied 受限；未改断言，授权环境同项 **14/0/0/0、3.711 秒**通过（`.tools/appearance-focused-authorized.log`），随后最终完整回归通过。既有工具链 native-access/Unsafe 与 Shade 资源重叠警告保留。
+
+检查 welcome-neutral-dark、welcome-neutral-dark-narrow、registration-neutral-dark-busy、appearance-settings 及全量回归生成的浅深色聊天/菜单等组件图。通过 computer-use 在不连接账号、不保存真实配置的独立外观预览中，实际打开浮层、拖动色盘/色相条，确认 HEX/色块/背景同步，Escape 关闭。预览窗口已关闭。不是完整高 DPI/所有 Windows 构建、其他系统或多机人工验收，未重做长期堆/慢端专项。
+
+## 历史回归（2026-11-01）
 
 导出阶段完整 **81/0/0/0，约 1:12**；历史/删除阶段完整 **89/0/0/0，约 1:20**，日志 .tools/export-save-final.log / .tools/history-final.log。最终只将删除期间导出临时文件清理留在后台，相关 **14/0/0/0，22.449 秒**通过并重打包，日志 .tools/history-final-focused.log；不把这次定向回归称作再次全量 89 项。环境仍 Windows/JDK 25.0.4/Maven 3.9.9、release 17。
 

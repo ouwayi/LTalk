@@ -17,7 +17,7 @@ public record AppearanceSettings(Mode mode, BackgroundStyle style, Color lightSt
     }
     public static AppearanceSettings defaults() {
         return new AppearanceSettings(Mode.LIGHT, BackgroundStyle.GRADIENT,
-                color("#EDF3FA"), color("#DCE7F3"), color("#111B27"), color("#213347"));
+                color("#EDF3FA"), color("#DCE7F3"), color("#101010"), color("#202020"));
     }
     public boolean dark() { return mode == Mode.DARK; }
     public Color start() { return dark() ? darkStart : lightStart; }
@@ -39,7 +39,7 @@ public record AppearanceSettings(Mode mode, BackgroundStyle style, Color lightSt
                 new Preset("薄荷", color("#EFF7F4"), color("#D5EAE4")),
                 new Preset("暖砂", color("#FAF5EE"), color("#EEE1D0")),
                 new Preset("丁香", color("#F2F0FA"), color("#E1DDF0"))) : List.of(
-                new Preset("夜蓝", color("#111B27"), color("#213347")),
+                new Preset("墨黑", color("#101010"), color("#202020")),
                 new Preset("松墨", color("#12221F"), color("#203C34")),
                 new Preset("暖灰", color("#231F1C"), color("#3C332A")),
                 new Preset("暮紫", color("#211B2E"), color("#35294B")));

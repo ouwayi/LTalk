@@ -14,15 +14,24 @@ public final class AppearancePreferences {
             if (!Files.isRegularFile(file) || Files.size(file) > 32 * 1024) return AppearanceSettings.defaults();
             Properties p = new Properties();
             try (InputStream input = Files.newInputStream(file)) { p.load(input); }
-            if (!"1".equals(p.getProperty("version"))) return AppearanceSettings.defaults();
-            return new AppearanceSettings(AppearanceSettings.Mode.valueOf(p.getProperty("mode")),
+            String version = p.getProperty("version");
+            if (!"1".equals(version) && !"2".equals(version)) return AppearanceSettings.defaults();
+            AppearanceSettings settings = new AppearanceSettings(AppearanceSettings.Mode.valueOf(p.getProperty("mode")),
                     AppearanceSettings.BackgroundStyle.valueOf(p.getProperty("background")),
                     AppearanceSettings.color(p.getProperty("light.start")), AppearanceSettings.color(p.getProperty("light.end")),
                     AppearanceSettings.color(p.getProperty("dark.start")), AppearanceSettings.color(p.getProperty("dark.end")));
+            // Only the legacy default pair changes; all other user colors remain intact.
+            if ("1".equals(version) && settings.darkStart().equals(AppearanceSettings.color("#111B27"))
+                    && settings.darkEnd().equals(AppearanceSettings.color("#213347"))) {
+                AppearanceSettings defaults = AppearanceSettings.defaults();
+                settings = new AppearanceSettings(settings.mode(), settings.style(), settings.lightStart(), settings.lightEnd(),
+                        defaults.darkStart(), defaults.darkEnd());
+            }
+            return settings;
         } catch (IOException | RuntimeException ex) { return AppearanceSettings.defaults(); }
     }
     public void save(AppearanceSettings settings) throws IOException {
-        Properties p = new Properties(); p.setProperty("version", "1");
+        Properties p = new Properties(); p.setProperty("version", "2");
         p.setProperty("mode", settings.mode().name()); p.setProperty("background", settings.style().name());
         p.setProperty("light.start", AppearanceSettings.hex(settings.lightStart())); p.setProperty("light.end", AppearanceSettings.hex(settings.lightEnd()));
         p.setProperty("dark.start", AppearanceSettings.hex(settings.darkStart())); p.setProperty("dark.end", AppearanceSettings.hex(settings.darkEnd()));

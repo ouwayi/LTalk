@@ -13,6 +13,7 @@ public final class AppearancePanel extends JPanel {
     private final JToggleButton light = ChatTheme.choice("浅色"), dark = ChatTheme.choice("深色");
     private final JToggleButton solid = ChatTheme.choice("纯色"), gradient = ChatTheme.choice("渐变");
     private final JTextField start = ChatTheme.field("", "backgroundStart"), end = ChatTheme.field("", "backgroundEnd");
+    private final ColorField startColor = new ColorField(start, "起始色"), endColor = new ColorField(end, "结束色");
     private final JLabel error = ChatTheme.label(" ", 11, ChatTheme.RED, false);
     private final JButton apply = ChatTheme.primary("应用设置");
     private final JPanel presets = new JPanel(new GridLayout(1, 4, 6, 0));
@@ -31,7 +32,7 @@ public final class AppearancePanel extends JPanel {
         section(form, c, "显示模式", row(light, dark)); section(form, c, "聊天背景", row(solid, gradient));
         presets.setOpaque(false); section(form, c, "预设配色", presets);
         JPanel fields = new JPanel(new GridLayout(1, 2, 12, 0)); fields.setOpaque(false);
-        fields.add(labeled("背景颜色 / 起始色", start)); fields.add(labeled("渐变结束色", end));
+        fields.add(labeled("背景颜色 / 起始色", startColor)); fields.add(labeled("渐变结束色", endColor));
         c.gridy++; c.insets = new Insets(6, 0, 0, 0); form.add(fields, c);
         c.gridy++; c.insets = new Insets(4, 0, 6, 0); form.add(error, c);
         preview.setPreferredSize(new Dimension(380, 112));
@@ -78,9 +79,10 @@ public final class AppearancePanel extends JPanel {
     private void syncForm() {
         syncing = true;
         try {
+            startColor.closePicker(); endColor.closePicker();
             light.setSelected(!draft.dark()); dark.setSelected(draft.dark());
             solid.setSelected(draft.style() == AppearanceSettings.BackgroundStyle.SOLID); gradient.setSelected(!solid.isSelected());
-            start.setText(AppearanceSettings.hex(draft.start())); end.setText(AppearanceSettings.hex(draft.end())); end.setEnabled(!solid.isSelected());
+            start.setText(AppearanceSettings.hex(draft.start())); end.setText(AppearanceSettings.hex(draft.end())); endColor.setEnabled(!solid.isSelected());
             presets.removeAll();
             for (AppearanceSettings.Preset preset : AppearanceSettings.presets(draft.mode())) {
                 JButton swatch = ChatTheme.pill(preset.name()); swatch.setName("preset" + preset.name());

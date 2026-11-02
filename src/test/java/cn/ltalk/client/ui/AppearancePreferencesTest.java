@@ -30,4 +30,19 @@ class AppearancePreferencesTest {
         assertTrue(Files.isDirectory(target));
         try (var paths = Files.list(directory)) { assertEquals(1, paths.count()); }
     }
+    @Test void legacyDefaultBecomesNeutralBlackButOtherCustomColorsAndVersionTwoRemainExact() throws Exception {
+        Path file = directory.resolve("appearance.properties"); AppearancePreferences preferences = new AppearancePreferences(file);
+        String legacy = "version=1\nmode=DARK\nbackground=SOLID\nlight.start=#ABCDEF\nlight.end=#123456\ndark.start=#111B27\ndark.end=#213347\n";
+        Files.writeString(file, legacy); var migrated = preferences.load();
+        assertEquals(AppearanceSettings.color("#101010"), migrated.darkStart());
+        assertEquals(AppearanceSettings.color("#202020"), migrated.darkEnd());
+        assertEquals(AppearanceSettings.color("#ABCDEF"), migrated.lightStart());
+        assertEquals(AppearanceSettings.BackgroundStyle.SOLID, migrated.style());
+        assertEquals(legacy, Files.readString(file), "Loading must not overwrite the user's file");
+        Files.writeString(file, legacy.replace("#111B27", "#112233"));
+        assertEquals(AppearanceSettings.color("#112233"), preferences.load().darkStart());
+        assertEquals(AppearanceSettings.color("#213347"), preferences.load().darkEnd());
+        var explicit = migrated.withBackground(migrated.style(), AppearanceSettings.color("#111B27"), AppearanceSettings.color("#213347"));
+        preferences.save(explicit); assertEquals(explicit, preferences.load());
+    }
 }
