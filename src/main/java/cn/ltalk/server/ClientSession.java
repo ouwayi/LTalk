@@ -4,6 +4,8 @@ import cn.ltalk.common.*;
 
 import java.io.IOException;
 import java.net.Socket;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
@@ -13,6 +15,7 @@ final class ClientSession implements Runnable {
     private final ChatServer server;
     private final Socket socket;
     private final Object writeLock = new Object();
+    private final Map<String, Long> sentProfiles = new HashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final ExecutorService heartbeatWriter = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
             new ArrayBlockingQueue<>(8), task -> {
@@ -49,7 +52,11 @@ final class ClientSession implements Runnable {
     void send(Message message) throws IOException {
         synchronized (writeLock) {
             if (closed.get()) throw new IOException("连接已关闭");
+            boolean display = message.type() == MessageType.DISPLAY_PROFILE;
+            // Login, history and live updates can all offer a profile to this socket concurrently.
+            if (display && message.revision() <= sentProfiles.getOrDefault(message.userId(), -1L)) return;
             MessageCodec.write(socket.getOutputStream(), message);
+            if (display) sentProfiles.put(message.userId(), message.revision());
         }
     }
 

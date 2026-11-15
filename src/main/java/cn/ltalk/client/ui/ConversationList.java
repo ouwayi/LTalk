@@ -11,6 +11,7 @@ public final class ConversationList extends JList<ConversationStore.Summary> {
     public ConversationList(DefaultListModel<ConversationStore.Summary> model) {
         super(model); setName("conversations"); setFixedCellHeight(84); setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         ChatTheme.surface(this); setBorder(BorderFactory.createEmptyBorder(0, 8, 8, 8)); setCellRenderer(new Cell());
+        ToolTipManager.sharedInstance().registerComponent(this);
         getAccessibleContext().setAccessibleName("会话列表"); setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         addMouseMotionListener(new MouseMotionAdapter() {
             @Override public void mouseMoved(MouseEvent event) {
@@ -20,6 +21,12 @@ public final class ConversationList extends JList<ConversationStore.Summary> {
             }
         });
         addMouseListener(new MouseAdapter() { @Override public void mouseExited(MouseEvent e) { hover = -1; repaint(); } });
+    }
+    @Override public String getToolTipText(MouseEvent event) {
+        int index = locationToIndex(event.getPoint());
+        if (index < 0 || !getCellBounds(index, index).contains(event.getPoint())) return null;
+        ConversationId id = getModel().getElementAt(index).id();
+        return id.kind() == ConversationId.Kind.PRIVATE ? "@" + id.key() : null;
     }
     public static String ellipsis(FontMetrics fm, String text, int width) {
         if (width <= 0) return "";
@@ -44,7 +51,9 @@ public final class ConversationList extends JList<ConversationStore.Summary> {
             Graphics2D g = (Graphics2D) graphics.create(); ChatTheme.quality(g);
             int w = getWidth();
             if (selected || hovered) { g.setColor(selected ? ChatTheme.BLUE : palette.hover()); g.fillRoundRect(0, 3, w, 78, 20, 20); }
-            new Avatar(value.title(), value.id().kind() == ConversationId.Kind.GROUP, 50).paintIcon(this, g, 12, 17);
+            Icon avatar = value.id().kind() == ConversationId.Kind.GROUP ? new Avatar(value.title(), true, 50)
+                    : ProfileAvatar.contact(value.profile(), value.title(), 50);
+            avatar.paintIcon(this, g, 12, 17);
             if (value.id().kind() == ConversationId.Kind.PRIVATE) {
                 g.setColor(selected ? ChatTheme.BLUE : palette.surface()); g.fillOval(48, 52, 13, 13);
                 g.setColor(value.online() ? new Color(81, 190, 130) : new Color(178, 188, 196)); g.fillOval(50, 54, 9, 9);

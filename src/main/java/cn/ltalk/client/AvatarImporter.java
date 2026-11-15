@@ -2,13 +2,16 @@ package cn.ltalk.client;
 
 import cn.ltalk.common.AvatarData;
 import javax.imageio.ImageIO;
+import javax.imageio.IIOImage;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.stream.MemoryCacheImageOutputStream;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.nio.file.*;
 import java.util.Base64;
 
-/** Local image read/resize runs off the EDT. Server accepts only the resulting bounded PNG. */
+/** Local image read, resize and compression run off the EDT. */
 public final class AvatarImporter {
     private AvatarImporter() { }
     public static String load(Path path) throws IOException {
@@ -30,9 +33,32 @@ public final class AvatarImporter {
                     int side = Math.min(width, height), left = (width - side) / 2, top = (height - side) / 2;
                     g.drawImage(source, 0, 0, AvatarData.SIZE, AvatarData.SIZE, left, top, left + side, top + side, null);
                 } finally { g.dispose(); }
-                ByteArrayOutputStream output = new ByteArrayOutputStream(); ImageIO.write(scaled, "png", output);
-                String value = Base64.getEncoder().encodeToString(output.toByteArray()); AvatarData.decode(value); return value;
+                ByteArrayOutputStream output = new ByteArrayOutputStream();
+                ImageIO.write(scaled, "png", output);
+                byte[] bytes = output.size() <= AvatarData.MAX_BYTES ? output.toByteArray() : encodePhoto(scaled);
+                return Base64.getEncoder().encodeToString(bytes);
             } finally { reader.dispose(); }
         }
+    }
+
+    private static byte[] encodePhoto(BufferedImage scaled) throws IOException {
+        BufferedImage photo = new BufferedImage(scaled.getWidth(), scaled.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = photo.createGraphics();
+        try { g.drawImage(scaled, 0, 0, Color.WHITE, null); } finally { g.dispose(); }
+        var writer = ImageIO.getImageWritersByFormatName("jpeg").next();
+        try {
+            var params = writer.getDefaultWriteParam();
+            params.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+            for (float quality : new float[]{.95f, .88f, .80f, .70f, .55f, .40f, .25f, .10f}) {
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                try (var output = new MemoryCacheImageOutputStream(bytes)) {
+                    writer.setOutput(output);
+                    params.setCompressionQuality(quality);
+                    writer.write(null, new IIOImage(photo, null, null), params);
+                }
+                if (bytes.size() <= AvatarData.MAX_BYTES) return bytes.toByteArray();
+            }
+        } finally { writer.dispose(); }
+        throw new IOException("图片压缩后仍超过头像大小限制");
     }
 }

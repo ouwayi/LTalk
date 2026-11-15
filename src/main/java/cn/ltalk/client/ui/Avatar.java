@@ -15,7 +15,7 @@ public record Avatar(String name, boolean group, int size) implements Icon {
         g.setPaint(new GradientPaint(x, y, color.brighter(), x, y + size, color)); g.fillOval(x, y, size, size);
         if (group) new LineIcon(LineIcon.Kind.USERS, Color.WHITE, size / 2).paintIcon(c, g, x + size / 4, y + size / 4);
         else {
-            String initial = name.isEmpty() ? "?" : name.substring(0, 1).toUpperCase(java.util.Locale.ROOT);
+            String initial = name.isEmpty() ? "?" : name.substring(0, name.offsetByCodePoints(0, 1)).toUpperCase(java.util.Locale.ROOT);
             g.setColor(Color.WHITE); g.setFont(ChatTheme.FONT.deriveFont(Font.BOLD, size * .41f));
             FontMetrics fm = g.getFontMetrics(); g.drawString(initial, x + (size - fm.stringWidth(initial)) / 2, y + (size - fm.getHeight()) / 2 + fm.getAscent());
         }

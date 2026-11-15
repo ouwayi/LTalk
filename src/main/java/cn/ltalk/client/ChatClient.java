@@ -239,6 +239,16 @@ public final class ChatClient implements AutoCloseable {
                 connection.lastRevision = message.revision();
                 emit(connection, () -> listener.onUserList(message));
             }
+            case DISPLAY_PROFILE -> {
+                String user = Validation.userId(message.userId());
+                String name = message.nickname();
+                if (!user.equals(message.userId()) || name == null || name.isBlank() || name.length() > 40
+                        || message.avatar() == null || message.revision() == null || message.revision() < 0) {
+                    throw new IOException("无效用户展示资料");
+                }
+                var profile = new ContactProfile(user, name, AvatarData.decode(message.avatar()), message.revision());
+                emit(connection, () -> listener.onDisplayProfile(profile));
+            }
             case SYSTEM -> emit(connection, () -> listener.onSystem(message));
             case ERROR -> emit(connection, () -> listener.onError(message));
             case PROFILE_OK -> { /* Ignore expired profile responses. */ }

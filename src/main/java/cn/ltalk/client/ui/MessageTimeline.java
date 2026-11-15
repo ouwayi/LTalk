@@ -1,5 +1,6 @@
 package cn.ltalk.client.ui;
 
+import cn.ltalk.client.ContactProfile;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.text.DefaultCaret;
@@ -11,6 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.IdentityHashMap;
 import java.util.ArrayList;
+import java.util.function.Function;
 
 /** Selectable, plain-text bubbles. Layout measures against viewport width, including narrow windows. */
 public final class MessageTimeline extends JScrollPane {
@@ -22,6 +24,7 @@ public final class MessageTimeline extends JScrollPane {
     private Map<ConversationStore.Entry, Component> renderedRows = new IdentityHashMap<>();
     private String renderedSelf = "";
     private ThemePalette renderedPalette;
+    private Function<String, ContactProfile> profiles = userId -> null;
     private java.util.function.Consumer<ConversationStore.Entry> onDelete = entry -> { };
     private boolean deletionEnabled;
     public void deletion(boolean enabled, java.util.function.Consumer<ConversationStore.Entry> action) { deletionEnabled = enabled; onDelete = action; }
@@ -36,6 +39,7 @@ public final class MessageTimeline extends JScrollPane {
         });
     }
     public String renderedText() { return renderedText; }
+    public void setContactProfiles(Function<String, ContactProfile> lookup) { profiles = lookup; }
 
     public void showEntries(List<ConversationStore.Entry> entries, String self, String query, boolean connected) {
         showEntries(entries, self, query, connected, false);
@@ -79,7 +83,9 @@ public final class MessageTimeline extends JScrollPane {
             }
             prior = entry;
             previousDate = date;
-            if (!matches(entry, needle)) continue;
+            ContactProfile profile = message ? profiles.apply(entry.from()) : null;
+            String displayName = profile == null ? entry.displayName() : profile.displayName();
+            if (!matches(entry, displayName, needle)) continue;
             if (!date.equals(shownDate)) {
                 column.add(new Pill(date.equals(today) ? "今天" : date.toString(), false, palette));
                 shownDate = date;
@@ -88,18 +94,19 @@ public final class MessageTimeline extends JScrollPane {
             if (message) {
                 boolean own = entry.from().equals(self);
                 BubbleRow bubble = row == null ? new BubbleRow(entry, own, palette, () -> onDelete.accept(entry)) : (BubbleRow) row;
+                bubble.setDisplayName(displayName);
                 bubble.startsRun(!shownInRun);
                 bubble.delete.setEnabled(deletionEnabled && entry.messageId() != null);
                 if (!own) {
                     if (avatar == null) {
-                        avatar = new AvatarGroup(bubble, new Avatar(entry.from(), false, AVATAR_SIZE));
+                        avatar = new AvatarGroup(bubble, ProfileAvatar.contact(profile, displayName, AVATAR_SIZE));
                         column.avatarGroups.add(avatar);
                     }
                     avatar.last = bubble;
                 }
                 shownInRun = true;
                 row = bubble;
-                plain.append(own ? "[我] " : "[" + entry.displayName() + "] ");
+                plain.append(own ? "[我] " : "[" + displayName + "] ");
             } else if (row == null) {
                 row = new Pill(entry.content(), entry.kind() == ConversationStore.EntryKind.ERROR, palette);
             }
@@ -109,10 +116,10 @@ public final class MessageTimeline extends JScrollPane {
         }
     }
 
-    private static boolean matches(ConversationStore.Entry entry, String needle) {
+    private static boolean matches(ConversationStore.Entry entry, String displayName, String needle) {
         return needle.isEmpty() || entry.content().toLowerCase(Locale.ROOT).contains(needle)
                 || entry.from().toLowerCase(Locale.ROOT).contains(needle)
-                || (entry.nickname() != null && entry.displayName().toLowerCase(Locale.ROOT).contains(needle));
+                || displayName.toLowerCase(Locale.ROOT).contains(needle);
     }
 
     public void scrollToBottom() {
@@ -213,9 +220,8 @@ public final class MessageTimeline extends JScrollPane {
             ChatPopupMenu actions = new ChatPopupMenu(body, "聊天记录");
             delete = actions.action("deleteMessage", "删除这条记录（仅本人）", LineIcon.Kind.CLOSE, onDelete);
             body.setComponentPopupMenu(actions); bubble.setComponentPopupMenu(actions); setComponentPopupMenu(actions);
-            body.getAccessibleContext().setAccessibleName((own ? "我" : entry.displayName()) + "的消息");
             bubble.add(body, BorderLayout.CENTER);
-            sender = ChatTheme.label(entry.displayName(), 12, avatarColor(entry.from(), palette.dark()), true);
+            sender = ChatTheme.label("", 12, avatarColor(entry.from(), palette.dark()), true);
             if (!own) bubble.add(sender, BorderLayout.NORTH);
             String time = DateTimeFormatter.ofPattern("HH:mm").format(entry.time().atZone(ZoneId.systemDefault()));
             JLabel stamp = ChatTheme.label(time, 10, palette.muted(), false);
@@ -223,6 +229,12 @@ public final class MessageTimeline extends JScrollPane {
             stamp.setHorizontalAlignment(SwingConstants.RIGHT);
             if (own) stamp.setToolTipText("服务端已回显，不代表对方已读");
             bubble.add(stamp, BorderLayout.SOUTH); add(bubble);
+        }
+        void setDisplayName(String name) {
+            if (name.equals(sender.getText())) return;
+            sender.setText(name);
+            body.getAccessibleContext().setAccessibleName((own ? "我" : name) + "的消息");
+            measured = null;
         }
         void startsRun(boolean value) {
             if (startsRun == value) return;

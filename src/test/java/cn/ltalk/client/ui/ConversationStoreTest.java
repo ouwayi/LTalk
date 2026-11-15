@@ -1,11 +1,32 @@
 package cn.ltalk.client.ui;
 
+import cn.ltalk.client.ContactProfile;
 import cn.ltalk.common.*;
 import org.junit.jupiter.api.Test;
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ConversationStoreTest {
+    @Test void displayChangesRefreshExistingPreviewAndKeepIdenticalNicknamesSeparate() {
+        ConversationStore store = store();
+        store.receive(event(MessageType.GROUP_MESSAGE, "bob", null, "你好"));
+        assertTrue(store.updateProfile(new ContactProfile("bob", "同名", null, 2)));
+        assertTrue(store.updateProfile(new ContactProfile("carol", "同名", null, 1)));
+        assertFalse(store.updateProfile(new ContactProfile("bob", "旧昵称", null, 1)));
+        assertEquals("同名：你好", store.selected().preview());
+        assertEquals(List.of(ConversationId.privateWith("bob"), ConversationId.privateWith("carol")), store.summaries("同名").stream()
+                .filter(row -> row.id().kind() == ConversationId.Kind.PRIVATE).map(ConversationStore.Summary::id).toList());
+        store.select(ConversationId.privateWith("bob"));
+        store.saveDraft("保留草稿");
+        store.updateProfile(new ContactProfile("bob", "新昵称", null, 3));
+        assertEquals(ConversationId.privateWith("bob"), store.selectedId());
+        assertEquals("保留草稿", store.draft());
+        assertEquals("新昵称", store.summaries("bob").get(0).title());
+        store.select(ConversationId.PUBLIC);
+        assertEquals("新昵称：你好", store.selected().preview());
+        store.useIdentity("carol");
+        assertNull(store.profile("bob"));
+    }
     private ConversationStore store() {
         ConversationStore store = new ConversationStore(); store.useIdentity("alice");
         store.updateUsers(List.of("alice", "bob", "carol")); return store;

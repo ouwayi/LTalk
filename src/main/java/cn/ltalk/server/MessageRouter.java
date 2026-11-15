@@ -69,6 +69,10 @@ final class MessageRouter {
                     UserProfile profile = request.type() == MessageType.PROFILE_GET ? server.accounts().profile(session.userId)
                             : server.accounts().updateProfile(session.userId, request.nickname(), request.avatar());
                     server.deliver(session, profileMessage(MessageType.PROFILE_OK, request.requestId(), profile));
+                    if (request.type() == MessageType.PROFILE_UPDATE) {
+                        Message display = displayMessage(session.userId);
+                        if (display != null) server.broadcast(display);
+                    }
                 }
                 case GROUP_SEND -> {
                     validateChat(request);
@@ -120,6 +124,9 @@ final class MessageRouter {
         if (session.loginDeadline != null) session.loginDeadline.cancel(false);
         session.heartbeat.start();
         server.broadcast(list);
+        for (ClientSession online : registry.readySessions()) sendDisplayProfile(session, online.userId);
+        Message display = displayMessage(userId);
+        if (display != null) server.broadcast(display);
         server.system(userId + " 上线了");
     }
 
@@ -160,6 +167,8 @@ final class MessageRouter {
             if (record == null) {
                 session.closeHistory(); server.deliver(session, Message.of(MessageType.HISTORY_END).requestId(request.requestId()).build());
             } else {
+                sendDisplayProfile(session, record.sender());
+                if (record.recipient() != null) sendDisplayProfile(session, record.recipient());
                 server.deliver(session, Message.of(MessageType.HISTORY_PAGE).requestId(request.requestId())
                         .cursor(session.historyCursor.token).nickname(server.accounts().nickname(record.sender())).record(record).build());
             }
@@ -173,6 +182,16 @@ final class MessageRouter {
     private static Message profileMessage(MessageType type, String requestId, UserProfile profile) {
         return Message.of(type).requestId(requestId).userId(profile.userId()).nickname(profile.nickname())
                 .avatar(profile.avatar()).createdAt(profile.createdAt()).build();
+    }
+    private void sendDisplayProfile(ClientSession recipient, String userId) {
+        Message display = displayMessage(userId);
+        if (display != null) server.deliver(recipient, display);
+    }
+
+    private Message displayMessage(String userId) {
+        AccountStore.DisplayProfile profile = server.accounts().displayProfile(userId);
+        return profile == null ? null : Message.of(MessageType.DISPLAY_PROFILE).userId(userId)
+                .nickname(profile.nickname()).avatar(profile.avatar()).revision(profile.revision()).build();
     }
 
 }

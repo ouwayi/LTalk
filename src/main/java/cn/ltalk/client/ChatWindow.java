@@ -87,6 +87,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         setMinimumSize(new Dimension(360, 540)); setSize(1200, 820); setLocationByPlatform(true);
         status.setName("status"); recipient.setName("recipient"); title.setName("conversationTitle");
+        headerAvatar.setName("conversationAvatar");
+        timeline.setContactProfiles(store::profile);
         send.setName("send"); group.setName("group"); back.setName("back"); menu.setName("menu");
         create.setName("createConversation"); attach.setName("attach"); emoji.setName("emoji"); input.setName("input");
         hint.setName("composerHint");
@@ -249,11 +251,18 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         store.saveDraft(input.getText()); store.select(id); shell.openChat();
         messageSearch.setText(""); refreshList(); refreshConversation(); input.requestFocusInWindow();
     }
-    private void refreshConversation() {
+    private void refreshConversationHeader() {
         ConversationStore.Summary selected = store.selected();
-        title.setText(selected.title()); headerAvatar.setIcon(new Avatar(selected.title(), selected.id().kind() == ConversationId.Kind.GROUP, 42));
-        recipient.setText(store.targetLabel() + (selected.id().kind() == ConversationId.Kind.GROUP ? " · " + store.onlineCount() + " 人在线" : ""));
-        recipient.setToolTipText(recipient.getText());
+        boolean group = selected.id().kind() == ConversationId.Kind.GROUP;
+        title.setText(selected.title());
+        title.setToolTipText(group ? null : "@" + selected.id().key());
+        headerAvatar.setIcon(group ? new Avatar(selected.title(), true, 42)
+                : ProfileAvatar.contact(selected.profile(), selected.title(), 42));
+        recipient.setText(store.targetLabel() + (group ? " · " + store.onlineCount() + " 人在线" : ""));
+        recipient.setToolTipText(group ? recipient.getText() : recipient.getText() + " · @" + selected.id().key());
+    }
+    private void refreshConversation() {
+        refreshConversationHeader();
         restoringDraft = true;
         try { input.setText(store.draft()); } finally { restoringDraft = false; }
         send.setEnabled(connectionState == ChatClient.State.CONNECTED && store.canSend());
@@ -282,6 +291,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         connectionState = state;
         boolean loggedIn = state == ChatClient.State.CONNECTED;
         if (loggedIn) {
+            store.clearProfiles();
             store.saveDraft(input.getText());
             boolean changedIdentity = !store.self().equals(profile.userId()); store.useIdentity(profile.userId());
             if (changedIdentity) { search.setText(""); messageSearch.setText(""); }
@@ -311,7 +321,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private void reloadHistory() {
         try { client.loadHistory(); } catch (IOException ex) { showError(ex.getMessage()); }
     }
-    private void refreshHistoryView() { refreshList(); renderTimeline(); }
+    private void refreshHistoryView() { refreshList(); refreshConversationHeader(); renderTimeline(); }
     @Override public void onHistoryStarted() {
         historyLoading = true; historyCount = 0; store.beginHistory(); setStatus("正在加载本人聊天记录…", false); refreshHistoryView();
     }
@@ -366,6 +376,14 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         if (connectionState == ChatClient.State.CONNECTED) {
             identity.showProfile(value); setTitle("LTalk · 局域网聊天室 · " + value.nickname());
             if (profileSaving) { closeProfile(); setStatus("个人资料已保存", false); }
+        }
+    }
+    @Override public void onDisplayProfile(ContactProfile value) {
+        if (!store.updateProfile(value)) return;
+        if (historyLoading) {
+            if (!historyRender.isRunning()) historyRender.start();
+        } else {
+            refreshList(); refreshConversationHeader(); renderTimeline(true);
         }
     }
     @Override public void onGroup(Message message) { receiveChat(message); }

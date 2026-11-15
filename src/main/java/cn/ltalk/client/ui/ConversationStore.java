@@ -1,5 +1,6 @@
 package cn.ltalk.client.ui;
 
+import cn.ltalk.client.ContactProfile;
 import cn.ltalk.common.Message;
 import cn.ltalk.common.MessageType;
 import cn.ltalk.common.ChatRecord;
@@ -17,25 +18,25 @@ public final class ConversationStore {
             this(kind, from, to, content, time, messageId, null);
         }
         public String displayName() {
-            return nickname == null || nickname.isBlank() ? from : nickname.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ');
+            return ContactProfile.displayName(from, nickname);
         }
     }
-    public record Summary(ConversationId id, String title, String preview, Instant time, int unread, boolean online) { }
+    public record Summary(ConversationId id, String title, String preview, Instant time, int unread, boolean online,
+                          ContactProfile profile) { }
 
     private static final class Conversation {
         final ConversationId id;
-        final String title;
         final List<Entry> entries = new ArrayList<>();
         String draft = "";
         boolean online;
         int unread;
-        Instant lastMessage;
-        String preview = "";
-        Conversation(ConversationId id, String title) { this.id = id; this.title = title; }
-        Summary summary() { return new Summary(id, title, preview, lastMessage, unread, online); }
+        Entry lastMessage;
+        String emptyPreview = "";
+        Conversation(ConversationId id) { this.id = id; }
     }
 
     private final Map<ConversationId, Conversation> conversations = new LinkedHashMap<>();
+    private final Map<String, ContactProfile> profiles = new HashMap<>();
     private final Set<String> messageIds = new HashSet<>();
     private final Set<String> liveIds = new HashSet<>();
     private String self = "";
@@ -47,10 +48,11 @@ public final class ConversationStore {
     public ConversationStore() { reset(); }
     private void reset() {
         conversations.clear();
+        clearProfiles();
         messageIds.clear();
         liveIds.clear();
-        Conversation group = new Conversation(ConversationId.PUBLIC, "公共聊天室");
-        group.preview = "和局域网里的伙伴开始聊天";
+        Conversation group = new Conversation(ConversationId.PUBLIC);
+        group.emptyPreview = "和局域网里的伙伴开始聊天";
         conversations.put(group.id, group);
         selected = group.id; selectionConfirmed = true; onlineUsers = List.of();
     }
@@ -61,11 +63,37 @@ public final class ConversationStore {
     }
     public String self() { return self; }
     public ConversationId selectedId() { return selected; }
-    public Summary selected() { return conversations.get(selected).summary(); }
+    public Summary selected() { return summary(conversations.get(selected)); }
     public List<Entry> entries() { return List.copyOf(conversations.get(selected).entries); }
     public int onlineCount() { return onlineUsers.size(); }
     public String draft() { return conversations.get(selected).draft; }
     public void saveDraft(String text) { conversations.get(selected).draft = text; }
+
+    public void clearProfiles() { profiles.clear(); }
+    public ContactProfile profile(String userId) { return profiles.get(userId); }
+    public boolean updateProfile(ContactProfile profile) {
+        ContactProfile current = profiles.get(profile.userId());
+        if (current != null && current.revision() >= profile.revision()) return false;
+        profiles.put(profile.userId(), profile);
+        return true;
+    }
+    private String displayName(String userId, String fallback) {
+        ContactProfile profile = profiles.get(userId);
+        return profile == null ? fallback : profile.displayName();
+    }
+    private Summary summary(Conversation conversation) {
+        boolean group = conversation.id.kind() == ConversationId.Kind.GROUP;
+        String key = conversation.id.key();
+        Entry last = conversation.lastMessage;
+        String preview = conversation.emptyPreview;
+        if (last != null) {
+            String prefix = group ? displayName(last.from(), last.displayName()) + "："
+                    : self.equals(last.from()) ? "你：" : "";
+            preview = prefix + last.content();
+        }
+        return new Summary(conversation.id, group ? "公共聊天室" : displayName(key, key), preview,
+                last == null ? null : last.time(), conversation.unread, conversation.online, group ? null : profiles.get(key));
+    }
 
     public void select(ConversationId id) {
         Conversation conversation = conversations.get(id);
@@ -87,9 +115,10 @@ public final class ConversationStore {
 
     public String targetLabel() {
         if (selected.kind() == ConversationId.Kind.GROUP) return "群聊 · 所有在线用户";
-        if (!selectionConfirmed && conversations.get(selected).online) return "私聊 " + selected.key() + " · 已上线，请重新选择会话";
-        if (!canSend()) return "私聊 " + selected.key() + " · 对象已离线，请重新选择会话";
-        return "私聊 " + selected.key() + " · 在线，仅双方可见";
+        String prefix = "私聊 " + displayName(selected.key(), selected.key());
+        if (!selectionConfirmed && conversations.get(selected).online) return prefix + " · 已上线，请重新选择会话";
+        if (!canSend()) return prefix + " · 对象已离线，请重新选择会话";
+        return prefix + " · 在线，仅双方可见";
     }
 
     public boolean updateUsers(List<String> users) {
@@ -107,7 +136,7 @@ public final class ConversationStore {
 
     private Conversation ensurePrivate(String user) {
         ConversationId id = ConversationId.privateWith(user);
-        return conversations.computeIfAbsent(id, key -> new Conversation(key, user));
+        return conversations.computeIfAbsent(id, Conversation::new);
     }
 
     public ConversationId receive(Message message) {
@@ -140,10 +169,7 @@ public final class ConversationStore {
         if (index < 0) index = -index - 1;
         else while (index < conversation.entries.size() && !conversation.entries.get(index).time().isAfter(time)) index++;
         conversation.entries.add(index, entry);
-        if (conversation.lastMessage == null || !time.isBefore(conversation.lastMessage)) {
-            conversation.lastMessage = time;
-            conversation.preview = (self.equals(message.from()) ? "你：" : group ? message.from() + "：" : "") + message.content();
-        }
+        if (conversation.lastMessage == null || !time.isBefore(conversation.lastMessage.time())) conversation.lastMessage = entry;
         return conversation.id;
     }
     public void deleteHistory(String scope, String id) {
@@ -160,8 +186,8 @@ public final class ConversationStore {
     private void updateSummary(Conversation conversation) {
         Entry last = null;
         for (Entry entry : conversation.entries) if (entry.kind() == EntryKind.MESSAGE) last = entry;
-        conversation.lastMessage = last == null ? null : last.time();
-        conversation.preview = last == null ? "" : (self.equals(last.from()) ? "你：" : conversation.id.kind() == ConversationId.Kind.GROUP ? last.from() + "：" : "") + last.content();
+        conversation.lastMessage = last;
+        conversation.emptyPreview = "";
     }
 
     public void system(String text) {
@@ -181,12 +207,14 @@ public final class ConversationStore {
     public List<Summary> summaries(String query) {
         String needle = query.strip().toLowerCase(Locale.ROOT);
         return conversations.values().stream()
-                .filter(c -> needle.isEmpty() || c.title.toLowerCase(Locale.ROOT).contains(needle)
-                        || c.preview.toLowerCase(Locale.ROOT).contains(needle))
-                .sorted(Comparator.<Conversation>comparingInt(c -> c.id.equals(ConversationId.PUBLIC) ? 0 : 1)
-                        .thenComparing(c -> c.lastMessage, Comparator.nullsLast(Comparator.reverseOrder()))
-                        .thenComparing(c -> c.title))
-                .map(Conversation::summary).toList();
+                .map(this::summary)
+                .filter(c -> needle.isEmpty() || c.title().toLowerCase(Locale.ROOT).contains(needle)
+                        || (c.id().kind() == ConversationId.Kind.PRIVATE && c.id().key().toLowerCase(Locale.ROOT).contains(needle))
+                        || c.preview().toLowerCase(Locale.ROOT).contains(needle))
+                .sorted(Comparator.<Summary>comparingInt(c -> c.id().equals(ConversationId.PUBLIC) ? 0 : 1)
+                        .thenComparing(Summary::time, Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(Summary::title).thenComparing(c -> c.id().key()))
+                .toList();
     }
 
     private static Instant parseTime(String value) {

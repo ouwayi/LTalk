@@ -41,6 +41,10 @@ class ProfileConnectionTest {
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.dataDirectory(directory.resolve("server")); server.start();
             try (Peer a = Peer.login(server.port(), "alice"); Peer b = Peer.login(server.port(), "bob")) {
+                Message initial = b.await(m -> m.type() == MessageType.DISPLAY_PROFILE && "alice".equals(m.userId()));
+                assertEquals("alice", initial.nickname()); assertEquals("", initial.avatar()); assertEquals(0L, initial.revision());
+                assertNull(initial.createdAt()); assertNull(initial.password());
+                assertEquals("bob", a.await(m -> m.type() == MessageType.DISPLAY_PROFILE && "bob".equals(m.userId())).nickname());
                 a.send(Message.of(MessageType.PROFILE_GET).requestId("p").build()); Message original = a.type(MessageType.PROFILE_OK); created = original.createdAt();
                 assertNull(original.password()); assertNotNull(created);
                 a.send(Message.of(MessageType.PROFILE_UPDATE).requestId("forged").userId("bob").nickname("冒名").avatar(avatar).build()); a.error("FORBIDDEN");
@@ -54,6 +58,11 @@ class ProfileConnectionTest {
                 a.send(Message.of(MessageType.PROFILE_GET).requestId("unchanged").build()); assertEquals(original.nickname(), a.type(MessageType.PROFILE_OK).nickname());
                 a.send(Message.of(MessageType.PROFILE_UPDATE).requestId("save").nickname(" 新昵称🙂 ").avatar(avatar).build());
                 Message saved = a.type(MessageType.PROFILE_OK); assertEquals("新昵称🙂", saved.nickname()); assertEquals(avatar, saved.avatar()); assertEquals(created, saved.createdAt());
+                Message shared = b.await(m -> m.type() == MessageType.DISPLAY_PROFILE && "alice".equals(m.userId()));
+                assertEquals(saved.nickname(), shared.nickname()); assertEquals(avatar, shared.avatar());
+                assertTrue(shared.revision() > initial.revision()); assertNull(shared.createdAt());
+                b.send(Message.of(MessageType.DISPLAY_PROFILE).requestId("fake").userId("alice").nickname("冒名").avatar("").revision(99).build());
+                b.error("BAD_MESSAGE");
                 a.privateTo("bob", "stable route"); assertEquals("alice", b.type(MessageType.PRIVATE_MESSAGE).from()); a.type(MessageType.PRIVATE_MESSAGE);
                 b.assertNo(m -> m.type() == MessageType.PROFILE_OK, 80);
             }
@@ -71,7 +80,8 @@ class ProfileConnectionTest {
         Path accounts = directory.resolve("accounts"); AccountStore store = new AccountStore(accounts);
         store.register("alice", "旧昵称", "pass!12", false);
         Path file = accounts.resolve(AccountStore.fileKey("alice") + ".json");
-        JsonObject old = JsonParser.parseString(Files.readString(file)).getAsJsonObject(); old.remove("avatar"); old.remove("createdAt"); Files.writeString(file, old.toString());
+        JsonObject old = JsonParser.parseString(Files.readString(file)).getAsJsonObject();
+        old.remove("avatar"); old.remove("createdAt"); old.remove("profileRevision"); Files.writeString(file, old.toString());
         store = new AccountStore(accounts); assertNull(store.profile("alice").createdAt()); assertEquals("", store.profile("alice").avatar());
         Files.delete(file); Files.createDirectory(file); Files.writeString(file.resolve("block"), "force replacement failure");
         AccountStore loaded = store;
@@ -85,7 +95,24 @@ class ProfileConnectionTest {
         assertThrows(ProtocolException.class, () -> AvatarData.decode(Base64.getEncoder().encodeToString(Files.readAllBytes(wrongSize))));
         assertThrows(ProtocolException.class, () -> MessageCodec.decode("{\"type\":\"PROFILE_UPDATE\",\"avatar\":42}"));
         Path broken = directory.resolve("broken.png"); Files.writeString(broken, "broken"); assertThrows(java.io.IOException.class, () -> AvatarImporter.load(broken));
-        String converted = AvatarImporter.load(wrongSize); assertEquals(48, AvatarData.decode(converted).getWidth());
+        Path legacy = directory.resolve("legacy.png");
+        ImageIO.write(new BufferedImage(48, 48, BufferedImage.TYPE_INT_RGB), "png", legacy.toFile());
+        assertEquals(48, AvatarData.decode(Base64.getEncoder().encodeToString(Files.readAllBytes(legacy))).getWidth());
+        String converted = AvatarImporter.load(wrongSize); assertEquals(144, AvatarData.decode(converted).getWidth());
         assertTrue(MessageCodec.encode(Message.of(MessageType.PROFILE_OK).userId("alice").nickname("昵称").avatar(converted).build()).length() < MessageCodec.MAX_FRAME_BYTES);
+    }
+
+    @Test void detailedPhotoKeepsHighResolutionWithinTheAvatarAndFrameLimits() throws Exception {
+        Path file = directory.resolve("photo.png");
+        BufferedImage pixels = new BufferedImage(144, 144, BufferedImage.TYPE_INT_RGB);
+        Random random = new Random(42);
+        for (int y = 0; y < 144; y++) for (int x = 0; x < 144; x++) pixels.setRGB(x, y, random.nextInt());
+        ImageIO.write(pixels, "png", file.toFile());
+        assertTrue(Files.size(file) > AvatarData.MAX_BYTES);
+        String avatar = AvatarImporter.load(file);
+        assertTrue(Base64.getDecoder().decode(avatar).length <= AvatarData.MAX_BYTES);
+        assertEquals(144, AvatarData.decode(avatar).getWidth());
+        Message frame = Message.of(MessageType.DISPLAY_PROFILE).userId("a".repeat(20)).nickname("中".repeat(40)).avatar(avatar).revision(4).build();
+        assertEquals(frame, MessageCodec.decode(MessageCodec.encode(frame)));
     }
 }

@@ -331,12 +331,23 @@ class ChatWindowTest {
                 bob.privateTo("alice","离线联系人历史"); alice.type(MessageType.PRIVATE_MESSAGE); bob.type(MessageType.PRIVATE_MESSAGE);
             }
             awaitEdt(() -> server.onlineCount()==0);
-            server.accounts().updateProfile("bob", "离线昵称", "");
+            BufferedImage picture = new BufferedImage(144, 144, BufferedImage.TYPE_INT_RGB);
+            Graphics2D avatarGraphics = picture.createGraphics();
+            Color avatarColor = new Color(190, 32, 125);
+            avatarGraphics.setColor(avatarColor); avatarGraphics.fillRect(0, 0, 144, 144); avatarGraphics.dispose();
+            Path image = appearanceDirectory.resolve("avatar.png"); ImageIO.write(picture, "png", image.toFile());
+            String avatar = AvatarImporter.load(image);
+            server.accounts().updateProfile("bob", "离线昵称", avatar);
             onEdt(() -> ref.set(new ChatWindow("127.0.0.1",Integer.toString(server.port()),"alice",appearanceDirectory.resolve("history.properties"))));
             ChatWindow window=ref.get(); login(window);
             awaitEdt(() -> history(window).contains("历史公共一") && history(window).contains("[离线昵称] 历史公共二") && label(window,"status").getText().contains("已加载"));
             onEdt(() -> {
+                assertEquals("离线昵称：历史公共二", summary(window, ConversationId.PUBLIC).preview());
+                assertEquals("离线昵称", summary(window, "bob").title());
+                assertEquals(avatarColor.getRGB(), summary(window, "bob").profile().avatar().getRGB(72, 72));
                 selectPeer(window,"bob"); assertTrue(history(window).contains("[离线昵称] 离线联系人历史")); assertFalse(button(window,"send").isEnabled());
+                assertEquals("离线昵称", label(window, "conversationTitle").getText());
+                assertEquals(avatarColor.getRGB(), iconCenter(label(window, "conversationAvatar")));
                 button(window,"group").doClick(); area(window,"input").setText("删除不影响草稿");
                 render(window,1000,760,"history-restored.png");
                 JMenuItem item=messageDelete(window,"历史公共一"); assertNotNull(item); assertTrue(item.isEnabled());
@@ -358,6 +369,12 @@ class ChatWindowTest {
                 assertEquals("历史公共一",bob.type(MessageType.HISTORY_PAGE).record().content());
                 bob.send(Message.of(MessageType.PROFILE_UPDATE).requestId("rename").nickname("实时昵称").avatar("").build());
                 assertEquals("实时昵称", bob.type(MessageType.PROFILE_OK).nickname());
+                awaitEdt(() -> history(reopened).contains("[实时昵称] 离线联系人历史") && summary(reopened, "bob").profile().avatar() == null);
+                onEdt(() -> {
+                    assertEquals("实时昵称", summary(reopened, "bob").title());
+                    assertEquals("实时昵称", label(reopened, "conversationTitle").getText());
+                    assertNotEquals(avatarColor.getRGB(), iconCenter(label(reopened, "conversationAvatar")));
+                });
                 bob.privateTo("alice", "实时私聊");
                 awaitEdt(() -> history(reopened).contains("[实时昵称] 实时私聊"));
                 onEdt(() -> button(reopened, "group").doClick());
@@ -366,6 +383,7 @@ class ChatWindowTest {
                 Message echo = bob.type(MessageType.GROUP_MESSAGE);
                 assertEquals("bob", echo.from()); assertEquals("实时昵称", echo.nickname());
                 awaitEdt(() -> history(reopened).contains("[实时昵称] 实时群聊"));
+                onEdt(() -> assertEquals("实时昵称：实时群聊", summary(reopened, ConversationId.PUBLIC).preview()));
             }
         } finally { if(ref.get()!=null) onEdt(() -> ref.get().dispatchEvent(new WindowEvent(ref.get(),WindowEvent.WINDOW_CLOSING))); }
     }
@@ -397,11 +415,21 @@ class ChatWindowTest {
     }
     private static String history(ChatWindow window) { return ((MessageTimeline) find(window, "timeline")).renderedText(); }
     private static ConversationStore.Summary summary(ChatWindow window, String peer) {
+        return summary(window, ConversationId.privateWith(peer));
+    }
+    private static ConversationStore.Summary summary(ChatWindow window, ConversationId id) {
         for (int i = 0; i < list(window).getModel().getSize(); i++) {
             ConversationStore.Summary summary = list(window).getModel().getElementAt(i);
-            if (summary.id().equals(ConversationId.privateWith(peer))) return summary;
+            if (summary.id().equals(id)) return summary;
         }
-        throw new AssertionError("Missing conversation: " + peer);
+        throw new AssertionError("Missing conversation: " + id);
+    }
+    private static int iconCenter(JLabel label) {
+        Icon icon = label.getIcon();
+        BufferedImage image = new BufferedImage(icon.getIconWidth(), icon.getIconHeight(), BufferedImage.TYPE_INT_ARGB);
+        Graphics2D graphics = image.createGraphics();
+        try { icon.paintIcon(label, graphics, 0, 0); } finally { graphics.dispose(); }
+        return image.getRGB(icon.getIconWidth() / 2, icon.getIconHeight() / 2);
     }
     private static void selectPeer(ChatWindow window, String peer) {
         list(window).setSelectedValue(summary(window, peer), true);

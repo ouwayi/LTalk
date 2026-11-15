@@ -1,5 +1,6 @@
 package cn.ltalk.client.ui;
 
+import cn.ltalk.client.ContactProfile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import javax.swing.*;
@@ -15,6 +16,31 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 class MessageTimelineTest {
+    @Test void profileUpdateRepaintsOneAvatarAndNicknameForAlreadyDisplayedMessages() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            MessageTimeline timeline = new MessageTimeline();
+            var entries = List.of(message("bob", "旧昵称", "第一条"), message("bob", "旧昵称", "第二条"));
+            AtomicReference<ContactProfile> profile = new AtomicReference<>();
+            timeline.setContactProfiles(user -> profile.get());
+            timeline.setSize(420, 380);
+            timeline.showEntries(entries, "alice", "", true);
+            layout(timeline); layout(timeline);
+            assertEquals(List.of("旧昵称"), visibleSenders(timeline));
+            BufferedImage photo = new BufferedImage(144, 144, BufferedImage.TYPE_INT_RGB);
+            Color imageColor = new Color(225, 35, 70);
+            Graphics2D imageGraphics = photo.createGraphics();
+            imageGraphics.setColor(imageColor); imageGraphics.fillRect(0, 0, 144, 144); imageGraphics.dispose();
+            profile.set(new ContactProfile("bob", "新昵称", photo, 1));
+            timeline.showEntries(entries, "alice", "", true);
+            layout(timeline); layout(timeline);
+            assertEquals(List.of("新昵称"), visibleSenders(timeline));
+            BufferedImage painted = paint(timeline.getViewport());
+            List<Integer> tops = avatarTops(painted);
+            assertEquals(1, tops.size());
+            assertEquals(imageColor.getRGB(), painted.getRGB(28, tops.get(0) + 16));
+            save(painted, "message-profile-avatar.png");
+        });
+    }
     @Test void groupHeadUsesNicknameAndGroupingSurvivesSearchAndRemoval() throws Exception {
         SwingUtilities.invokeAndWait(() -> {
             MessageTimeline timeline = new MessageTimeline();

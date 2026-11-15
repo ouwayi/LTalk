@@ -11,7 +11,8 @@ import java.util.*;
 
 /** One server owns the account directory. Passwords never enter persisted JSON. */
 public final class AccountStore {
-    private record Account(String userId, String nickname, String salt, String hash, String avatar, String createdAt) { }
+    private record Account(String userId, String nickname, String salt, String hash, String avatar, String createdAt, long profileRevision) { }
+    record DisplayProfile(String nickname, String avatar, long revision) { }
     private final Path directory;
     private final Map<String, Account> accounts = new HashMap<>();
     private final SecureRandom random = new SecureRandom();
@@ -45,7 +46,7 @@ public final class AccountStore {
         if (accounts.containsKey(id)) throw new ProtocolException("USER_EXISTS", "用户名已注册");
         byte[] salt = new byte[16]; random.nextBytes(salt);
         Account a = new Account(id, nickname.strip(), Base64.getEncoder().encodeToString(salt),
-                Base64.getEncoder().encodeToString(hash(password, salt)), "", java.time.Instant.now().toString());
+                Base64.getEncoder().encodeToString(hash(password, salt)), "", java.time.Instant.now().toString(), 0);
         save(a);
         return id;
     }
@@ -66,6 +67,10 @@ public final class AccountStore {
         Account account = accounts.get(id);
         return account == null ? null : account.nickname();
     }
+    synchronized DisplayProfile displayProfile(String id) {
+        Account account = accounts.get(id);
+        return account == null ? null : new DisplayProfile(account.nickname(), Objects.toString(account.avatar(), ""), account.profileRevision());
+    }
     public synchronized UserProfile updateProfile(String id, String nickname, String avatar) throws IOException {
         if (nickname == null || nickname.isBlank()) throw new ProtocolException("MISSING_FIELD", "请填写昵称");
         if (nickname.strip().length() > 40) throw new ProtocolException("INVALID_NICKNAME", "昵称最多 40 字符");
@@ -73,7 +78,7 @@ public final class AccountStore {
         AvatarData.decode(avatar);
         Account a = accounts.get(id);
         if (a == null) throw new ProtocolException("NOT_AUTHENTICATED", "账号不存在");
-        save(new Account(id, nickname.strip(), a.salt(), a.hash(), avatar, a.createdAt()));
+        save(new Account(id, nickname.strip(), a.salt(), a.hash(), avatar, a.createdAt(), a.profileRevision() + 1));
         return profile(id);
     }
     public synchronized String authenticate(String id, String password) throws IOException {

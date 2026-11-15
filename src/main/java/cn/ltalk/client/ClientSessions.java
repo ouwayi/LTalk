@@ -90,6 +90,7 @@ public final class ClientSessions implements AutoCloseable {
         @Override public void onGroup(Message message) { if (active()) listener.onGroup(message); }
         @Override public void onPrivate(Message message) { if (active()) listener.onPrivate(message); }
         @Override public void onUserList(Message message) { if (active()) listener.onUserList(message); }
+        @Override public void onDisplayProfile(ContactProfile profile) { if (active()) listener.onDisplayProfile(profile); }
         @Override public void onSystem(Message message) { if (active()) listener.onSystem(message); }
         @Override public void onExported(Path path) { if (active()) listener.onExported(path); }
         @Override public void onHistoryStarted() { if (active()) listener.onHistoryStarted(); }
