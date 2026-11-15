@@ -177,16 +177,16 @@ public final class MessageTimeline extends JScrollPane {
                 if (avatarGroups.get(mid).bottom() <= view.y) low = mid + 1;
                 else high = mid;
             }
-            int end = low;
-            while (end < avatarGroups.size() && avatarGroups.get(end).first.getY() < viewBottom) end++;
-            int limit = viewBottom - AVATAR_SIZE;
-            // When a new group is just entering the bottom, leave room for its pinned avatar.
-            for (int i = end - 1; i >= low && limit >= view.y; i--) {
+            for (int i = low; i < avatarGroups.size(); i++) {
                 AvatarGroup group = avatarGroups.get(i);
-                int y = Math.min(group.bottom(), viewBottom) - AVATAR_SIZE - AVATAR_INSET;
-                y = Math.max(view.y, Math.min(limit, y));
+                int groupTop = group.first.getY();
+                if (groupTop >= viewBottom) break;
+                int bottom = Math.min(group.bottom(), viewBottom);
+                int visibleHeight = bottom - Math.max(groupTop, view.y);
+                // Keep the avatar within the group and let the viewport clip both at its edges.
+                int inset = Math.min(AVATAR_INSET, Math.max(0, visibleHeight - AVATAR_SIZE));
+                int y = Math.max(groupTop, bottom - AVATAR_SIZE - inset);
                 group.icon.paintIcon(this, graphics, AVATAR_X, y);
-                limit = y - AVATAR_SIZE - 4;
             }
         }
         @Override public Dimension getPreferredScrollableViewportSize() { return new Dimension(600, 450); }

@@ -79,10 +79,23 @@ class MessageTimelineTest {
             save(clipped, "message-run-pinned.png");
 
             int nextTop = bodies.get(8).getParent().getParent().getY();
-            view.setViewPosition(new Point(0, nextTop - view.getHeight() + 1));
-            assertEquals(2, avatarTops(paint(view)).size(), "Two visible groups keep separate avatars at the viewport edge");
+            view.setViewPosition(new Point(0, nextTop - view.getHeight()));
+            assertEquals(1, avatarTops(paint(view)).size(), "The next avatar must disappear with its bubble at the bottom edge");
+            for (int visibleHeight : new int[]{4, 12, 56}) {
+                int bubbleTop = view.getHeight() - visibleHeight;
+                view.setViewPosition(new Point(0, nextTop - bubbleTop));
+                BufferedImage edge = paint(view);
+                List<Integer> tops = avatarTops(edge);
+                assertEquals(2, tops.size(), "Two visible groups keep separate avatars at the viewport edge");
+                assertTrue(tops.get(1) >= bubbleTop, "The avatar must not extend above the first visible pixels of its group");
+                if (visibleHeight == 12) save(edge, "message-avatar-clipped-at-bottom.png");
+            }
             view.setViewPosition(new Point(0, runBottom - 12));
-            assertEquals(0, avatarTops(paint(view)).get(0), "The visible tail keeps its avatar");
+            BufferedImage tail = paint(view);
+            assertEquals(0, avatarTops(tail).get(0), "The visible tail keeps its avatar");
+            for (int y = 12; y < 32; y++) {
+                assertEquals(Color.WHITE.getRGB(), tail.getRGB(28, y), "The avatar must not extend below the last visible pixels of its group");
+            }
             view.setViewPosition(new Point(0, runBottom));
             assertEquals(1, avatarTops(paint(view)).size(), "Only the next sender's avatar remains");
             view.setViewPosition(new Point(0, 80));

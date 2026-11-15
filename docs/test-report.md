@@ -1,6 +1,12 @@
 # 测试报告与验收记录
 
-## 当前最新回归（2026-11-15）
+## 当前最新回归（2026-11-15，阶段 20）
+
+头像裁切修复后的完整 `build.ps1 -o package` 通过 **96 项，0 失败、错误或跳过，约 1:17**，并生成含依赖 JAR。日志为 `.tools/avatar-clip-final.log`。
+
+扩展 MessageTimelineTest 覆盖底边可见高度逐步降为 56、12、4、0 像素时的图标范围和消失点，以及顶部裁切和相邻头像。旧代码在新断言下复现头像超出对应气泡的故障，修复后 4 项时间线测试通过，已查看 `target/ui-preview/message-avatar-clipped-at-bottom.png`。滚动验证在 Swing 组件上执行，尚未人工检查各种显示缩放比例。
+
+## 消息昵称与分组回归（2026-11-15，阶段 19）
 
 阶段 19 最终 `powershell -NoProfile -File .\build.ps1 -o package` 通过 **96 项，0 失败、错误或跳过，约 1:18**，生成含依赖 JAR。日志为 `.tools/message-group-final.log`。Windows/JDK 25.0.4/Maven 3.9.9，以 release 17 编译。
 
