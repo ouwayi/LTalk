@@ -2,7 +2,7 @@
 
 ## 帧与状态
 
-TCP 长连接，**UTF-8 编码，每行一个 JSON 对象，以 LF (`0x0A`) 结尾**。可接受 CRLF（CR 计入帧字节数，JSON 解析时视为空白）。JSON 字符串中的换行由 Gson 转义，不能把正文实际换行直接拼接到线上。一连接串行写帧并 flush；不对不同发送者承诺全局消息顺序。
+TCP 长连接，**UTF-8 编码，每行一个 JSON 对象，以 LF (`0x0A`) 结尾**。可接受 CRLF（CR 计入帧字节数，JSON 解析时视为空白）。JSON 字符串中的换行由 Gson 转义。一连接串行写帧并 flush。v6 需要双方使用同一版本，连接过程没有版本协商。
 
 普通帧上限为 **16 KiB**（不含 LF）。`LOGIN_OK`、`PROFILE_UPDATE`、`PROFILE_OK`、`DISPLAY_PROFILE` 可使用 **176 KiB** 上限。超过 16 KiB 时必须把字面 `"type"` 作为 JSON 首字段，类型名不得使用转义，编码器按此顺序输出。读取时先检查类型前缀，再校验解码后的类型与长度。非法 UTF-8、非法 JSON、未知类型或字段类型错误返回 `BAD_MESSAGE`，可继续下一帧。超长帧返回 `FRAME_TOO_LARGE` 后关闭连接。末尾无 LF 的残帧遇到 EOF 直接关闭。未定义额外字段被忽略。
 
@@ -14,16 +14,16 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 
 ## 字段与消息类型
 
-所有对象必有字符串 `type`，下面只列相关字段，未使用字段不输出。HELLO、REGISTER、LOGIN、PROFILE_GET、PROFILE_UPDATE、EXPORT_REQUEST、GROUP_SEND、PRIVATE_SEND 必须携带非空白、最多 64 个字符的 `requestId`；客户端按连接生成递增编号，不重复使用。服务端不把 requestId 当消息去重键，也不提供幂等重试；不同用户的编号可以相同。
+所有对象必有字符串 `type`，未使用字段不输出。HELLO、REGISTER、LOGIN、PROFILE_GET、PROFILE_UPDATE、PASSWORD_CHANGE、EXPORT_REQUEST、HISTORY_REQUEST、HISTORY_DELETE、GROUP_SEND 和 PRIVATE_SEND 均需携带非空白、最多 64 个字符的 `requestId`。PING/PONG 也需要编号。客户端按连接生成请求编号，不同用户的编号可以相同。聊天的消息 ID 由服务端生成，请求编号只用于关联请求和响应。
 
 | 类型 | 方向 | 字段 | 结果 |
 | --- | --- | --- | --- |
 | LOGIN | C → S | requestId, userId, password | 成功 LOGIN_OK；HELLO 模式失败保留连接，直接登录失败关闭 |
 | LOGIN_OK | S → 当前 C | requestId, userId, nickname, avatar, createdAt（旧账号可缺省） | 客户端切为 CONNECTED |
 | GROUP_SEND | C → S | requestId, content | 当前全部就绪会话收到 GROUP_MESSAGE，包括发送者 |
-| GROUP_MESSAGE | S → 在线 C | requestId, from, content, serverTime, nickname（可选） | 群聊展示，以服务端事件为唯一正式回显 |
+| GROUP_MESSAGE | S → 在线 C | requestId, messageId, conversationId, from, content, serverTime, nickname（可选） | 群聊展示，以服务端事件为唯一正式回显 |
 | PRIVATE_SEND | C → S | requestId, to, content | 先写目标，成功后回显发送者；失败只向发送者 ERROR |
-| PRIVATE_MESSAGE | S → 私聊双方 | requestId, from, to, content, serverTime, nickname（可选） | 仅双方收包，不通过广播 |
+| PRIVATE_MESSAGE | S → 私聊双方 | requestId, messageId, conversationId, from, to, content, serverTime, nickname（可选） | 仅双方收包，不通过广播 |
 | USER_LIST | S → 在线 C | users: string[], revision: 非负 long | 全量列表，按较新版本覆盖 |
 | SYSTEM | S → 在线 C | content, serverTime | 上下线提示，不作为列表数据来源 |
 | ERROR | S → 当前 C | code, message, requestId（可选） | 本次请求失败；能识别合法 requestId 时附回 |
@@ -33,7 +33,7 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 
 `userId` strip 首尾空白后必须匹配 `[A-Za-z0-9_]{1,20}`，区分大小写；只代表当前连接的路由名称。`to` 必须是精确匹配的合法用户标识，不做目标名称自动规范化。`content` 不为 null、不能全为空白、最长 2000 个 Java UTF-16 char 单元，保留前后空白和换行。所有字符串都受帧字节上限约束。
 
-`from` 和 `serverTime` 由服务端根据会话身份和 `Instant.now()` 生成，**不采信客户端请求的同名值**。时间为 ISO-8601 UTC，如 `2026-10-24T13:00:00Z`；客户端转为当地 HH:mm:ss 显示。SYSTEM 也使用服务端时间。
+`from` 取自连接身份。聊天事件由服务端生成 UUID 和会话 ID，时间读取服务端时钟并按归档时间下限钳制。时间为 ISO-8601 UTC，例如 `2026-10-24T13:00:00Z`，客户端气泡以当地 HH:mm 展示。SYSTEM 也使用服务端时间。
 
 `revision` 在单个服务端进程内递增。就绪成员变化、版本增加、快照生成在同一注册表短锁内完成，所有网络发送都在该锁外。并发快照发送可能乱序，因此客户端忽略小于或等于已见版本的快照；重新连接将版本重置为 -1。列表按名称排序，包含自己。
 
@@ -47,7 +47,7 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 
 可在各端启动 JVM 时设置正整数毫秒系统属性 `ltalk.heartbeat.intervalMillis`（默认 10000）与 `ltalk.heartbeat.timeoutMillis`（默认 20000，均不超过 2147483647）；两端可独立配置，无需交换时长。非法配置拒绝创建网络客户端/服务端。过短配置可能受调度/延迟影响误判，应根据网络环境保留余量。
 
-本扩展未加入版本协商，**服务端和客户端须一起升级**；旧端不支持 PING/PONG，不能宣称混合版本兼容。原聊天、私聊与列表字段及路由语义保持不变。
+应用层心跳独立于聊天和在线列表路由。运行时使用同一 v6 版本的客户端与服务端。
 
 ## 错误码
 
@@ -56,41 +56,47 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 | BAD_MESSAGE | 非法 JSON/UTF-8、未知或方向错误的 type、缺字段、错误类型、无效 requestId/to | 返回错误，通常保留连接；合法 LOGIN 校验失败时关闭 |
 | NOT_AUTHENTICATED | 未登录就发送其他请求 | 保留，仍可 LOGIN |
 | ALREADY_LOGGED_IN | 同一连接重复 LOGIN | 保留已有身份 |
-| INVALID_USER_ID | 登录标识不符合规则 | 返回错误并关闭新连接 |
-| USER_EXISTS | 同名名称已被在线/预留会话占用 | 拒绝新连接，原会话不受影响 |
+| INVALID_USER_ID | 账号标识不符合规则 | HELLO 模式可重试，直接登录失败则关闭 |
+| USER_EXISTS | 注册名已存在，或登录名已被在线/预留会话占用 | 拒绝本次操作，原会话保留。直接登录失败则关闭新连接 |
 | EMPTY_CONTENT | 正文全为空白 | 保留连接 |
 | CONTENT_TOO_LONG | 正文超过 2000 char | 保留连接 |
 | FRAME_TOO_LARGE | 帧超过其类型允许的上限 | 返回错误并关闭 |
 | USER_OFFLINE | 目标不在就绪表中或向目标写入失败 | 不发送成功回显，保留发送者连接 |
 | SELF_PRIVATE_NOT_ALLOWED | 私聊目标为自己 | 保留连接 |
+| WRONG_PASSWORD | 修改密码时当前密码不匹配 | 保留连接，可重新填写 |
 
 连接上限已满时新 TCP 连接直接关闭，避免在接受线程同步写错误阻塞。未登录超时、EOF、RST、关闭服务端以关闭连接表示，无额外必需 ERROR 帧。客户端本地的空白/超长等校验不会发出网络请求，也不会关闭已有连接。
 
 ## 示例
 
-以下各行为独立帧：
+以下为当前格式的帧示例。实际连接还会收到在线名单、展示资料和系统提示。
 
 ```json
+{"type":"HELLO","requestId":"hello"}
+{"type":"HELLO_OK","requestId":"hello"}
 {"type":"REGISTER","requestId":"reg1","userId":"alice","nickname":"Alice","password":"example-pass"}
 {"type":"REGISTER_OK","requestId":"reg1","userId":"alice"}
 {"type":"LOGIN","requestId":"r1","userId":"alice","password":"example-pass"}
-{"type":"LOGIN_OK","requestId":"r1","userId":"alice"}
+{"type":"LOGIN_OK","requestId":"r1","userId":"alice","nickname":"Alice","avatar":"","createdAt":"2026-10-24T12:00:00Z"}
 {"type":"USER_LIST","users":["alice","bob"],"revision":2}
+{"type":"DISPLAY_PROFILE","userId":"alice","nickname":"Alice","avatar":"","revision":0}
 {"type":"GROUP_SEND","requestId":"r2","content":"大家好\n第二行🙂"}
-{"type":"GROUP_MESSAGE","requestId":"r2","from":"alice","content":"大家好\n第二行🙂","serverTime":"2026-10-24T13:00:00Z"}
+{"type":"GROUP_MESSAGE","requestId":"r2","from":"alice","content":"大家好\n第二行🙂","serverTime":"2026-10-24T13:00:00Z","nickname":"Alice","messageId":"46538ebe-da93-423d-98ee-4bd116929586","conversationId":"GROUP:PUBLIC"}
 {"type":"PRIVATE_SEND","requestId":"r3","to":"bob","content":"P-001"}
-{"type":"PRIVATE_MESSAGE","requestId":"r3","from":"alice","to":"bob","content":"P-001","serverTime":"2026-10-24T13:00:01Z"}
+{"type":"PRIVATE_MESSAGE","requestId":"r3","from":"alice","to":"bob","content":"P-001","serverTime":"2026-10-24T13:00:01Z","nickname":"Alice","messageId":"7b89d42a-b45a-4dd7-95e5-6627b23c5de1","conversationId":"PRIVATE:alice:bob"}
 {"type":"ERROR","requestId":"r4","code":"USER_OFFLINE","message":"目标用户不在线，请重新选择"}
 {"type":"PING","requestId":"h1"}
 {"type":"PONG","requestId":"h1"}
+{"type":"PASSWORD_CHANGE","requestId":"p1","password":"example-pass","newPassword":"example-new"}
+{"type":"PASSWORD_CHANGED","requestId":"p1"}
 {"type":"LOGOUT"}
 ```
 
-发送成功回显只说明服务端完成当次转发写入，不保证接收者已读。断线边缘可能交付不确定；无消息补发、自动重试或窗口历史恢复，心跳也不提供消息送达确认。
+服务端回显是客户端的正式消息来源。私聊回显在目标连接写入成功后发送，群聊写入按就绪连接逐个进行。断线时投递结果可能不确定。重新登录会分页恢复本人授权归档，未确认发送需要用户自行处理。
 
 ## 注册、身份与导出扩展（2026-10-29）
 
-所有需要身份的业务请求（含每次导出翻页、个人资料、LOGOUT）必须来自已完成密码验证的就绪连接；握手后的未登录连接仅额外允许心跳。不采信请求的 userId/from 代替绑定身份。凭证就是服务端持有的连接会话，不能跨 Socket 复用，无独立 token/续签/固定 TTL；LOGOUT、EOF、读写失败、服务端关闭、心跳超时均令会话失效，新连接未认证。直接注册仍受接受后 10 秒绝对期限限制；HELLO 后注册由心跳保活。注册响应不建立身份，新客户端自动随后发送 LOGIN，收到 LOGIN_OK 才进入聊天。密码和昵称不写日志/聊天事件。
+所有身份业务请求（含历史和导出翻页、个人资料、改密和 LOGOUT）来自已完成密码验证的就绪连接。身份取自服务端连接会话。LOGOUT、EOF、读写失败、服务端关闭和心跳超时均令会话失效。直接注册仍受接受后 10 秒绝对期限限制，HELLO 后注册由心跳保活。注册响应不建立身份，客户端随后发送 LOGIN，收到 LOGIN_OK 才进入聊天。密码不进入聊天事件和日志，昵称可以作为展示字段随聊天事件发送。
 
 | 类型 | 方向 | 字段/结果 |
 | --- | --- | --- |
@@ -107,9 +113,9 @@ nickname strip 后 1～40 char；userId 沿用 1～20 ASCII 字母/数字/下划
 
 record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC 或 PRIVATE:按用户名排序的双方）、sender、recipient（群聊为 null）、content、messageType、sentAt（ISO 8601 UTC）。聊天回显另增加 messageId/conversationId，不以此提供幂等重试。记录按服务端生成时间升序写入，时钟回拨以持久化的上次时间钳制，相同时间按追加顺序。归档只保存路由时在线用户有权接收的公共消息、私聊双方消息，不保存离线投递或给新上线者补公共历史。
 
-游标为服务端随机标识，只保存在原认证连接中；开始时固定文件末尾，后续新消息不进入该快照。新导出替换旧游标，完成或连接结束关闭；每连接最多一个快照。不接受文件路径、任意偏移或他人的游标。客户端每次等待一页再请求一页，内存随单帧大小有界；JSON UTF-8 数组（保留 null recipient）、CSV 七列表头及 RFC 风格双引号/换行转义。文件发布失败会删除临时文件；服务端没有返回客户端本地路径的接口。
+游标为原认证连接私有的随机标识，开始时固定文件末尾，新消息不进入该快照。导出和历史查询各有一个独立快照，同类新请求替换旧游标，完成或连接结束时关闭。客户端消费一页后再请求下一页。导出为 JSON UTF-8 数组（保留 null recipient），或带七列表头和双引号转义的 CSV。客户端负责本地文件路径，发布失败会清理临时文件。
 
-本版本无兼容的无密码登录，须两端一起升级。TCP 尚无 TLS；文件归档是导出基础，不是自动历史回放或离线消息功能。
+TCP 尚无 TLS。现有归档用于本人历史恢复和导出，范围以账号此前收到的授权记录为准。
 
 ## 按会话导出（2026-10-30）
 
@@ -152,13 +158,13 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 
 聊天归档+投递与删除确认串行排序，防止删除前的实时消息在确认后重新进入本人窗口；新产生的消息正常保存。该顺序仍受原同步网络写入慢端限制，不代表全系统所有事件的全局顺序或送达确认。查询只回放本人此前有权接收的归档，不补上线前公共历史/离线投递。客户端以 messageId 合并历史与实时消息，不使用 requestId 去重；历史不增加未读。超时/失败显示可重试，删除超时结果可能已生效，重新加载核对。
 
-新客户端和服务端需一起升级到 v4，无版本协商。本轮不是跨连接 token、离线消息或多群扩展。
+这些历史查询与删除类型自 v4 引入，v6 沿用上述授权与分页规则。
 
 ## 消息展示昵称（2026-11-15，v4 可选扩展）
 
 实时 `GROUP_MESSAGE`、`PRIVATE_MESSAGE` 的 `nickname` 由服务端按已认证的 `from` 读取账号资料。发送请求中的 `from` 和 `nickname` 不参与决定正式事件的发送者或昵称。`HISTORY_PAGE` 按已授权记录的 `record.sender` 查阅账号当前昵称，作为帧顶层字段附加，离线账号也可解析。发送者无法查到资料或对端省略字段时，客户端显示稳定用户名。
 
-消息仍按 `from`、`to` 和会话标识路由。昵称随已授权的消息投递范围返回，私聊仅双方；不随消息附带头像文件、注册时间和其他资料。旧归档可直接查询，归档和 JSON/CSV 导出记录的字段保持原格式。已有 v4 实现可忽略额外的可选昵称，新客户端连接旧 v4 服务端时回退用户名。
+消息仍按 `from`、`to` 和会话标识路由。昵称随已授权的消息投递范围返回，私聊仅双方。头像通过 `DISPLAY_PROFILE` 同步，注册时间走本人资料接口。旧归档可直接查询，归档和 JSON/CSV 导出记录的字段保持原格式。缺少展示资料时，客户端使用消息携带的昵称，缺少昵称时回退用户名。
 
 ## 用户展示资料同步（2026-11-15，v5）
 
@@ -170,7 +176,7 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 
 ## 修改本人密码（v6）
 
-`PASSWORD_CHANGE` 由已认证的客户端发出。必填 `requestId`、`password`（当前密码）、`newPassword`（新密码）。可选 `userId` 必须与连接绑定账号一致，他人账号返回 `FORBIDDEN`，未认证返回 `NOT_AUTHENTICATED`。密码字段须为字符串。空值为 `MISSING_FIELD`，长度须为 6～128 UTF-16 单元，保留首尾空白。当前密码不匹配返回 `WRONG_PASSWORD`，新密码不符合长度条件返回 `INVALID_PASSWORD`。
+`PASSWORD_CHANGE` 由已认证的客户端发出。必填 `requestId`、`password`（当前密码）、`newPassword`（新密码）。可选 `userId` 必须与连接绑定账号一致，他人账号返回 `FORBIDDEN`，未认证返回 `NOT_AUTHENTICATED`。密码字段须为字符串。缺省或空字符串返回 `MISSING_FIELD`，长度超出 6～128 UTF-16 单元返回 `INVALID_PASSWORD`，保留首尾空白。当前密码不匹配返回 `WRONG_PASSWORD`。
 
 服务端校验当前密码后生成新随机盐，以现有 PBKDF2 参数计算散列。账号文件原子替换成功后才通过 `PASSWORD_CHANGED` 回复原请求编号，回复不含密码，不广播。存储失败返回 `STORAGE_ERROR`，旧密码依然有效。当前连接保持已登录状态，下次登录用新密码。
 

@@ -8,12 +8,13 @@ flowchart LR
     B -->|TCP UTF-8 JSON| C[ClientSession]
     C --> D[MessageRouter]
     D --> E[SessionRegistry]
+    D --> H[AccountStore / ChatArchive]
     D -->|群聊遍历就绪会话| F[所有在线客户端]
     D -->|私聊只查目标并回显| G[目标与发送者]
     B -->|带连接对象校验的 EDT 回调| A
 ```
 
-`common` 不依赖 Swing。`Message` 为不可变 record；列表在构造时复制。`MessageCodec` 用 Gson 严格解析并拒绝字段类型隐式转换。`FrameReader` 在有限长字节缓冲区上解码 UTF-8，支持 TCP 分包/粘包；超长在读取时拒绝。`Validation` 共享用户标识、正文规则。
+`common` 不依赖 Swing。`Message` 为不可变 record，列表在构造时复制。`MessageCodec` 用 Gson 严格解析。`FrameReader` 支持 TCP 分包和粘包，在 16 KiB 处检查大头像帧的类型前缀，允许的头像帧再读至 176 KiB 上限。解码后核对类型和长度，普通帧及归档记录保持原上限。
 
 ## 服务端并发
 
@@ -35,7 +36,7 @@ ClientSession 用 AtomicBoolean 保证清理一次。先关闭 Socket（不等�
 
 ## 客户端与 EDT
 
-每次连接创建独立 Connection 对象，包含新 Socket、原子请求编号、单线程发送执行器及最多 64 项等待队列、一个读取线程。连接/DNS/登录写入都在发送线程；成功发出 LOGIN 后启动读取线程，收到 LOGIN_OK 才将状态切到 CONNECTED。界面按钮仅校验和入队，不执行网络写入。
+每次连接创建独立 Connection 对象，包含新 Socket、原子请求编号、单线程发送执行器及最多 64 项等待队列、一个读取线程。发送线程完成 DNS 和 TCP 连接，发出 HELLO 或直登 LOGIN，再启动读取线程。界面走 HELLO 时，收到 HELLO_OK 后可输入注册或登录资料。收到 LOGIN_OK 才进入 CONNECTED，所有协议写入在后台执行。
 
 客户端传入 `SwingUtilities::invokeLater` 作为回调执行器。每个回调在实际执行时检查 `active == connection`，所以已排队的旧 EDT 回调不会覆盖新连接。旧读取线程发生异常时也仅能终止自己的 Connection。发送出错关闭当前连接并明确提示“未确认”，不自动重发。
 
@@ -75,7 +76,7 @@ MessageRouter 对所有业务统一检查 ready（HELLO 与握手后的 PING/PON
 
 ChatArchive 将路由时在线可访问者的聊天事件追加到其账号 JSONL 文件，稳定 UUID、公共或双方会话 ID、ISO 时间由服务端生成。归档先于网络投递，归档存在不证明已送达；跨多个账号文件的写入没有事务保证，磁盘故障可能部分落盘并返回 STORAGE_ERROR，无自动重试。服务端提供本人授权归档的历史分页加载与导出；不提供任意文件或他人用户查询、离线投递。
 
-每连接最多一份 RandomAccessFile 快照，固定末尾和随机游标，单条响应后由客户端请求下一条；文件读取有 16 KiB 行上限，关闭/完成/替换会释放句柄。HistoryExport 逐条写 JSON/CSV，不积累全部记录；ChatClient 按 requestId 关联导出、独立逐页超时，晚到的取消响应忽略；完成原子移动、失败删除临时文件，经回调执行器通知 EDT。旧短连接注册 API 保留；新版启动页在握手连接注册后自动 LOGIN。本人资料单独展示与编辑，现有列表/私聊仍按稳定用户名路由。
+每连接的历史查询和导出各有一个独立 RandomAccessFile 快照，使用固定末尾和随机游标。客户端消费一条再请求下一条。归档读取有 16 KiB 行上限，关闭、完成或替换时释放句柄。HistoryExport 逐条写 JSON/CSV。ChatClient 按 requestId 关联导出，逐页计时，经回调执行器通知 EDT。已确认覆盖的导出使用原子替换，首次写入拒绝覆盖后来出现的同名文件，失败会清理临时文件。
 
 ## 启动认证与个人资料组件（2026-10-30）
 
@@ -83,7 +84,7 @@ ChatClient 新增 SERVER_CONNECTED（仅完成 HELLO）与 AUTHENTICATING；保�
 
 ChatWindow 通过 CardLayout 在 WelcomePanel 与 ResponsiveShell 之间切换；ConnectionPanel 只负责地址/端口，AuthenticationPanel 管理登录/注册表单，WelcomePanel 桌面分栏、窄屏纵向滚动。UserIdentityButton、ProfilePanel、ProfileAvatar 独立呈现本人资料，避免把会话展示元数据和路由用户名混用。显式退出清除 Store 身份及草稿；切换账号改由下节 ClientSessions 延迟交接，故障重连保留原有窗口历史策略。
 
-AccountStore 新增可选头像/创建时间，兼容旧 JSON；资料修改先原子替换文件，再替换内存账号，不重算/返回盐或散列。头像本地选图后由 AvatarImporter 在 SwingWorker 内限制文件/像素、中心裁剪到 48×48 PNG，服务端 AvatarData 再限长、验格式和尺寸；展示解码只用内存，不在 EDT 读取用户文件。资料请求独立计时、忽略迟到响应，不阻断正常聊天。资料仅本人可读写，当前不广播联系人头像/昵称。
+AccountStore 支持兼容旧 JSON 的可选头像和创建时间。本人资料修改先原子替换文件，再更新内存账号。v6 的 AvatarImporter 在 SwingWorker 内限制原图大小和像素，并按原图短边选择 256 或 512 像素方形输出，AvatarData 再校验尺寸、格式和长度。展示资料另行同步，本人注册时间仍通过本人资料响应提供。改密使用独立请求编号验证当前密码，在服务端生成新盐及散列后原子更新，原会话继续使用。改密和资料响应各自计时，客户端会忽略对应的迟到回执。
 
 ## 系统文件对话框与密码显隐（2026-10-31）
 
