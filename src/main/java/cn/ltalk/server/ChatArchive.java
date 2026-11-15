@@ -22,7 +22,8 @@ final class ChatArchive {
             catch (RuntimeException ex) { throw new IOException("历史时间元数据损坏", ex); }
         }
     }
-    synchronized Message record(MessageType type, String sender, Message request, Collection<String> recipients) throws IOException {
+    synchronized Message record(MessageType type, String sender, String nickname, Message request,
+                                Collection<String> recipients) throws IOException {
         Instant now = Instant.now(); if (now.isBefore(last)) now = last; last = now;
         Files.writeString(directory.resolve("last-time"), now.toString());
         String conversation = type == MessageType.GROUP_MESSAGE ? "GROUP:PUBLIC" :
@@ -33,7 +34,7 @@ final class ChatArchive {
         byte[] line = (gson.toJson(record) + "\n").getBytes(StandardCharsets.UTF_8);
         for (String user : new HashSet<>(recipients)) Files.write(directory.resolve(AccountStore.fileKey(user) + ".jsonl"), line,
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-        return Message.of(type).requestId(request.requestId()).from(sender).to(record.recipient())
+        return Message.of(type).requestId(request.requestId()).from(sender).nickname(nickname).to(record.recipient())
                 .content(record.content()).serverTime(record.sentAt()).messageId(id).conversationId(conversation).build();
     }
     synchronized Cursor open(String user) throws IOException {

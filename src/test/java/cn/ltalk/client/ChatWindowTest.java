@@ -331,11 +331,12 @@ class ChatWindowTest {
                 bob.privateTo("alice","离线联系人历史"); alice.type(MessageType.PRIVATE_MESSAGE); bob.type(MessageType.PRIVATE_MESSAGE);
             }
             awaitEdt(() -> server.onlineCount()==0);
+            server.accounts().updateProfile("bob", "离线昵称", "");
             onEdt(() -> ref.set(new ChatWindow("127.0.0.1",Integer.toString(server.port()),"alice",appearanceDirectory.resolve("history.properties"))));
             ChatWindow window=ref.get(); login(window);
-            awaitEdt(() -> history(window).contains("历史公共一") && history(window).contains("历史公共二") && label(window,"status").getText().contains("已加载"));
+            awaitEdt(() -> history(window).contains("历史公共一") && history(window).contains("[离线昵称] 历史公共二") && label(window,"status").getText().contains("已加载"));
             onEdt(() -> {
-                selectPeer(window,"bob"); assertTrue(history(window).contains("离线联系人历史")); assertFalse(button(window,"send").isEnabled());
+                selectPeer(window,"bob"); assertTrue(history(window).contains("[离线昵称] 离线联系人历史")); assertFalse(button(window,"send").isEnabled());
                 button(window,"group").doClick(); area(window,"input").setText("删除不影响草稿");
                 render(window,1000,760,"history-restored.png");
                 JMenuItem item=messageDelete(window,"历史公共一"); assertNotNull(item); assertTrue(item.isEnabled());
@@ -355,6 +356,16 @@ class ChatWindowTest {
             try (Peer bob=Peer.login(server.port(),"bob")) {
                 bob.send(Message.of(MessageType.HISTORY_REQUEST).requestId("other-copy").build());
                 assertEquals("历史公共一",bob.type(MessageType.HISTORY_PAGE).record().content());
+                bob.send(Message.of(MessageType.PROFILE_UPDATE).requestId("rename").nickname("实时昵称").avatar("").build());
+                assertEquals("实时昵称", bob.type(MessageType.PROFILE_OK).nickname());
+                bob.privateTo("alice", "实时私聊");
+                awaitEdt(() -> history(reopened).contains("[实时昵称] 实时私聊"));
+                onEdt(() -> button(reopened, "group").doClick());
+                bob.send(Message.of(MessageType.GROUP_SEND).requestId("forged-name").from("alice")
+                        .nickname("伪造昵称").content("实时群聊").build());
+                Message echo = bob.type(MessageType.GROUP_MESSAGE);
+                assertEquals("bob", echo.from()); assertEquals("实时昵称", echo.nickname());
+                awaitEdt(() -> history(reopened).contains("[实时昵称] 实时群聊"));
             }
         } finally { if(ref.get()!=null) onEdt(() -> ref.get().dispatchEvent(new WindowEvent(ref.get(),WindowEvent.WINDOW_CLOSING))); }
     }

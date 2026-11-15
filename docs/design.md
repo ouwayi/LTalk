@@ -57,6 +57,8 @@ ChatWindow 只组装界面与调用原有网络入口；client/ui 下的 Convers
 
 外观由窗口持有的 AppearanceSettings 和 ThemePalette 管理，ChatTheme 按语义角色更新组件，MessageTimeline 按色板失效已有气泡缓存；切换主题不创建新连接或清空会话。WallpaperPanel 只绘制选定的纯色/渐变，ChatPopupMenu 为各菜单提供统一样式。AppearancePanel 维护独立预览草稿，应用后由 AppearancePreferences 在本机用户目录保存外观参数；读写失败不影响聊天业务。
 
+消息展示昵称由路由层按账号读取。实时事件使用发送时的昵称，历史页在读取授权归档后查找当前昵称。历史页的昵称位于外层响应，归档与导出复用原 ChatRecord。客户端将昵称传入 ConversationStore 的展示条目，MessageTimeline 按稳定账号分组并用视口坐标计算头像位置。数据传递与绘制各自在网络线程和 EDT 延续既有分工。
+
 2026-11-02 外观增量：暗色面板/次级表面改为中性近黑，默认背景墨黑渐变；旧 v1 默认色对在加载时映射至墨黑，其他自选配色保留，新保存为外观配置 v2（与聊天协议 v4 无关）。ColorField 封装 HEX 与色盘入口，ColorPicker 在 EDT 用 HSV 模型支持拖动及键盘调色，只更新外观草稿。ChatTheme 统一按钮的单次文字绘制与禁用色，避免默认禁用浮雕文字重影；网络、认证和会话状态不变。
 
 ## 取舍

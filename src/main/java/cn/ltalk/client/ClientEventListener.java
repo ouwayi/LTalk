@@ -1,6 +1,7 @@
 package cn.ltalk.client;
 
 import cn.ltalk.common.Message;
+import cn.ltalk.common.ChatRecord;
 
 /** Callbacks run on the executor supplied to ChatClient; Swing supplies the EDT. */
 public interface ClientEventListener {
@@ -14,7 +15,8 @@ public interface ClientEventListener {
     default void onExported(java.nio.file.Path path) { }
     default void onProfile(cn.ltalk.common.UserProfile profile) { }
     default void onHistoryStarted() { }
-    default void onHistoryRecord(cn.ltalk.common.ChatRecord record) { }
+    default void onHistoryRecord(ChatRecord record) { }
+    default void onHistoryRecord(ChatRecord record, String nickname) { onHistoryRecord(record); }
     default void onHistoryComplete() { }
     default void onHistoryDeleted(String scope, String messageId) { }
 }

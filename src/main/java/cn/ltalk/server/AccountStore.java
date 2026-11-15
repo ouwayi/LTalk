@@ -62,6 +62,10 @@ public final class AccountStore {
         if (a == null) throw new ProtocolException("NOT_AUTHENTICATED", "账号不存在");
         return new UserProfile(a.userId(), a.nickname(), Objects.toString(a.avatar(), ""), a.createdAt());
     }
+    synchronized String nickname(String id) {
+        Account account = accounts.get(id);
+        return account == null ? null : account.nickname();
+    }
     public synchronized UserProfile updateProfile(String id, String nickname, String avatar) throws IOException {
         if (nickname == null || nickname.isBlank()) throw new ProtocolException("MISSING_FIELD", "请填写昵称");
         if (nickname.strip().length() > 40) throw new ProtocolException("INVALID_NICKNAME", "昵称最多 40 字符");

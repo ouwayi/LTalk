@@ -61,7 +61,7 @@ final class HistoryChannel implements AutoCloseable {
                 reading = null;
                 event(() -> {
                     if (generation != revision) return;
-                    listener.onHistoryRecord(record);
+                    listener.onHistoryRecord(record, message.nickname());
                     synchronized (HistoryChannel.this) { if (!closed && generation == revision) page(message.cursor()); }
                 });
             } catch (IOException | RuntimeException ex) { readFailed("历史加载失败：" + ex.getMessage()); }

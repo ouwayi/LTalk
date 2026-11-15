@@ -21,9 +21,9 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 | LOGIN | C → S | requestId, userId, password | 成功 LOGIN_OK；HELLO 模式失败保留连接，直接登录失败关闭 |
 | LOGIN_OK | S → 当前 C | requestId, userId, nickname, avatar, createdAt（旧账号可缺省） | 客户端切为 CONNECTED |
 | GROUP_SEND | C → S | requestId, content | 当前全部就绪会话收到 GROUP_MESSAGE，包括发送者 |
-| GROUP_MESSAGE | S → 在线 C | requestId, from, content, serverTime | 群聊展示，以服务端事件为唯一正式回显 |
+| GROUP_MESSAGE | S → 在线 C | requestId, from, content, serverTime, nickname（可选） | 群聊展示，以服务端事件为唯一正式回显 |
 | PRIVATE_SEND | C → S | requestId, to, content | 先写目标，成功后回显发送者；失败只向发送者 ERROR |
-| PRIVATE_MESSAGE | S → 私聊双方 | requestId, from, to, content, serverTime | 仅双方收包，不通过广播 |
+| PRIVATE_MESSAGE | S → 私聊双方 | requestId, from, to, content, serverTime, nickname（可选） | 仅双方收包，不通过广播 |
 | USER_LIST | S → 在线 C | users: string[], revision: 非负 long | 全量列表，按较新版本覆盖 |
 | SYSTEM | S → 在线 C | content, serverTime | 上下线提示，不作为列表数据来源 |
 | ERROR | S → 当前 C | code, message, requestId（可选） | 本次请求失败；能识别合法 requestId 时附回 |
@@ -143,7 +143,7 @@ avatar 为 Base64 编码的 48×48 PNG，解码后最多 10240 字节；空串�
 | 类型 | 字段/行为 |
 | --- | --- |
 | HISTORY_REQUEST | requestId；首次无 cursor，开始本人归档固定末尾快照；可选 conversationId 筛选。后续 cursor、范围须匹配，跨连接/范围拒绝 |
-| HISTORY_PAGE | requestId, cursor, record；每页一条，与导出模型一致，客户端展示消费后再请求下一页 |
+| HISTORY_PAGE | requestId, cursor, record, nickname（可选，顶层）；每页一条，record 与导出模型一致，客户端展示消费后再请求下一页 |
 | HISTORY_END | requestId；无剩余记录，空归档直接返回 |
 | HISTORY_DELETE | requestId, conversationId（必填）；无 messageId 清空当前会话的本人副本，有 messageId 删除本会话中该条本人副本。userId 可省略/本人；不接受他人文件/任意路径 |
 | HISTORY_DELETED | requestId, conversationId, messageId（逐条时）；仅在本人文件替换成功后确认，不广播给对方 |
@@ -153,3 +153,9 @@ avatar 为 Base64 编码的 48×48 PNG，解码后最多 10240 字节；空串�
 聊天归档+投递与删除确认串行排序，防止删除前的实时消息在确认后重新进入本人窗口；新产生的消息正常保存。该顺序仍受原同步网络写入慢端限制，不代表全系统所有事件的全局顺序或送达确认。查询只回放本人此前有权接收的归档，不补上线前公共历史/离线投递。客户端以 messageId 合并历史与实时消息，不使用 requestId 去重；历史不增加未读。超时/失败显示可重试，删除超时结果可能已生效，重新加载核对。
 
 新客户端和服务端需一起升级到 v4，无版本协商。本轮不是跨连接 token、离线消息或多群扩展。
+
+## 消息展示昵称（2026-11-15，v4 可选扩展）
+
+实时 `GROUP_MESSAGE`、`PRIVATE_MESSAGE` 的 `nickname` 由服务端按已认证的 `from` 读取账号资料。发送请求中的 `from` 和 `nickname` 不参与决定正式事件的发送者或昵称。`HISTORY_PAGE` 按已授权记录的 `record.sender` 查阅账号当前昵称，作为帧顶层字段附加，离线账号也可解析。发送者无法查到资料或对端省略字段时，客户端显示稳定用户名。
+
+消息仍按 `from`、`to` 和会话标识路由。昵称随已授权的消息投递范围返回，私聊仅双方；不随消息附带头像文件、注册时间和其他资料。旧归档可直接查询，归档和 JSON/CSV 导出记录的字段保持原格式。已有 v4 实现可忽略额外的可选昵称，新客户端连接旧 v4 服务端时回退用户名。

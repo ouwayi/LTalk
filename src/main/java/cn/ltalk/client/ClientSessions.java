@@ -93,7 +93,7 @@ public final class ClientSessions implements AutoCloseable {
         @Override public void onSystem(Message message) { if (active()) listener.onSystem(message); }
         @Override public void onExported(Path path) { if (active()) listener.onExported(path); }
         @Override public void onHistoryStarted() { if (active()) listener.onHistoryStarted(); }
-        @Override public void onHistoryRecord(ChatRecord record) { if (active()) listener.onHistoryRecord(record); }
+        @Override public void onHistoryRecord(ChatRecord record, String nickname) { if (active()) listener.onHistoryRecord(record, nickname); }
         @Override public void onHistoryComplete() { if (active()) listener.onHistoryComplete(); }
         @Override public void onHistoryDeleted(String scope, String id) { if (active()) listener.onHistoryDeleted(scope, id); }
     }

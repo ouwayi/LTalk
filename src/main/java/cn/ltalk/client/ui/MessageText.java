@@ -26,6 +26,8 @@ final class MessageText extends JTextPane {
         setEditable(false); setOpaque(false); setBorder(null); setMargin(new Insets(0, 0, 0, 0));
         setFont(normal); setForeground(palette.text()); setCaretColor(palette.text()); setName("messageText");
         setSelectionColor(ChatTheme.BLUE); setSelectedTextColor(Color.WHITE);
+        // Building a read-only message must not scroll the enclosing timeline to its new caret position.
+        if (getCaret() instanceof DefaultCaret caret) caret.setUpdatePolicy(DefaultCaret.NEVER_UPDATE);
         SimpleAttributeSet base = new SimpleAttributeSet();
         StyleConstants.setFontFamily(base, normal.getFamily()); StyleConstants.setFontSize(base, 15);
         StyleConstants.setForeground(base, palette.text());

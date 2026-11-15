@@ -11,8 +11,14 @@ import java.util.*;
 /** EDT-confined presentation state; no sockets, protocol changes, persistence or delivery claims. */
 public final class ConversationStore {
     public enum EntryKind { MESSAGE, SYSTEM, ERROR }
-    public record Entry(EntryKind kind, String from, String to, String content, Instant time, String messageId) {
+    public record Entry(EntryKind kind, String from, String to, String content, Instant time, String messageId, String nickname) {
         public Entry(EntryKind kind, String from, String to, String content, Instant time) { this(kind, from, to, content, time, null); }
+        public Entry(EntryKind kind, String from, String to, String content, Instant time, String messageId) {
+            this(kind, from, to, content, time, messageId, null);
+        }
+        public String displayName() {
+            return nickname == null || nickname.isBlank() ? from : nickname.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ');
+        }
     }
     public record Summary(ConversationId id, String title, String preview, Instant time, int unread, boolean online) { }
 
@@ -115,8 +121,11 @@ public final class ConversationStore {
         }
     }
     public ConversationId restore(ChatRecord record) {
+        return restore(record, null);
+    }
+    public ConversationId restore(ChatRecord record, String nickname) {
         return receive(Message.of(MessageType.valueOf(record.messageType())).messageId(record.messageId()).from(record.sender())
-                .to(record.recipient()).content(record.content()).serverTime(record.sentAt()).build(), true);
+                .to(record.recipient()).content(record.content()).serverTime(record.sentAt()).nickname(nickname).build(), true);
     }
     private ConversationId receive(Message message, boolean historical) {
         boolean group = message.type() == MessageType.GROUP_MESSAGE;
@@ -126,7 +135,7 @@ public final class ConversationStore {
         if (firstLive && !self.equals(message.from()) && !(visible && selected.equals(conversation.id))) conversation.unread++;
         if (message.messageId() != null && !messageIds.add(message.messageId())) return conversation.id;
         Instant time = parseTime(message.serverTime());
-        Entry entry = new Entry(EntryKind.MESSAGE, message.from(), message.to(), message.content(), time, message.messageId());
+        Entry entry = new Entry(EntryKind.MESSAGE, message.from(), message.to(), message.content(), time, message.messageId(), message.nickname());
         int index = Collections.binarySearch(conversation.entries, entry, Comparator.comparing(Entry::time));
         if (index < 0) index = -index - 1;
         else while (index < conversation.entries.size() && !conversation.entries.get(index).time().isAfter(time)) index++;

@@ -183,9 +183,9 @@ class AuthenticationExportTest {
         ChatArchive archive = new ChatArchive(directory.resolve("history"));
         try (ChatArchive.Cursor empty = archive.open("Alice")) { assertNull(empty.next()); }
         Message request = Message.of(MessageType.GROUP_SEND).content("\"\n中文🙂").build();
-        for (int i = 0; i < 400; i++) archive.record(MessageType.GROUP_MESSAGE, "alice", request, List.of("alice"));
+        for (int i = 0; i < 400; i++) archive.record(MessageType.GROUP_MESSAGE, "alice", "Alice", request, List.of("alice"));
         try (ChatArchive.Cursor cursor = archive.open("alice")) {
-            archive.record(MessageType.GROUP_MESSAGE, "alice", request, List.of("alice"));
+            archive.record(MessageType.GROUP_MESSAGE, "alice", "Alice", request, List.of("alice"));
             int count = 0;
             while (cursor.next() != null) count++;
             assertEquals(400, count, "Snapshot must exclude subsequent appends");

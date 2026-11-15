@@ -261,8 +261,11 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         renderTimeline();
     }
     private void renderTimeline() {
+        renderTimeline(false);
+    }
+    private void renderTimeline(boolean keepReadingPosition) {
         timeline.deletion(connectionState == ChatClient.State.CONNECTED && !historyLoading && !deletingHistory, this::deleteMessage);
-        timeline.showEntries(store.entries(), store.self(), messageSearch.getText(), connectionState == ChatClient.State.CONNECTED);
+        timeline.showEntries(store.entries(), store.self(), messageSearch.getText(), connectionState == ChatClient.State.CONNECTED, keepReadingPosition);
     }
     private void refreshList() {
         refreshingList = true;
@@ -312,8 +315,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     @Override public void onHistoryStarted() {
         historyLoading = true; historyCount = 0; store.beginHistory(); setStatus("正在加载本人聊天记录…", false); refreshHistoryView();
     }
-    @Override public void onHistoryRecord(ChatRecord record) {
-        store.restore(record); historyCount++; if (!historyRender.isRunning()) historyRender.start();
+    @Override public void onHistoryRecord(ChatRecord record, String nickname) {
+        store.restore(record, nickname); historyCount++; if (!historyRender.isRunning()) historyRender.start();
     }
     @Override public void onHistoryComplete() {
         historyLoading = false; historyRender.stop(); refreshHistoryView(); setStatus("聊天记录已加载 · " + historyCount + " 条", false);
@@ -369,14 +372,14 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     @Override public void onPrivate(Message message) { receiveChat(message); }
     private void receiveChat(Message message) {
         ConversationId destination = store.receive(message); refreshList();
-        if (destination.equals(store.selectedId())) renderTimeline();
+        if (destination.equals(store.selectedId())) renderTimeline(true);
     }
     @Override public void onUserList(Message message) {
         if (store.updateUsers(message.users())) store.notice(store.selectedId(), "私聊对象已离线，草稿保留；请重新选择会话。", false);
         refreshList(); refreshConversation();
     }
     @Override public void onSystem(Message message) {
-        store.system(message.content()); if (store.selectedId().equals(ConversationId.PUBLIC)) renderTimeline();
+        store.system(message.content()); if (store.selectedId().equals(ConversationId.PUBLIC)) renderTimeline(true);
     }
     @Override public void onError(Message message) {
         if (message.code() != null && message.code().startsWith("HISTORY_")) { historyLoading = false; deletingHistory = false; historyRender.stop(); }

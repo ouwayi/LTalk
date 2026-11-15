@@ -3,7 +3,11 @@ package cn.ltalk.client.ui;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import javax.swing.*;
+import javax.imageio.ImageIO;
 import java.awt.*;
+import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.nio.file.*;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -11,6 +15,125 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 class MessageTimelineTest {
+    @Test void groupHeadUsesNicknameAndGroupingSurvivesSearchAndRemoval() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            MessageTimeline timeline = new MessageTimeline();
+            var first = message("bob", "同名", "开头");
+            var second = message("bob", "同名", "命中一");
+            var another = message("carol", "同名", "隔开");
+            var third = message("bob", "同名", "命中二");
+            var own = message("alice", "我的昵称", "我的消息");
+            var fallback = message("legacy", null, "旧服务端");
+            var nextDay = new ConversationStore.Entry(ConversationStore.EntryKind.MESSAGE, "legacy", null, "隔天",
+                    Instant.EPOCH.plusSeconds(86400), null, null);
+            var notice = new ConversationStore.Entry(ConversationStore.EntryKind.SYSTEM, "", "", "提示", nextDay.time());
+            var afterNotice = new ConversationStore.Entry(ConversationStore.EntryKind.MESSAGE, "legacy", null, "提示后",
+                    nextDay.time(), null, null);
+            timeline.showEntries(List.of(first, second, another, third, own, fallback, nextDay, notice, afterNotice), "alice", "", true);
+            assertEquals(List.of("同名", "同名", "同名", "legacy", "legacy", "legacy"), visibleSenders(timeline));
+            assertTrue(timeline.renderedText().contains("[我] 我的消息"));
+            timeline.showEntries(List.of(first, second, another, third), "alice", "命中", true);
+            assertEquals(List.of("同名", "同名"), visibleSenders(timeline), "Filtering an intervening sender must not merge separate runs");
+            timeline.showEntries(List.of(first, second, another, third), "alice", "同名", true);
+            assertTrue(timeline.renderedText().contains("隔开"));
+            timeline.showEntries(List.of(second, third), "alice", "", true);
+            assertEquals(List.of("同名"), visibleSenders(timeline), "First surviving row must acquire the sender label");
+        });
+    }
+
+    @Test void avatarFollowsTheVisibleRunAndDisappearsAfterItsLastBubbleScrollsOff() throws Exception {
+        AtomicReference<MessageTimeline> ref = new AtomicReference<>();
+        List<ConversationStore.Entry> entries = new ArrayList<>();
+        for (int i = 0; i < 8; i++) entries.add(message("bob", "小波", "连续消息 " + i));
+        for (int i = 0; i < 8; i++) entries.add(message("alice", "我", "后续消息 " + i));
+        entries.add(8, message("carol", "小陈", "下一组"));
+        SwingUtilities.invokeAndWait(() -> {
+            MessageTimeline timeline = new MessageTimeline(); ref.set(timeline);
+            timeline.setSize(420, 680); timeline.showEntries(entries.subList(0, 8), "alice", "", true); layout(timeline); layout(timeline);
+        });
+        SwingUtilities.invokeAndWait(() -> {
+            MessageTimeline timeline = ref.get(); JViewport view = timeline.getViewport();
+            List<JTextPane> bodies = new ArrayList<>(); collect(timeline, bodies);
+            Component lastBobRow = bodies.get(7).getParent().getParent();
+            int runBottom = lastBobRow.getY() + lastBobRow.getHeight();
+            view.setViewPosition(new Point(0, 0));
+            BufferedImage complete = paint(view);
+            assertEquals(List.of(runBottom - 38), avatarTops(complete));
+            save(complete, "message-run-complete.png");
+        });
+        SwingUtilities.invokeAndWait(() -> {
+            MessageTimeline timeline = ref.get(); JViewport view = timeline.getViewport();
+            timeline.setSize(360, 240); timeline.showEntries(entries, "alice", "", true);
+            layout(timeline); layout(timeline);
+        });
+        SwingUtilities.invokeAndWait(() -> {
+            MessageTimeline timeline = ref.get(); JViewport view = timeline.getViewport();
+            List<JTextPane> bodies = new ArrayList<>(); collect(timeline, bodies);
+            Component lastBobRow = bodies.get(7).getParent().getParent();
+            int runBottom = lastBobRow.getY() + lastBobRow.getHeight();
+
+            view.setViewPosition(new Point(0, 80));
+            assertTrue(runBottom > view.getViewRect().y + view.getHeight());
+            BufferedImage clipped = paint(view);
+            assertEquals(List.of(view.getHeight() - 38), avatarTops(clipped));
+            save(clipped, "message-run-pinned.png");
+
+            int nextTop = bodies.get(8).getParent().getParent().getY();
+            view.setViewPosition(new Point(0, nextTop - view.getHeight() + 1));
+            assertEquals(2, avatarTops(paint(view)).size(), "Two visible groups keep separate avatars at the viewport edge");
+            view.setViewPosition(new Point(0, runBottom - 12));
+            assertEquals(0, avatarTops(paint(view)).get(0), "The visible tail keeps its avatar");
+            view.setViewPosition(new Point(0, runBottom));
+            assertEquals(1, avatarTops(paint(view)).size(), "Only the next sender's avatar remains");
+            view.setViewPosition(new Point(0, 80));
+            assertEquals(80, view.getViewPosition().y);
+            entries.add(message("alice", null, "新消息"));
+            timeline.showEntries(entries, "alice", "", true, true); layout(timeline); layout(timeline);
+            assertEquals(80, view.getViewPosition().y, "Immediate layout must preserve position");
+        });
+        SwingUtilities.invokeAndWait(() -> assertEquals(80, ref.get().getViewport().getViewPosition().y));
+    }
+
+    private static ConversationStore.Entry message(String user, String nickname, String content) {
+        return new ConversationStore.Entry(ConversationStore.EntryKind.MESSAGE, user, null, content, Instant.EPOCH, null, nickname);
+    }
+    private static List<String> visibleSenders(Container container) {
+        List<String> result = new ArrayList<>();
+        for (Component component : container.getComponents()) {
+            if (!component.isVisible()) continue;
+            if (component instanceof JLabel label && !label.getText().matches("[0-9]{2}:[0-9]{2}")) result.add(label.getText());
+            else if (component instanceof Container nested) result.addAll(visibleSenders(nested));
+        }
+        return result;
+    }
+    private static BufferedImage paint(JViewport view) {
+        BufferedImage image = new BufferedImage(view.getWidth(), view.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = image.createGraphics();
+        g.setColor(Color.WHITE); g.fillRect(0, 0, image.getWidth(), image.getHeight());
+        view.printAll(g); g.dispose();
+        return image;
+    }
+    private static List<Integer> avatarTops(BufferedImage image) {
+        List<Integer> tops = new ArrayList<>();
+        boolean previous = false;
+        for (int y = 0; y < image.getHeight(); y++) {
+            boolean colored = false;
+            for (int x = 12; x < 44 && !colored; x++) {
+                Color pixel = new Color(image.getRGB(x, y));
+                colored = Math.max(pixel.getRed(), Math.max(pixel.getGreen(), pixel.getBlue()))
+                        - Math.min(pixel.getRed(), Math.min(pixel.getGreen(), pixel.getBlue())) > 25;
+            }
+            if (colored && !previous) tops.add(y);
+            previous = colored;
+        }
+        return tops;
+    }
+    private static void save(BufferedImage image, String name) {
+        try {
+            Path directory = Files.createDirectories(Path.of("target", "ui-preview"));
+            ImageIO.write(image, "png", directory.resolve(name).toFile());
+        } catch (IOException ex) { throw new AssertionError(ex); }
+    }
     @Test void equalValuedEventsRemainSeparateWhenAppendingAndSwitchingIdentity() throws Exception {
         SwingUtilities.invokeAndWait(() -> {
             MessageTimeline timeline = new MessageTimeline();

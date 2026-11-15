@@ -73,7 +73,7 @@ final class MessageRouter {
                 case GROUP_SEND -> {
                     validateChat(request);
                     var recipients = registry.readySessions();
-                    Message event = server.archive().record(MessageType.GROUP_MESSAGE, session.userId, request,
+                    Message event = server.archive().record(MessageType.GROUP_MESSAGE, session.userId, server.accounts().nickname(session.userId), request,
                             recipients.stream().map(s -> s.userId).toList());
                     for (ClientSession recipient : recipients) server.deliver(recipient, event);
                 }
@@ -86,7 +86,7 @@ final class MessageRouter {
                     ClientSession target = registry.findReady(request.to());
                     if (target == null)
                         throw new ProtocolException("USER_OFFLINE", "目标用户不在线，请重新选择");
-                    Message event = server.archive().record(MessageType.PRIVATE_MESSAGE, session.userId, request,
+                    Message event = server.archive().record(MessageType.PRIVATE_MESSAGE, session.userId, server.accounts().nickname(session.userId), request,
                             List.of(session.userId, target.userId));
                     if (!server.deliver(target, event)) throw new ProtocolException("USER_OFFLINE", "目标用户不在线，请重新选择");
                     server.deliver(session, event);
@@ -159,7 +159,10 @@ final class MessageRouter {
             ChatRecord record = session.historyCursor.next();
             if (record == null) {
                 session.closeHistory(); server.deliver(session, Message.of(MessageType.HISTORY_END).requestId(request.requestId()).build());
-            } else server.deliver(session, Message.of(MessageType.HISTORY_PAGE).requestId(request.requestId()).cursor(session.historyCursor.token).record(record).build());
+            } else {
+                server.deliver(session, Message.of(MessageType.HISTORY_PAGE).requestId(request.requestId())
+                        .cursor(session.historyCursor.token).nickname(server.accounts().nickname(record.sender())).record(record).build());
+            }
         }
     }
 

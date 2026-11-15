@@ -1,6 +1,14 @@
 # 测试报告与验收记录
 
-## 当前最新回归（2026-11-02）
+## 当前最新回归（2026-11-15）
+
+阶段 19 最终 `powershell -NoProfile -File .\build.ps1 -o package` 通过 **96 项，0 失败、错误或跳过，约 1:18**，生成含依赖 JAR。日志为 `.tools/message-group-final.log`。Windows/JDK 25.0.4/Maven 3.9.9，以 release 17 编译。
+
+MessageTimelineTest 新增两项，验证同名不同账号不合并、分组条件、筛选不跨原组、删首条后重新显示昵称，以及完整组、窄屏组尾截断、头像避让、尾部移出和阅读位置。ChatWindowTest 扩展真实 TCP 历史恢复和删除场景，校验离线账号当前昵称、改名后的实时群聊与私聊、服务端忽略伪造发送者/昵称。原归档与导出测试保留。
+
+首次 22 项专项出现一项阅读位置失败，定位到新气泡初始化触发 Swing 文本光标的延迟滚动，让只读正文与提示的初始化不移动光标后，4 项时间线测试通过。补齐相邻头像避让检查后执行最终完整回归。检查 `target/ui-preview/message-run-complete.png` 和 `message-run-pinned.png`。本轮验证以 EDT 组件渲染和本机回环 TCP 为主，未进行多机或不同 DPI 的人工验收。
+
+## 历史回归（2026-11-02）
 
 阶段 18 最终 `powershell -NoProfile -File .\build.ps1 -o package`：**94/0/0/0，BUILD SUCCESS，约 1:18**，日志 `.tools/appearance-final.log`，已重新打包。Windows/JDK 25.0.4/Maven 3.9.9、release 17。原 89 项保留，新增 ColorPickerTest 3 项、ThemeRenderingTest 1 项、AppearancePreferencesTest 1 项；没有协议变更。
 
