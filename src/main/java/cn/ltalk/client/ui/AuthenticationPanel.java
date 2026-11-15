@@ -20,7 +20,7 @@ public final class AuthenticationPanel extends JPanel {
         super(new GridBagLayout()); ChatTheme.surface(this); setBorder(new EmptyBorder(24, 24, 24, 24));
         setName("authenticationPanel"); user = ChatTheme.field(initialUser == null ? "" : initialUser, "userId");
         password.setName("password"); confirmation.setName("passwordConfirmation");
-        stylePassword(password); stylePassword(confirmation); random.setName("randomUsername"); random.setOpaque(false);
+        random.setName("randomUsername"); random.setOpaque(false);
         passwordInput = new PasswordInput(password, "showPassword"); confirmationInput = new PasswordInput(confirmation, "showPasswordConfirmation");
         ChatTheme.foreground(random, ThemePalette.Role.TEXT);
         submit.setName("connect"); switchMode.setName("register"); feedback.setName("authFeedback");
@@ -34,11 +34,6 @@ public final class AuthenticationPanel extends JPanel {
         links.add(switchHint); links.add(switchMode); addRow(links, c); addRow(feedback, c);
         switchMode.addActionListener(e -> setRegistering(!registering)); random.addActionListener(e -> update());
         setRegistering(false);
-    }
-    private static void stylePassword(JPasswordField field) {
-        field.setFont(ChatTheme.FONT); field.setBorder(new EmptyBorder(10, 12, 10, 12));
-        ChatTheme.foreground(field, ThemePalette.Role.TEXT);
-        field.putClientProperty("ltalk.background", ThemePalette.Role.SOFT);
     }
     private static JPanel field(String title, JComponent input) {
         JPanel row = new JPanel(new BorderLayout(0, 6)); row.setOpaque(false);

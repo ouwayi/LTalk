@@ -74,6 +74,14 @@ final class MessageRouter {
                         if (display != null) server.broadcast(display);
                     }
                 }
+                case PASSWORD_CHANGE -> {
+                    Validation.requestId(request.requestId());
+                    if (request.userId() != null && !session.userId.equals(request.userId())) {
+                        throw new ProtocolException("FORBIDDEN", "只能修改本人的密码");
+                    }
+                    server.accounts().changePassword(session.userId, request.password(), request.newPassword());
+                    server.deliver(session, Message.of(MessageType.PASSWORD_CHANGED).requestId(request.requestId()).build());
+                }
                 case GROUP_SEND -> {
                     validateChat(request);
                     var recipients = registry.readySessions();

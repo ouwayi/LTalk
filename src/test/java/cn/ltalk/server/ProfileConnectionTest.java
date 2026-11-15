@@ -86,6 +86,8 @@ class ProfileConnectionTest {
         Files.delete(file); Files.createDirectory(file); Files.writeString(file.resolve("block"), "force replacement failure");
         AccountStore loaded = store;
         assertThrows(java.io.IOException.class, () -> loaded.updateProfile("alice", "不能落盘", ""));
+        assertThrows(java.io.IOException.class, () -> loaded.changePassword("alice", "pass!12", "newpass!"));
+        assertEquals("LOGIN_FAILED", assertThrows(ProtocolException.class, () -> loaded.authenticate("alice", "newpass!")).code());
         assertEquals("旧昵称", store.profile("alice").nickname()); assertEquals("alice", store.authenticate("alice", "pass!12"));
         assertEquals(old.get("hash").getAsString().length(), 44);
     }

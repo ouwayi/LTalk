@@ -17,7 +17,8 @@ public final class ProfilePanel extends JPanel {
     private final JButton choose = ChatTheme.pill("修改头像"), reset = ChatTheme.pill("恢复默认头像"), save = ChatTheme.primary("保存资料");
     private SwingWorker<String, Void> importer;
     private boolean closed;
-    public ProfilePanel(UserProfile profile, String endpoint, BiConsumer<String, String> onSave, Runnable onCancel) {
+    public ProfilePanel(UserProfile profile, String endpoint, BiConsumer<String, String> onSave, Runnable onCancel,
+                        Runnable onChangePassword) {
         super(new GridBagLayout()); this.profile = profile; avatar = Objects.toString(profile.avatar(), "");
         ChatTheme.surface(this); setName("profilePanel"); setBorder(new EmptyBorder(22, 24, 22, 24));
         nickname = ChatTheme.field(profile.nickname(), "profileNickname"); nickname.setColumns(18);
@@ -29,7 +30,12 @@ public final class ProfilePanel extends JPanel {
         row(ChatTheme.label("用户名：" + profile.userId(), 13, ChatTheme.INK, false), c);
         row(ChatTheme.label("昵称", 12, ChatTheme.MUTED, false), c); row(nickname, c);
         row(ChatTheme.label("注册时间：" + registeredTime(profile.createdAt()), 11, ChatTheme.MUTED, false), c);
-        row(ChatTheme.label("服务器：" + endpoint, 11, ChatTheme.MUTED, false), c); row(feedback, c);
+        row(ChatTheme.label("服务器：" + endpoint, 11, ChatTheme.MUTED, false), c);
+        JButton changePassword = ChatTheme.pill("修改密码");
+        changePassword.setName("profileChangePassword");
+        changePassword.addActionListener(e -> onChangePassword.run());
+        row(changePassword, c);
+        row(feedback, c);
         JButton cancel = ChatTheme.pill("取消"); cancel.setName("profileCancel");
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0)); actions.setOpaque(false); actions.add(cancel); actions.add(save); row(actions, c);
         cancel.addActionListener(e -> onCancel.run()); choose.addActionListener(e -> chooseAvatar());

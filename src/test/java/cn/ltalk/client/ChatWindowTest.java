@@ -266,6 +266,66 @@ class ChatWindowTest {
         return null;
     }
 
+    @Test @Timeout(25)
+    void passwordFormValidatesConfirmationAndReportsServerResultWithoutLeavingChat() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start();
+            server.accounts().register("alice", "测试账号", "test123!", false);
+            onEdt(() -> ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice",
+                    appearanceDirectory.resolve("password.properties"))));
+            ChatWindow window = ref.get();
+            login(window);
+            awaitEdt(() -> label(window, "status").getText().contains("已加载"));
+            AtomicReference<JDialog> dialogRef = new AtomicReference<>();
+            onEdt(() -> {
+                area(window, "input").setText("保留这条草稿");
+                ((JMenuItem) find(window.identityMenu(), "accountProfile")).doClick();
+                JDialog profile = profileDialog(window);
+                ((JButton) find(profile, "profileChangePassword")).doClick();
+                for (Window owned : profile.getOwnedWindows()) {
+                    if (owned instanceof JDialog dialog && "passwordChangeDialog".equals(dialog.getName())
+                            && dialog.isDisplayable()) dialogRef.set(dialog);
+                }
+                JDialog dialog = dialogRef.get();
+                assertNotNull(dialog);
+                renderContainer(dialog.getContentPane(), 410, 350, "password-change.png");
+                fillPasswordChange(dialog, "test123!", "demo-new!", "different!");
+                JButton save = (JButton) find(dialog, "submitPasswordChange");
+                save.doClick();
+                assertTrue(((JLabel) find(dialog, "passwordChangeFeedback")).getText().contains("不一致"));
+                fillPasswordChange(dialog, "incorrect!", "demo-new!", "demo-new!");
+                ((JToggleButton) find(dialog, "showNewPassword")).doClick();
+                save.doClick();
+                assertFalse(save.isEnabled());
+                JPasswordField next = (JPasswordField) find(dialog, "newPassword");
+                assertEquals(0, next.getPassword().length);
+                assertTrue(next.echoCharIsSet());
+            });
+            JDialog dialog = dialogRef.get();
+            awaitEdt(() -> ((JLabel) find(dialog, "passwordChangeFeedback")).getText().contains("当前密码不正确"));
+            onEdt(() -> {
+                fillPasswordChange(dialog, "test123!", "demo-new!", "demo-new!");
+                ((JButton) find(dialog, "submitPasswordChange")).doClick();
+            });
+            awaitEdt(() -> !dialog.isDisplayable() && label(window, "status").getText().contains("密码已修改"));
+            onEdt(() -> {
+                assertTrue(button(window, "send").isEnabled());
+                assertEquals("保留这条草稿", area(window, "input").getText());
+                assertNotNull(profileDialog(window));
+            });
+            assertEquals("alice", server.accounts().authenticate("alice", "demo-new!"));
+        } finally {
+            if (ref.get() != null) onEdt(() -> ref.get().dispatchEvent(new WindowEvent(ref.get(), WindowEvent.WINDOW_CLOSING)));
+        }
+    }
+
+    private static void fillPasswordChange(JDialog dialog, String current, String next, String confirmation) {
+        ((JPasswordField) find(dialog, "currentPassword")).setText(current);
+        ((JPasswordField) find(dialog, "newPassword")).setText(next);
+        ((JPasswordField) find(dialog, "confirmNewPassword")).setText(confirmation);
+    }
+
     @Test @Timeout(30)
     void accountSwitchKeepsOldChatThroughFailureAndCancelAndOnlyClearsItAfterSuccess() throws Exception {
         AtomicReference<ChatWindow> ref = new AtomicReference<>();

@@ -71,6 +71,21 @@ public final class AccountStore {
         Account account = accounts.get(id);
         return account == null ? null : new DisplayProfile(account.nickname(), Objects.toString(account.avatar(), ""), account.profileRevision());
     }
+    synchronized void changePassword(String id, String current, String next) throws IOException {
+        validatePassword(current);
+        validatePassword(next);
+        Account account = accounts.get(id);
+        if (account == null) throw new ProtocolException("NOT_AUTHENTICATED", "账号不存在");
+        byte[] previousSalt = Base64.getDecoder().decode(account.salt());
+        if (!MessageDigest.isEqual(hash(current, previousSalt), Base64.getDecoder().decode(account.hash()))) {
+            throw new ProtocolException("WRONG_PASSWORD", "当前密码不正确");
+        }
+        byte[] salt = new byte[16];
+        random.nextBytes(salt);
+        var base64 = Base64.getEncoder();
+        save(new Account(id, account.nickname(), base64.encodeToString(salt), base64.encodeToString(hash(next, salt)),
+                account.avatar(), account.createdAt(), account.profileRevision()));
+    }
     public synchronized UserProfile updateProfile(String id, String nickname, String avatar) throws IOException {
         if (nickname == null || nickname.isBlank()) throw new ProtocolException("MISSING_FIELD", "请填写昵称");
         if (nickname.strip().length() > 40) throw new ProtocolException("INVALID_NICKNAME", "昵称最多 40 字符");

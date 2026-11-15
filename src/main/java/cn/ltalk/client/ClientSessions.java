@@ -52,6 +52,12 @@ public final class ClientSessions implements AutoCloseable {
     public void exportHistory(Path directory, String format, String scope) throws IOException { current.client.exportHistory(directory, format, scope); }
     public void exportTo(Path path, String format, String scope, boolean replace) throws IOException { current.client.exportTo(path, format, scope, replace); }
     public void updateProfile(String nickname, String avatar) throws IOException { current.client.updateProfile(nickname, avatar); }
+    public void changePassword(String currentPassword, String newPassword, java.util.function.Consumer<Message> completion) throws IOException {
+        Slot slot = current;
+        slot.client.changePassword(currentPassword, newPassword, response -> {
+            if (slot.active()) completion.accept(response);
+        });
+    }
     public void loadHistory() throws IOException { current.client.loadHistory(); }
     public void deleteHistory(String scope, String id) throws IOException { current.client.deleteHistory(scope, id); }
     @Override public void close() {

@@ -33,6 +33,7 @@ class MessageCodecTest {
     @Test void rejectsMalformedJsonAndWrongFieldTypes() {
         for (String value : new String[]{"", "[]", "null", "{", "{type:'LOGIN'}", "{\"type\":\"BOGUS\"}",
                 "{\"type\":1}", "{\"type\":\"LOGIN\",\"userId\":123}", "{\"type\":\"LOGIN\",\"requestId\":null}",
+                "{\"type\":\"PASSWORD_CHANGE\",\"newPassword\":42}",
                 "{\"type\":\"USER_LIST\",\"users\":[1]}", "{\"type\":\"USER_LIST\",\"revision\":1.2}",
                 "{\"type\":\"USER_LIST\",\"revision\":9223372036854775808}", "{\"type\":\"LOGOUT\"} {}"}) {
             assertEquals("BAD_MESSAGE", assertThrows(ProtocolException.class, () -> MessageCodec.decode(value), value).code());

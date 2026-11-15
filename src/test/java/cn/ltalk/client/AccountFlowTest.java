@@ -95,6 +95,40 @@ class AccountFlowTest {
             client.disconnect(); serving.get(3, TimeUnit.SECONDS);
         } finally { fake.shutdownNow(); }
     }
+
+    @Test void passwordChangeTimeoutIgnoresLateConfirmationAndKeepsChatUsable() throws Exception {
+        Events events = new Events();
+        ExecutorService fake = Executors.newSingleThreadExecutor();
+        try (ServerSocket server = new ServerSocket(0); ChatClient client = new ChatClient(events, Runnable::run, 500, 350)) {
+            CountDownLatch sendLate = new CountDownLatch(1);
+            Future<?> serving = fake.submit(() -> {
+                try (Socket socket = server.accept()) {
+                    var reader = new MessageCodec.FrameReader(socket.getInputStream());
+                    Message login = reader.read();
+                    MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.LOGIN_OK).requestId(login.requestId())
+                            .userId("alice").nickname("测试").avatar("").build());
+                    Message request = reader.read();
+                    assertEquals(MessageType.PASSWORD_CHANGE, request.type());
+                    MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.GROUP_MESSAGE).requestId(request.requestId())
+                            .from("bob").content("其他用户发来的消息").serverTime(java.time.Instant.now().toString()).build());
+                    assertTrue(sendLate.await(3, TimeUnit.SECONDS));
+                    MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.PASSWORD_CHANGED).requestId(request.requestId()).build());
+                    assertEquals(MessageType.GROUP_SEND, reader.read().type());
+                } catch (Exception ex) { throw new RuntimeException(ex); }
+            });
+            BlockingQueue<Message> completions = new LinkedBlockingQueue<>();
+            client.connect("127.0.0.1", server.getLocalPort(), "alice", "pass!12");
+            events.state(ChatClient.State.CONNECTED);
+            client.changePassword("pass!12", "demo-new!", completions::add);
+            assertEquals("其他用户发来的消息", events.groups.poll(2, TimeUnit.SECONDS).content());
+            assertEquals("PASSWORD_CHANGE_UNCONFIRMED", completions.poll(2, TimeUnit.SECONDS).code());
+            sendLate.countDown();
+            assertNull(completions.poll(100, TimeUnit.MILLISECONDS));
+            assertEquals(ChatClient.State.CONNECTED, client.state());
+            client.sendGroup("still usable");
+            serving.get(3, TimeUnit.SECONDS);
+        } finally { fake.shutdownNow(); }
+    }
     private static final class Events implements ClientEventListener {
         final BlockingQueue<ChatClient.State> states = new LinkedBlockingQueue<>();
         final BlockingQueue<Message> errors = new LinkedBlockingQueue<>();

@@ -6,7 +6,8 @@ import java.util.List;
 public record Message(MessageType type, String requestId, String userId, String from, String to,
                       String content, String serverTime, List<String> users, Long revision,
                       String code, String message, String nickname, String password, String usernameMode,
-                      String messageId, String conversationId, String cursor, ChatRecord record, String avatar, String createdAt) {
+                      String messageId, String conversationId, String cursor, ChatRecord record, String avatar, String createdAt,
+                      String newPassword) {
     public Message {
         if (users != null) users = List.copyOf(users);
     }
@@ -24,7 +25,7 @@ public record Message(MessageType type, String requestId, String userId, String 
         private Long revision;
         private String nickname, password, usernameMode, messageId, conversationId, cursor;
         private ChatRecord record;
-        private String avatar, createdAt;
+        private String avatar, createdAt, newPassword;
 
         private Builder(MessageType type) { this.type = type; }
         public Builder requestId(String value) { requestId = value; return this; }
@@ -39,6 +40,7 @@ public record Message(MessageType type, String requestId, String userId, String 
         public Builder message(String value) { message = value; return this; }
         public Builder nickname(String value) { nickname = value; return this; }
         public Builder password(String value) { password = value; return this; }
+        public Builder newPassword(String value) { newPassword = value; return this; }
         public Builder usernameMode(String value) { usernameMode = value; return this; }
         public Builder messageId(String value) { messageId = value; return this; }
         public Builder conversationId(String value) { conversationId = value; return this; }
@@ -48,7 +50,7 @@ public record Message(MessageType type, String requestId, String userId, String 
         public Builder createdAt(String value) { createdAt = value; return this; }
         public Message build() {
             return new Message(type, requestId, userId, from, to, content, serverTime, users, revision, code, message,
-                    nickname, password, usernameMode, messageId, conversationId, cursor, record, avatar, createdAt);
+                    nickname, password, usernameMode, messageId, conversationId, cursor, record, avatar, createdAt, newPassword);
         }
     }
 }

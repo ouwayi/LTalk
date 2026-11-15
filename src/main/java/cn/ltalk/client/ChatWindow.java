@@ -24,6 +24,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private JDialog profileDialog;
     private ProfilePanel profilePanel;
     private boolean profileSaving;
+    private JDialog passwordDialog;
     private boolean closed;
     private boolean choosingExport;
     private long sessionRevision;
@@ -470,7 +471,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         profilePanel = new ProfilePanel(profile, connection.host.getText() + ":" + connection.port.getText(), (nickname, avatar) -> {
             try { profileSaving = true; client.updateProfile(nickname, avatar); }
             catch (IOException ex) { profileSaving = false; profilePanel.failed(ex.getMessage()); }
-        }, this::closeProfile);
+        }, this::closeProfile, this::showPasswordChange);
         ChatTheme.apply(profilePanel, ThemePalette.of(appearance));
         JScrollPane scroll = new JScrollPane(profilePanel); ChatTheme.scroll(scroll, false); dialog.setContentPane(scroll);
         dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
@@ -482,7 +483,42 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private void closeProfile() {
         JDialog dialog = profileDialog; profileDialog = null;
         if (profilePanel != null) profilePanel.close(); profilePanel = null; profileSaving = false;
+        if (passwordDialog != null) passwordDialog.dispose();
         if (dialog != null) dialog.dispose();
+    }
+    private void showPasswordChange() {
+        if (profileDialog == null || connectionState != ChatClient.State.CONNECTED) return;
+        if (passwordDialog != null && passwordDialog.isDisplayable()) {
+            passwordDialog.toFront();
+            return;
+        }
+        JDialog dialog = new JDialog(profileDialog, "修改密码", Dialog.ModalityType.MODELESS);
+        passwordDialog = dialog;
+        dialog.setName("passwordChangeDialog");
+        PasswordChangePanel panel = new PasswordChangePanel((current, next, onFailure) ->
+                client.changePassword(current, next, response -> {
+                    if (response.type() == MessageType.PASSWORD_CHANGED) {
+                        setStatus("密码已修改，下次登录请使用新密码", false);
+                        dialog.dispose();
+                    } else if (dialog.isDisplayable()) {
+                        onFailure.accept(response.message());
+                    }
+                }), dialog::dispose);
+        JScrollPane scroll = new JScrollPane(panel);
+        ChatTheme.scroll(scroll, false);
+        ChatTheme.apply(scroll, ThemePalette.of(appearance));
+        dialog.setContentPane(scroll);
+        dialog.getRootPane().setDefaultButton(panel.submitButton());
+        dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
+        dialog.addWindowListener(new WindowAdapter() {
+            @Override public void windowClosed(WindowEvent e) {
+                panel.clear();
+                if (passwordDialog == dialog) passwordDialog = null;
+            }
+        });
+        dialog.pack();
+        dialog.setLocationRelativeTo(profileDialog);
+        dialog.setVisible(true);
     }
     @Override public void onExported(Path path) { setStatus("导出成功：" + path, false); }
     private void exportHistory() {

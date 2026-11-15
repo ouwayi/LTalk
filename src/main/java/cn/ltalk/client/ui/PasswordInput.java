@@ -10,6 +10,10 @@ public final class PasswordInput extends JPanel {
     private final JToggleButton reveal = ChatTheme.choice("显示");
     public PasswordInput(JPasswordField field, String name) {
         super(new BorderLayout(6, 0)); setOpaque(false); this.field = field;
+        field.setFont(ChatTheme.FONT);
+        field.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
+        ChatTheme.foreground(field, ThemePalette.Role.TEXT);
+        field.putClientProperty("ltalk.background", ThemePalette.Role.SOFT);
         mask = field.getEchoChar() == 0 ? '\u2022' : field.getEchoChar();
         reveal.setName(name); reveal.setFont(ChatTheme.FONT.deriveFont(11f));
         reveal.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));

@@ -7,8 +7,11 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.function.Consumer;
 
 public final class ChatClient implements AutoCloseable {
+    private static final String PASSWORD_REQUEST_PREFIX = "password-";
+    private record PasswordChange(String id, Consumer<Message> completion, ScheduledFuture<?> deadline) { }
     public enum State { DISCONNECTED, CONNECTING, SERVER_CONNECTED, AUTHENTICATING, CONNECTED }
     private final Object lifecycle = new Object();
     private final ClientEventListener listener;
@@ -212,6 +215,15 @@ public final class ChatClient implements AutoCloseable {
         }
         }
         synchronized (lifecycle) {
+            if ((message.type() == MessageType.PASSWORD_CHANGED || message.type() == MessageType.ERROR)
+                    && message.requestId() != null && message.requestId().startsWith(PASSWORD_REQUEST_PREFIX)) {
+                PasswordChange pending = connection.passwordChange;
+                if (pending == null || !pending.id().equals(message.requestId())) return;
+                pending.deadline().cancel(false);
+                connection.passwordChange = null;
+                emit(connection, () -> pending.completion().accept(message));
+                return;
+            }
             if (message.requestId() != null && message.requestId().equals(connection.profileRequest)) {
                 connection.profileDeadline.cancel(false); connection.profileRequest = null;
                 if (message.type() == MessageType.ERROR) { emit(connection, () -> listener.onError(message)); return; }
@@ -251,7 +263,7 @@ public final class ChatClient implements AutoCloseable {
             }
             case SYSTEM -> emit(connection, () -> listener.onSystem(message));
             case ERROR -> emit(connection, () -> listener.onError(message));
-            case PROFILE_OK -> { /* Ignore expired profile responses. */ }
+            case PROFILE_OK, PASSWORD_CHANGED -> { /* Ignore expired account responses. */ }
             default -> throw new IOException("服务端发送了不允许的消息类型");
         }
     }
@@ -272,7 +284,7 @@ public final class ChatClient implements AutoCloseable {
         if (c.closed.get()) throw new IOException("连接已关闭"); MessageCodec.encode(message);
         try { c.sender.execute(() -> {
             try { if (!c.closed.get()) MessageCodec.write(c.socket.getOutputStream(), message); }
-            catch (IOException ex) { terminate(c, "历史请求发送失败，请重新连接"); }
+            catch (IOException ex) { terminate(c, "请求发送失败，请重新连接"); }
         }); } catch (RejectedExecutionException ex) { throw new IOException("请求无法入队", ex); }
     }
 
@@ -280,6 +292,33 @@ public final class ChatClient implements AutoCloseable {
         profileRequest(Message.of(MessageType.PROFILE_UPDATE).nickname(nickname).avatar(avatar));
     }
     public void refreshProfile() throws IOException { profileRequest(Message.of(MessageType.PROFILE_GET)); }
+    public void changePassword(String current, String next, Consumer<Message> completion) throws IOException {
+        validatePassword(current);
+        validatePassword(next);
+        synchronized (lifecycle) {
+            Connection connection = authenticated();
+            if (connection.passwordChange != null) throw new IOException("请等待当前密码修改完成");
+            String id = PASSWORD_REQUEST_PREFIX + connection.nextId();
+            var deadline = deadlines.schedule(() -> {
+                synchronized (lifecycle) {
+                    PasswordChange pending = connection.passwordChange;
+                    if (pending == null || !pending.id().equals(id) || connection.closed.get()) return;
+                    connection.passwordChange = null;
+                    emit(connection, () -> completion.accept(Message.error(id, "PASSWORD_CHANGE_UNCONFIRMED",
+                            "响应超时，修改结果未确认，请重新登录核对")));
+                }
+            }, loginTimeoutMillis, TimeUnit.MILLISECONDS);
+            connection.passwordChange = new PasswordChange(id, completion, deadline);
+            try {
+                submitControl(connection, Message.of(MessageType.PASSWORD_CHANGE).requestId(id)
+                        .password(current).newPassword(next).build());
+            } catch (IOException ex) {
+                deadline.cancel(false);
+                connection.passwordChange = null;
+                throw ex;
+            }
+        }
+    }
     private void profileRequest(Message.Builder builder) throws IOException {
         synchronized (lifecycle) {
             Connection c = active;
@@ -430,6 +469,10 @@ public final class ChatClient implements AutoCloseable {
         closeExport(connection);
         connection.sender.shutdownNow();
         synchronized (lifecycle) {
+            if (connection.passwordChange != null) {
+                connection.passwordChange.deadline().cancel(false);
+                connection.passwordChange = null;
+            }
             if (active != connection) return;
             state = State.DISCONNECTED;
             emit(connection, () -> listener.onStateChanged(State.DISCONNECTED, reason));
@@ -462,6 +505,7 @@ public final class ChatClient implements AutoCloseable {
         volatile String authRequest, registrationPassword;
         volatile String profileRequest;
         volatile ScheduledFuture<?> profileDeadline;
+        PasswordChange passwordChange; // Guarded by lifecycle.
         final Socket socket = new Socket();
         final AtomicBoolean closed = new AtomicBoolean();
         final AtomicLong sequence = new AtomicLong();
