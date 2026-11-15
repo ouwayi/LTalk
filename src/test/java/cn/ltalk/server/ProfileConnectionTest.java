@@ -36,7 +36,7 @@ class ProfileConnectionTest {
         }
     }
     @Test void profilePermissionsValidationPersistenceAndAvatarReset() throws Exception {
-        Path image = directory.resolve("avatar.png"); ImageIO.write(new BufferedImage(90, 60, BufferedImage.TYPE_INT_RGB), "png", image.toFile());
+        Path image = directory.resolve("avatar.png"); writeDetailedPhoto(image);
         String avatar = AvatarImporter.load(image); String created;
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.dataDirectory(directory.resolve("server")); server.start();
@@ -90,7 +90,8 @@ class ProfileConnectionTest {
         assertEquals(old.get("hash").getAsString().length(), 44);
     }
     @Test void avatarBoundsAndWireTypesAreValidatedBeforeDecodingLargeImages() throws Exception {
-        assertEquals("INVALID_AVATAR", assertThrows(ProtocolException.class, () -> AvatarData.decode("a".repeat(14000))).code());
+        assertEquals("INVALID_AVATAR", assertThrows(ProtocolException.class,
+                () -> AvatarData.decode("a".repeat(((AvatarData.MAX_BYTES + 2) / 3) * 4 + 4))).code());
         Path wrongSize = directory.resolve("large.png"); ImageIO.write(new BufferedImage(49, 48, BufferedImage.TYPE_INT_RGB), "png", wrongSize.toFile());
         assertThrows(ProtocolException.class, () -> AvatarData.decode(Base64.getEncoder().encodeToString(Files.readAllBytes(wrongSize))));
         assertThrows(ProtocolException.class, () -> MessageCodec.decode("{\"type\":\"PROFILE_UPDATE\",\"avatar\":42}"));
@@ -98,21 +99,37 @@ class ProfileConnectionTest {
         Path legacy = directory.resolve("legacy.png");
         ImageIO.write(new BufferedImage(48, 48, BufferedImage.TYPE_INT_RGB), "png", legacy.toFile());
         assertEquals(48, AvatarData.decode(Base64.getEncoder().encodeToString(Files.readAllBytes(legacy))).getWidth());
-        String converted = AvatarImporter.load(wrongSize); assertEquals(144, AvatarData.decode(converted).getWidth());
+        String converted = AvatarImporter.load(wrongSize); assertEquals(256, AvatarData.decode(converted).getWidth());
         assertTrue(MessageCodec.encode(Message.of(MessageType.PROFILE_OK).userId("alice").nickname("昵称").avatar(converted).build()).length() < MessageCodec.MAX_FRAME_BYTES);
     }
 
     @Test void detailedPhotoKeepsHighResolutionWithinTheAvatarAndFrameLimits() throws Exception {
         Path file = directory.resolve("photo.png");
-        BufferedImage pixels = new BufferedImage(144, 144, BufferedImage.TYPE_INT_RGB);
-        Random random = new Random(42);
-        for (int y = 0; y < 144; y++) for (int x = 0; x < 144; x++) pixels.setRGB(x, y, random.nextInt());
-        ImageIO.write(pixels, "png", file.toFile());
+        writeDetailedPhoto(file);
         assertTrue(Files.size(file) > AvatarData.MAX_BYTES);
         String avatar = AvatarImporter.load(file);
         assertTrue(Base64.getDecoder().decode(avatar).length <= AvatarData.MAX_BYTES);
-        assertEquals(144, AvatarData.decode(avatar).getWidth());
+        assertEquals(512, AvatarData.decode(avatar).getWidth());
         Message frame = Message.of(MessageType.DISPLAY_PROFILE).userId("a".repeat(20)).nickname("中".repeat(40)).avatar(avatar).revision(4).build();
         assertEquals(frame, MessageCodec.decode(MessageCodec.encode(frame)));
+    }
+
+    @Test void importerChecksTheNewSourceLimitsAndUsesTheCroppedShortSide() throws Exception {
+        Path panorama = directory.resolve("wide.png");
+        ImageIO.write(new BufferedImage(1024, 511, BufferedImage.TYPE_INT_RGB), "png", panorama.toFile());
+        assertEquals(256, AvatarData.decode(AvatarImporter.load(panorama)).getWidth());
+        Path tooManyPixels = directory.resolve("pixels.png");
+        ImageIO.write(new BufferedImage(6000, 4001, BufferedImage.TYPE_BYTE_BINARY), "png", tooManyPixels.toFile());
+        assertTrue(assertThrows(java.io.IOException.class, () -> AvatarImporter.load(tooManyPixels)).getMessage().contains("2400 万"));
+        Path oversized = directory.resolve("oversized.png");
+        try (var file = new java.io.RandomAccessFile(oversized.toFile(), "rw")) { file.setLength(12L * 1024 * 1024 + 1); }
+        assertTrue(assertThrows(java.io.IOException.class, () -> AvatarImporter.load(oversized)).getMessage().contains("12 MiB"));
+    }
+
+    private static void writeDetailedPhoto(Path file) throws java.io.IOException {
+        BufferedImage pixels = new BufferedImage(512, 512, BufferedImage.TYPE_INT_RGB);
+        Random random = new Random(42);
+        for (int y = 0; y < 512; y++) for (int x = 0; x < 512; x++) pixels.setRGB(x, y, random.nextInt());
+        ImageIO.write(pixels, "png", file.toFile());
     }
 }

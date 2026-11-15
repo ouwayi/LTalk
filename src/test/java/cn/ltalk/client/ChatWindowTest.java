@@ -344,7 +344,9 @@ class ChatWindowTest {
             onEdt(() -> {
                 assertEquals("离线昵称：历史公共二", summary(window, ConversationId.PUBLIC).preview());
                 assertEquals("离线昵称", summary(window, "bob").title());
-                assertEquals(avatarColor.getRGB(), summary(window, "bob").profile().avatar().getRGB(72, 72));
+                BufferedImage receivedAvatar = summary(window, "bob").profile().avatar();
+                assertEquals(256, receivedAvatar.getWidth());
+                assertEquals(avatarColor.getRGB(), receivedAvatar.getRGB(128, 128));
                 selectPeer(window,"bob"); assertTrue(history(window).contains("[离线昵称] 离线联系人历史")); assertFalse(button(window,"send").isEnabled());
                 assertEquals("离线昵称", label(window, "conversationTitle").getText());
                 assertEquals(avatarColor.getRGB(), iconCenter(label(window, "conversationAvatar")));

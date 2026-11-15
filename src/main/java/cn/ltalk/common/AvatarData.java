@@ -7,9 +7,9 @@ import java.util.Base64;
 
 /** Bounded square avatar payload. Empty means generated initials. */
 public final class AvatarData {
-    public static final int SIZE = 144;
-    private static final int LEGACY_SIZE = 48;
-    public static final int MAX_BYTES = 10_240;
+    public static final int STANDARD_SIZE = 256;
+    public static final int LARGE_SIZE = 512;
+    public static final int MAX_BYTES = 128 * 1024;
     private AvatarData() { }
     public static BufferedImage decode(String value) throws ProtocolException {
         if (value == null || value.isEmpty()) return null;
@@ -26,14 +26,19 @@ public final class AvatarData {
                     String format = reader.getFormatName();
                     int width = reader.getWidth(0), height = reader.getHeight(0);
                     boolean png = "png".equalsIgnoreCase(format), jpeg = "jpeg".equalsIgnoreCase(format);
-                    if (width != height || !((width == SIZE && (png || jpeg)) || (width == LEGACY_SIZE && png))) throw new IOException();
+                    boolean supported = switch (width) {
+                        case 48 -> png;
+                        case 144, STANDARD_SIZE, LARGE_SIZE -> png || jpeg;
+                        default -> false;
+                    };
+                    if (width != height || !supported) throw new IOException();
                     BufferedImage image = reader.read(0);
                     if (image == null) throw new IOException();
                     return image;
                 } finally { reader.dispose(); }
             }
         } catch (IOException | RuntimeException ex) {
-            throw new ProtocolException("INVALID_AVATAR", "头像须为 144×144 PNG/JPEG 或旧版 48×48 PNG，大小不超过 10 KiB");
+            throw new ProtocolException("INVALID_AVATAR", "头像须为支持的方形 PNG/JPEG，大小不超过 128 KiB");
         }
     }
 }

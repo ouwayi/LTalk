@@ -1,10 +1,10 @@
-# LTalk 协议 v5（头像与昵称同步）
+# LTalk 协议 v6
 
 ## 帧与状态
 
 TCP 长连接，**UTF-8 编码，每行一个 JSON 对象，以 LF (`0x0A`) 结尾**。可接受 CRLF（CR 计入帧字节数，JSON 解析时视为空白）。JSON 字符串中的换行由 Gson 转义，不能把正文实际换行直接拼接到线上。一连接串行写帧并 flush；不对不同发送者承诺全局消息顺序。
 
-单帧最多 **16384 字节**（不含 LF），在读取第 16385 个非 LF 字节时立即拒绝，不使用无界 readLine。非法 UTF-8、非法 JSON、未知类型、已定义字段的错误类型或显式 null 返回 `BAD_MESSAGE`，可继续下一帧；超长帧返回 `FRAME_TOO_LARGE` 后关闭连接。末尾无 LF 的残帧遇到 EOF 直接关闭。未定义额外字段被忽略，以便兼容。
+普通帧上限为 **16 KiB**（不含 LF）。`LOGIN_OK`、`PROFILE_UPDATE`、`PROFILE_OK`、`DISPLAY_PROFILE` 可使用 **176 KiB** 上限。超过 16 KiB 时必须把字面 `"type"` 作为 JSON 首字段，类型名不得使用转义，编码器按此顺序输出。读取时先检查类型前缀，再校验解码后的类型与长度。非法 UTF-8、非法 JSON、未知类型或字段类型错误返回 `BAD_MESSAGE`，可继续下一帧。超长帧返回 `FRAME_TOO_LARGE` 后关闭连接。末尾无 LF 的残帧遇到 EOF 直接关闭。未定义额外字段被忽略。
 
 新客户端先发 HELLO，收到 HELLO_OK 后进入仅服务器已连接状态；双方启动心跳，允许等待用户填写登录/注册信息，仍不具有任何业务权限。服务端接受后 10 秒绝对期限要求完成 HELLO 或直接 LOGIN；HELLO 成功取消该期限，由双向心跳检测静默失联。未认证连接仍占总名额（默认 20），不进入在线列表。重复 HELLO 拒绝。
 
@@ -60,7 +60,7 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 | USER_EXISTS | 同名名称已被在线/预留会话占用 | 拒绝新连接，原会话不受影响 |
 | EMPTY_CONTENT | 正文全为空白 | 保留连接 |
 | CONTENT_TOO_LONG | 正文超过 2000 char | 保留连接 |
-| FRAME_TOO_LARGE | 帧超过 16 KiB | 返回错误并关闭 |
+| FRAME_TOO_LARGE | 帧超过其类型允许的上限 | 返回错误并关闭 |
 | USER_OFFLINE | 目标不在就绪表中或向目标写入失败 | 不发送成功回显，保留发送者连接 |
 | SELF_PRIVATE_NOT_ALLOWED | 私聊目标为自己 | 保留连接 |
 
@@ -126,7 +126,7 @@ EXPORT_REQUEST 可增加 conversationId：GROUP:PUBLIC 或 PRIVATE:按用户名�
 | PROFILE_UPDATE | C→S，requestId, nickname, avatar；可选自己的 userId | 修改本人昵称/头像；用户名、密码材料、注册时间保持不变 |
 | PROFILE_OK | S→本人，requestId, userId, nickname, avatar, createdAt（可缺省） | 读取或原子持久化成功后返回。v5 另外分发公开展示字段 |
 
-v5 的 `avatar` 为 Base64 编码的 144×144 PNG/JPEG，也可读取或保存旧版 48×48 PNG。解码后最多 10240 字节，空串表示恢复字母头像。字段类型、Base64 长度、图片格式与尺寸经过校验，非法为 INVALID_AVATAR，旧资料保留。昵称 strip 后 1～40 UTF-16 char，空或越界沿用 MISSING_FIELD/INVALID_NICKNAME。图片路径只在客户端本地处理。LOGIN_OK 携带本人这些资料，createdAt 为新账号创建的 ISO UTC。旧账号无记录时不虚构时间。资料响应不包含密码、盐或散列。
+v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧版 144×144 PNG/JPEG 和 48×48 PNG。解码后最多 128 KiB，空串表示恢复字母头像。字段类型、Base64 长度、图片格式与尺寸经过校验，非法为 INVALID_AVATAR，旧资料保留。昵称 strip 后 1～40 UTF-16 char，空或越界沿用 MISSING_FIELD/INVALID_NICKNAME。图片路径只在客户端本地处理。LOGIN_OK 携带本人这些资料，createdAt 为新账号创建的 ISO UTC。旧账号无记录时不虚构时间。资料响应不包含密码、盐或散列。
 
 资料写失败返回 STORAGE_ERROR，内存保持旧值；客户端最多一个待响应资料请求，默认 5 秒超时提示结果未确认，忽略迟到响应且不终止健康聊天连接。重登可核对服务端最终资料。退出登录关闭认证 Socket 并清除界面身份、历史/草稿和密码；用户明确操作后可新建未认证连接。切换账号则在独立 Socket 执行既有 HELLO/LOGIN，成功后才关闭旧认证 Socket 并清理旧展示数据；取消/失败保持旧会话，取消关闭候选，期间额外占一连接名额。无新协议类型，不恢复账号身份、不自动重发。
 
@@ -166,4 +166,4 @@ v5 的 `avatar` 为 Base64 编码的 144×144 PNG/JPEG，也可读取或保存�
 
 登录进入就绪状态后，新会话收到在线账号资料，其他就绪会话收到新登录账号的资料。资料修改成功后，新的展示资料分发给就绪会话。浏览本人历史时，服务端先发送对应发送者以及私聊接收者的最新资料，再发送该历史页。这样离线联系人也可恢复展示，同一连接中每个账号只接收更新版本。未登录的连接没有资料同步，也没有按用户名查询任意账号资料的接口。
 
-展示资料独立成帧，保留 16 KiB 的帧上限。`USER_LIST` 继续承载用户名与在线列表版本，聊天、历史和导出记录字段保持现有格式。收到旧版本资料时保留新版本。v4 客户端不识别新事件，请升级双方。
+展示资料独立成帧，v6 上限为 176 KiB。`USER_LIST` 继续承载用户名与在线列表版本，聊天、历史和导出记录维持 16 KiB 帧上限。收到旧版本资料时保留新版本。请同时升级客户端与服务端。

@@ -56,6 +56,23 @@ class MessageCodecTest {
                 () -> new MessageCodec.FrameReader(new ByteArrayInputStream(new byte[]{'{'})).readFrame());
     }
 
+    @Test void onlyAvatarFramesCanUseTheLargerBound() throws Exception {
+        Message profile = Message.of(MessageType.DISPLAY_PROFILE).userId("bob").nickname("昵称")
+                .avatar("a".repeat(174_764)).revision(1).build();
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        MessageCodec.write(bytes, profile);
+        assertTrue(bytes.size() > MessageCodec.MAX_FRAME_BYTES);
+        assertEquals(profile, new MessageCodec.FrameReader(new ByteArrayInputStream(bytes.toByteArray())).read());
+
+        String prefix = "{\"type\":\"PROFILE_UPDATE\",\"avatar\":\"";
+        String over = prefix + "a".repeat(MessageCodec.MAX_AVATAR_FRAME_BYTES);
+        assertEquals("FRAME_TOO_LARGE", assertThrows(ProtocolException.class, () ->
+                new MessageCodec.FrameReader(new ByteArrayInputStream(over.getBytes(StandardCharsets.US_ASCII))).read()).code());
+        String disguised = prefix + "a".repeat(MessageCodec.MAX_FRAME_BYTES) + "\",\"type\":\"GROUP_SEND\"}\n";
+        assertEquals("FRAME_TOO_LARGE", assertThrows(ProtocolException.class, () ->
+                new MessageCodec.FrameReader(new ByteArrayInputStream(disguised.getBytes(StandardCharsets.US_ASCII))).read()).code());
+    }
+
     @Test void validatesIdentityAndContentBoundariesInJavaCharUnits() throws Exception {
         assertEquals("alice", Validation.userId("  alice  "));
         assertEquals("A_1", Validation.userId("A_1"));

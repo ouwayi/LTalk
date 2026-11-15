@@ -15,7 +15,7 @@ import java.util.Base64;
 public final class AvatarImporter {
     private AvatarImporter() { }
     public static String load(Path path) throws IOException {
-        if (Files.size(path) > 8 * 1024 * 1024) throw new IOException("图片不能超过 8 MiB");
+        if (Files.size(path) > 12 * 1024 * 1024) throw new IOException("图片不能超过 12 MiB");
         try (var input = ImageIO.createImageInputStream(path.toFile())) {
             if (input == null) throw new IOException("无法读取图片");
             var readers = ImageIO.getImageReaders(input);
@@ -24,14 +24,17 @@ public final class AvatarImporter {
             try {
                 reader.setInput(input);
                 int width = reader.getWidth(0), height = reader.getHeight(0);
-                if (width < 1 || height < 1 || (long) width * height > 16_000_000) throw new IOException("图片像素不能超过 1600 万");
-                BufferedImage source = reader.read(0);
-                BufferedImage scaled = new BufferedImage(AvatarData.SIZE, AvatarData.SIZE, BufferedImage.TYPE_INT_ARGB);
+                if (width < 1 || height < 1 || (long) width * height > 24_000_000) throw new IOException("图片像素不能超过 2400 万");
+                int side = Math.min(width, height);
+                int size = side >= AvatarData.LARGE_SIZE ? AvatarData.LARGE_SIZE : AvatarData.STANDARD_SIZE;
+                var readParam = reader.getDefaultReadParam();
+                readParam.setSourceRegion(new Rectangle((width - side) / 2, (height - side) / 2, side, side));
+                BufferedImage source = reader.read(0, readParam);
+                BufferedImage scaled = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
                 Graphics2D g = scaled.createGraphics();
                 try {
                     g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-                    int side = Math.min(width, height), left = (width - side) / 2, top = (height - side) / 2;
-                    g.drawImage(source, 0, 0, AvatarData.SIZE, AvatarData.SIZE, left, top, left + side, top + side, null);
+                    g.drawImage(source, 0, 0, size, size, null);
                 } finally { g.dispose(); }
                 ByteArrayOutputStream output = new ByteArrayOutputStream();
                 ImageIO.write(scaled, "png", output);
@@ -49,6 +52,7 @@ public final class AvatarImporter {
         try {
             var params = writer.getDefaultWriteParam();
             params.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+            if (params instanceof javax.imageio.plugins.jpeg.JPEGImageWriteParam jpeg) jpeg.setOptimizeHuffmanTables(true);
             for (float quality : new float[]{.95f, .88f, .80f, .70f, .55f, .40f, .25f, .10f}) {
                 ByteArrayOutputStream bytes = new ByteArrayOutputStream();
                 try (var output = new MemoryCacheImageOutputStream(bytes)) {
