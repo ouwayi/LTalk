@@ -39,6 +39,21 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 
 `revision` 在单个服务端进程内递增。就绪成员变化、版本增加、快照生成在同一注册表短锁内完成，所有网络发送都在该锁外。并发快照发送可能乱序，因此客户端忽略小于或等于已见版本的快照；重新连接将版本重置为 -1。列表按名称排序，包含自己。
 
+## IPv4 局域网发现
+
+发现使用独立的 UDP v1 协议，默认发现端口为 9001。客户端尝试各启用网卡的 IPv4 定向广播地址和本机回环地址。服务端对所在链路上的请求单播回复，TCP 仅绑定回环时对回环请求应答。
+
+| 数据报 | 内容 |
+| --- | --- |
+| 请求 | `LTALK-DISCOVER/1 <nonce>` |
+| 应答 | `LTALK-OFFER/1 <nonce> <instanceId> <tcpPort> <name64>` |
+
+各字段用一个 ASCII 空格分隔。每个数据报最多 256 字节。nonce 为本轮随机生成的 32 位小写十六进制串，instanceId 为服务端此次启动的随机标识，格式相同。tcpPort 为实际监听的 1～65535 TCP 端口。name64 为服务器名称 UTF-8 字节的无填充 Base64URL 编码，名称最多 96 个 UTF-8 字节。
+
+客户端只接受本轮 nonce 匹配的应答，从 UDP 源 IPv4 地址取得候选地址。收集约 2 秒，最多保留 32 台，同一实例即使从多个地址回复也合为一项，有回环应答时优先回环。发现本身不建立登录态，随后照常执行 TCP `HELLO / HELLO_OK`，用户再输入凭据。发现名称用于展示，身份验证仍沿用原 TCP 连接方式。
+
+命令行服务端默认开启发现，`-Dltalk.discovery.enabled=false` 关闭。两端可用 `-Dltalk.discovery.port` 配置相同的发现端口，服务端可用 `-Dltalk.discovery.name` 配置显示名。UDP 不可用时 TCP 仍可手动连接。
+
 ## 心跳与失联期限
 
 两端各自在 HELLO/HELLO_OK 握手或直接登录成功后启动独立心跳，不依赖聊天活动；未握手且未登录的 PING/PONG 返回 `NOT_AUTHENTICATED`，仍受原绝对期限限制。PING/PONG 的 `requestId` 必须非空白且最多 64 字符，服务端遇到无效编号返回 `BAD_MESSAGE`，客户端收到无效编号按协议错误断开。心跳仅走当前连接，不广播、不生成聊天记录、未读或业务回调。

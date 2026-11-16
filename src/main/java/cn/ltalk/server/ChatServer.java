@@ -38,6 +38,16 @@ public final class ChatServer implements AutoCloseable {
     private boolean stopped;
     private ServerSocket listener;
     private Thread acceptThread;
+    private int discoveryPort;
+    private String discoveryName;
+    private DiscoveryResponder discovery;
+
+    public synchronized void enableDiscovery(int port, String name) {
+        if (stopped || listener != null) throw new IllegalStateException("启动后不能更改发现设置");
+        if (!LanDiscovery.validPort(port)) throw new IllegalArgumentException("发现端口必须为 1～65535");
+        discoveryName = LanDiscovery.validateName(name);
+        discoveryPort = port;
+    }
 
     public ChatServer(String bindAddress, int port) throws UnknownHostException {
         this(bindAddress, port, 20, Duration.ofSeconds(10));
@@ -88,6 +98,14 @@ public final class ChatServer implements AutoCloseable {
         acceptThread = new Thread(this::acceptLoop, "ltalk-accept");
         acceptThread.start();
         LOG.info(() -> "服务端监听 " + listener.getLocalSocketAddress() + "，最大连接数=" + maxConnections);
+        if (discoveryPort != 0) {
+            try {
+                discovery = new DiscoveryResponder(bindAddress, socket.getLocalPort(), discoveryPort, discoveryName);
+                LOG.info(() -> "局域网发现 UDP " + discoveryPort + " · " + discoveryName);
+            } catch (IOException ex) {
+                LOG.warning("局域网发现未启动，仍可手动连接：" + ex.getMessage());
+            }
+        }
     }
 
     public synchronized int port() { return listener == null ? requestedPort : listener.getLocalPort(); }
@@ -147,6 +165,7 @@ public final class ChatServer implements AutoCloseable {
             if (stopped) return;
             stopped = true;
             running = false;
+            if (discovery != null) discovery.close();
             if (listener != null) try { listener.close(); } catch (IOException ignored) { }
         }
         ClientSession[] closing = sessions.toArray(ClientSession[]::new);
@@ -154,6 +173,7 @@ public final class ChatServer implements AutoCloseable {
         workers.shutdownNow();
         deadlines.shutdownNow();
         try {
+            if (discovery != null) discovery.awaitTermination();
             if (acceptThread != null) acceptThread.join(2000);
             workers.awaitTermination(2, TimeUnit.SECONDS);
             deadlines.awaitTermination(2, TimeUnit.SECONDS);
@@ -177,6 +197,10 @@ public final class ChatServer implements AutoCloseable {
             int max = args.length > 2 ? Integer.parseInt(args[2]) : 20;
             ChatServer server = new ChatServer(bind, port, max, Duration.ofSeconds(10));
             server.dataDirectory(java.nio.file.Path.of(System.getProperty("ltalk.dataDir", "data")));
+            if (Boolean.parseBoolean(System.getProperty("ltalk.discovery.enabled", "true"))) {
+                try { server.enableDiscovery(LanDiscovery.configuredPort(), System.getProperty("ltalk.discovery.name", "LTalk")); }
+                catch (IllegalArgumentException ex) { LOG.warning("局域网发现配置无效，仍可手动连接：" + ex.getMessage()); }
+            }
             Runtime.getRuntime().addShutdownHook(new Thread(server::close, "ltalk-shutdown"));
             server.start();
             System.out.println("LTalk 已启动，按 Ctrl+C 停止。客户端应连接本机或局域网 IPv4 地址。");

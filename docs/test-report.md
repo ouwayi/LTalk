@@ -1,5 +1,14 @@
 # 测试报告与验收记录
 
+## Windows 启动与局域网发现（2026-11-16，阶段 27）
+
+最终 `build.ps1 -o package` **116 项通过，0 失败、错误或跳过，约 1:28**。本机 Windows、JDK 25.0.4、Maven 3.9.9，编译目标 Java 17。最终日志 `.tools/lan-discovery-repeat.log`。首轮 `.tools/lan-discovery-final.log` 记录既有关闭测试读到未完成的帧，未改动该测试的断言和顺序。
+
+- 回环 UDP 验证实际 TCP 端口、重复应答、无关和超长应答、无响应、UDP 端口占用时的 TCP 回退及服务端关闭后的 UDP 释放。
+- Swing 组件验证启动时一台自动连接、多台选择、手动填写和取消、显式地址优先、成功握手后重启可选最近地址。检查 420 像素宽深色预览 `target/ui-preview/discovery-narrow.png`。
+- 在本机网卡上用定向广播实际收到 UDP 应答并完成 TCP 握手。分别验证 IPv4 通配地址和指定网卡绑定，以及本机回环与网卡回复合并。将启动器及 JAR 复制到含空格路径，执行启动器并观察客户端按参数发送 TCP HELLO。用 `-Dltalk.discovery.enabled=false` 启动的打包服务端通过 TCP 握手，发现端口可以被测试探针绑定。
+- 当前证据来自同一 Windows 主机。多设备、防火墙规则、访客网络和子网回退仍需现场核对。
+
 ## 公共聊天室历史补齐（2026-11-16，阶段 26）
 
 `build.ps1 -o package` 完整通过 **109 项，0 失败、错误或跳过，约 1:29**。本机 Windows、JDK 25.0.4、Maven 3.9.9，编译目标 Java 17。日志为 `.tools/public-history-final.log`。

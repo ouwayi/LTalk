@@ -21,6 +21,7 @@ public final class ClientSessions implements AutoCloseable {
     public ChatClient.State state() { return current.client.state(); }
     public boolean switching() { return pending != null; }
     public Address address() { return current.address; }
+    Address authenticationAddress() { return authentication().address; }
     private Slot authentication() { return pending == null ? current : pending; }
     public ChatClient.State authenticationState() { return authentication().client.state(); }
     public void connectServer(String host, int port) throws IOException {

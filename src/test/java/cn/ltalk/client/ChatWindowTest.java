@@ -16,6 +16,7 @@ import java.awt.*;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
 import java.net.InetAddress;
+import java.net.DatagramSocket;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.*;
@@ -31,6 +32,128 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Exercises our own non-visible Swing component tree on the EDT, without OS input automation. */
 class ChatWindowTest {
     @TempDir Path appearanceDirectory;
+
+    @Test @Timeout(20)
+    void oneDiscoveredServerConnectsWithoutLoggingInAndIsAvailableAfterRelaunch() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        InetAddress local = InetAddress.getByName("127.0.0.1");
+        int udpPort;
+        try (DatagramSocket probe = new DatagramSocket(0, local)) { udpPort = probe.getLocalPort(); }
+        Path preferences = appearanceDirectory.resolve("appearance.properties");
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.enableDiscovery(udpPort, "本机测试服务器");
+            server.start();
+            onEdt(() -> ref.set(new ChatWindow(null, null, null, preferences,
+                    () -> DiscoveryClient.discover(List.of(local), udpPort, 300))));
+            ChatWindow first = ref.get();
+            awaitEdt(() -> button(first, "connect").isEnabled());
+            onEdt(() -> {
+                assertEquals(Integer.toString(server.port()), text(first, "port").getText());
+                assertTrue(text(first, "password").getText().isEmpty());
+                assertEquals(0, server.onlineCount());
+                first.dispatchEvent(new WindowEvent(first, WindowEvent.WINDOW_CLOSING));
+                ref.set(new ChatWindow(null, null, null, preferences, List::of));
+            });
+            ChatWindow reopened = ref.get();
+            awaitEdt(() -> label(reopened, "serverStatus").getText().contains("未找到"));
+            onEdt(() -> {
+                assertTrue(button(reopened, "connectServer").isEnabled());
+                button(reopened, "recentServers").doClick();
+            });
+            awaitEdt(() -> serverChoices(reopened).getItemCount() == 1);
+            onEdt(() -> {
+                serverChoices(reopened).setSelectedIndex(0);
+                assertEquals(Integer.toString(server.port()), text(reopened, "port").getText());
+                assertFalse(button(reopened, "connect").isEnabled());
+                button(reopened, "connectServer").doClick();
+            });
+            awaitEdt(() -> button(reopened, "connect").isEnabled());
+        } finally { closeWindow(ref); }
+    }
+
+    @Test @Timeout(20)
+    void multipleCandidatesRequireSelectionAndAnExplicitAddressSkipsDiscovery() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        Path preferences = appearanceDirectory.resolve("appearance.properties");
+        try (ChatServer first = new ChatServer("127.0.0.1", 0); ChatServer second = new ChatServer("127.0.0.1", 0)) {
+            first.start(); second.start();
+            List<DiscoveryClient.Candidate> servers = List.of(
+                    new DiscoveryClient.Candidate("开发聊天室", new ClientSessions.Address("127.0.0.1", first.port())),
+                    new DiscoveryClient.Candidate("演示聊天室", new ClientSessions.Address("127.0.0.1", second.port())));
+            onEdt(() -> ref.set(new ChatWindow(null, null, null, preferences, () -> servers)));
+            ChatWindow window = ref.get();
+            awaitEdt(() -> serverChoices(window).getItemCount() == 2);
+            onEdt(() -> {
+                assertEquals(0, first.connectionCount()); assertEquals(0, second.connectionCount());
+                assertEquals(-1, serverChoices(window).getSelectedIndex());
+                assertTrue(serverChoices(window).getItemAt(1).toString().contains("演示聊天室 · 127.0.0.1:" + second.port()));
+                serverChoices(window).setSelectedIndex(1);
+                assertFalse(button(window, "connect").isEnabled());
+                assertEquals(Integer.toString(second.port()), text(window, "port").getText());
+                window.applyAppearance(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK), false);
+                render(window, 420, 760, "discovery-narrow.png");
+                button(window, "connectServer").doClick();
+            });
+            awaitEdt(() -> button(window, "connect").isEnabled());
+            assertEquals(0, first.connectionCount()); assertEquals(1, second.connectionCount());
+
+            CountDownLatch scan = new CountDownLatch(1);
+            onEdt(() -> {
+                window.dispatchEvent(new WindowEvent(window, WindowEvent.WINDOW_CLOSING));
+                ref.set(new ChatWindow("127.0.0.1", Integer.toString(first.port()), "alice", preferences, () -> {
+                    scan.countDown();
+                    return servers;
+                }));
+            });
+            ChatWindow explicit = ref.get();
+            awaitEdt(() -> button(explicit, "connect").isEnabled());
+            assertEquals(1, scan.getCount());
+            assertEquals(1, first.connectionCount());
+        } finally { closeWindow(ref); }
+    }
+
+    @Test @Timeout(15)
+    void cancelAndManualInputPreventLateDiscoveryFromConnecting() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        Semaphore scans = new Semaphore(0);
+        CountDownLatch release = new CountDownLatch(1);
+        try (ChatServer manual = new ChatServer("127.0.0.1", 0); ChatServer discovered = new ChatServer("127.0.0.1", 0)) {
+            manual.start(); discovered.start();
+            onEdt(() -> ref.set(new ChatWindow(null, null, null, appearanceDirectory.resolve("appearance.properties"), () -> {
+                scans.release();
+                try { release.await(); }
+                catch (InterruptedException ignored) { /* Simulates a result that is already being delivered. */ }
+                return List.of(new DiscoveryClient.Candidate("另一台服务器", new ClientSessions.Address("127.0.0.1", discovered.port())));
+            })));
+            ChatWindow window = ref.get();
+            assertTrue(scans.tryAcquire(4, TimeUnit.SECONDS));
+            onEdt(() -> {
+                button(window, "discoverServers").doClick();
+                assertTrue(label(window, "serverStatus").getText().contains("查找已取消"));
+                button(window, "discoverServers").doClick();
+            });
+            assertTrue(scans.tryAcquire(4, TimeUnit.SECONDS));
+            onEdt(() -> {
+                text(window, "port").setText(Integer.toString(manual.port()));
+                assertTrue(label(window, "serverStatus").getText().contains("查找已取消"));
+                button(window, "connectServer").doClick();
+            });
+            awaitEdt(() -> button(window, "connect").isEnabled());
+            assertEquals(1, manual.connectionCount()); assertEquals(0, discovered.connectionCount());
+        } finally {
+            release.countDown();
+            closeWindow(ref);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static JComboBox<ConnectionPanel.ServerChoice> serverChoices(ChatWindow window) {
+        return (JComboBox<ConnectionPanel.ServerChoice>) find(window, "serverChoices");
+    }
+
+    private static void closeWindow(AtomicReference<ChatWindow> ref) throws Exception {
+        if (ref.get() != null) onEdt(() -> ref.get().dispatchEvent(new WindowEvent(ref.get(), WindowEvent.WINDOW_CLOSING)));
+    }
 
     @Test @Timeout(25)
     void sendFeedbackAndReconnectKeepConversationAndDrafts() throws Exception {

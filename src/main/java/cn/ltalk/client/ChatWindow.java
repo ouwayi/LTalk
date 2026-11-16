@@ -11,12 +11,14 @@ import java.awt.event.*;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.Callable;
 
 /** Swing presentation adapter; account and export operations stay in the background client. */
 public final class ChatWindow extends JFrame implements ClientSessions.Listener {
     private final ConversationStore store = new ConversationStore();
     private final ClientSessions client = new ClientSessions(this);
     private final ConnectionPanel connection;
+    private final ServerSelection serverSelection;
     private final AuthenticationPanel authentication;
     private final WelcomePanel welcome;
     private final JPanel pages = new JPanel(new CardLayout());
@@ -84,9 +86,16 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         this(initialHost, initialPort, initialUser, AppearancePreferences.defaultFile());
     }
     ChatWindow(String initialHost, String initialPort, String initialUser, Path appearanceFile) {
+        this(initialHost, initialPort, initialUser, appearanceFile, DiscoveryClient::discover);
+    }
+    ChatWindow(String initialHost, String initialPort, String initialUser, Path appearanceFile,
+               Callable<List<DiscoveryClient.Candidate>> discover) {
         super("LTalk · 局域网聊天室");
         appearancePreferences = new AppearancePreferences(appearanceFile); appearance = appearancePreferences.load();
         connection = new ConnectionPanel(initialHost, initialPort);
+        serverSelection = new ServerSelection(connection, new RecentServers(appearanceFile.resolveSibling("recent-servers.properties")),
+                discover, () -> !closed && !chatPageVisible() && client.authenticationState() == ChatClient.State.DISCONNECTED,
+                this::connectServer);
         authentication = new AuthenticationPanel(initialUser);
         welcome = new WelcomePanel(connection, authentication);
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
@@ -155,6 +164,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         });
 
         connection.connect.addActionListener(e -> connectServer()); connection.disconnect.addActionListener(e -> client.disconnect());
+        connection.host.getDocument().addDocumentListener(changed(serverSelection::editedAddress));
+        connection.port.getDocument().addDocumentListener(changed(serverSelection::editedAddress));
         reconnect.addActionListener(e -> reconnect());
         authentication.submit.addActionListener(e -> authenticate());
         authentication.password.addActionListener(e -> { if (authentication.submit.isEnabled()) authenticate(); });
@@ -197,7 +208,10 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         input.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.SHIFT_DOWN_MASK), "insert-break");
         input.getActionMap().put("send-message", action(() -> { if (send.isEnabled()) send(); }));
         addWindowListener(new WindowAdapter() {
-            @Override public void windowClosing(WindowEvent e) { closed = true; historyRender.stop(); store.saveDraft(input.getText()); closeProfile(); client.close(); dispose(); }
+            @Override public void windowClosing(WindowEvent e) {
+                closed = true; serverSelection.cancel(); historyRender.stop();
+                store.saveDraft(input.getText()); closeProfile(); client.close(); dispose();
+            }
         });
         addWindowFocusListener(new WindowAdapter() {
             @Override public void windowGainedFocus(WindowEvent e) { store.setVisible(chatPageVisible() && (!shell.compact() || shell.chatOpen())); refreshList(); }
@@ -206,8 +220,10 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         connection.state(true, false); authentication.state(false, false);
         historyRender.setRepeats(false);
         applyAppearance(appearance, false); refreshList(); refreshConversation();
-        if (initialHost != null && !initialHost.isBlank()) SwingUtilities.invokeLater(() -> {
-            if (!closed && client.state() == ChatClient.State.DISCONNECTED) connectServer();
+        SwingUtilities.invokeLater(() -> {
+            if (closed || client.state() != ChatClient.State.DISCONNECTED) return;
+            if (initialHost != null && !initialHost.isBlank()) connectServer();
+            else if (initialPort == null) serverSelection.startDiscovery();
         });
     }
 
@@ -235,10 +251,11 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
 
     private void connectServer() {
+        serverSelection.cancel();
         try { client.connectServer(connection.host.getText(), Integer.parseInt(connection.port.getText().strip())); }
         catch (IOException | IllegalArgumentException | IllegalStateException ex) {
             String detail = ex instanceof NumberFormatException ? "端口必须是 1～65535 的整数" : ex.getMessage();
-            showError(detail); connection.status.setText(detail); connection.status.setToolTipText(detail);
+            showError(detail); connection.feedback(detail);
         }
     }
     private void reconnect() {
@@ -435,7 +452,9 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         catch (IOException ex) { showError(ex.getMessage()); }
     }
     private void updateAuthentication(ChatClient.State state, String detail) {
+        if (state == ChatClient.State.SERVER_CONNECTED) serverSelection.remember(client.authenticationAddress());
         connection.state(state == ChatClient.State.DISCONNECTED, state == ChatClient.State.CONNECTING);
+        if (state == ChatClient.State.DISCONNECTED) connection.feedback(detail);
         authentication.state(state == ChatClient.State.SERVER_CONNECTED, state == ChatClient.State.AUTHENTICATING);
         authentication.feedback(detail, false);
     }
@@ -504,6 +523,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private boolean chatPageVisible() { return shell.getParent().isVisible(); }
     private void showChat() {
         if (signedInAddress == null) return;
+        serverSelection.cancel();
         if (client.switching()) {
             client.cancelSwitch(); restoreAddress(); authentication.clearCredentials(true); authentication.switching(false);
             updateAuthentication(connectionState, "已返回原账号聊天");

@@ -40,6 +40,8 @@ mvn test
 
 ## 启动与操作
 
+**Windows 客户端**可双击 `start-client.cmd`。构建后，`target/start-client.cmd` 和 `target/ltalk-1.0.0.jar` 可一起复制到其他 Windows 设备运行。启动器从 `JAVA_HOME` 或 `PATH` 查找 `javaw.exe`，需要 Java 17 或更高版本。
+
 先启动服务端：
 
 ```sh
@@ -73,7 +75,7 @@ java -Dltalk.heartbeat.intervalMillis=5000 -Dltalk.heartbeat.timeoutMillis=15000
 java -Djava.util.logging.config.file=docs/logging.properties -jar target/ltalk-1.0.0.jar
 ```
 
-分别在三个终端启动客户端，也可只启动一个后手动填写连接信息。下面参数预填地址/用户名；提供地址时启动后自动连接服务器，**不会自动登录已有账号**。首次在启动页注册，注册成功后直接登录；密码在窗口填写，不放进命令行：
+Windows 可以双击启动客户端，也可以在终端传入地址和用户名。显式指定地址时直接尝试 TCP 连接并跳过发现。已有账号请在窗口输入密码，首次使用可先注册：
 
 ```sh
 java -cp target/ltalk-1.0.0.jar cn.ltalk.client.ChatWindow 127.0.0.1 9000 alice
@@ -81,7 +83,7 @@ java -cp target/ltalk-1.0.0.jar cn.ltalk.client.ChatWindow 127.0.0.1 9000 bob
 java -cp target/ltalk-1.0.0.jar cn.ltalk.client.ChatWindow 127.0.0.1 9000 carol
 ```
 
-1. 启动先显示连接与账号页面。左侧只输入服务端 IP 和端口，点击「连接服务器」；命令行提供地址时自动连接。
+1. 启动先显示连接与账号页面。未指定地址时，客户端在后台查找约 2 秒。找到一台就尝试连接，找到多台时从「发现的局域网服务器」选择名称和地址，再点「连接服务器」。查找可随时取消，也可直接填写 IP 或主机名和端口。点击「最近服务器」可重用最近 6 个通过 TCP 握手的地址。
 2. 密码及确认密码右侧可点「显示/隐藏」，默认隐藏；切换表单、返回聊天、清理凭据或登录成功后恢复隐藏。右侧默认填写用户名、密码登录；点击「立即注册」切换为昵称、用户名（支持随机）、密码及确认密码，注册成功后自动登录。错密码/重名可留在原服务器连接中修改后重试。
 3. 登录成功进入聊天页。默认公共聊天室。左侧选用户私聊，登录后自动从服务器分页恢复本人授权历史，包括离线联系人的私聊，群聊和私聊各自保留草稿。点击蓝色按钮或 **Enter/Ctrl+Enter** 发送，**Shift+Enter** 换行。气泡显示「发送中」「已确认」「发送失败」或「结果待确认」。收到匹配的服务端回显后显示「已确认」。失败或待确认时可以点「取回正文」，替换非空草稿前会先征求确认。
 4. 右键消息可「删除这条记录（仅本人）」；会话菜单可「清空当前会话记录（仅本人）」，确认后仅删除你的副本，不影响对方或其他成员，删除后重登/导出也不再出现。新产生的消息仍正常保存。「重新加载聊天记录」可在加载失败或删除结果未确认时核对。
@@ -121,6 +123,18 @@ java -cp target/ltalk-1.0.0.jar cn.ltalk.client.ChatWindow 127.0.0.1 9000 carol
 
 ## 局域网使用
 
+命令行服务端默认开启 IPv4 局域网发现，监听 **UDP 9001**。聊天继续使用 TCP 9000 或自选端口。连接页会显示发现结果的名称和实际 TCP 地址，注册和登录仍在原表单操作。Windows 防火墙可按所用网络配置允许服务端接收发现 UDP 和聊天 TCP。同一主机上默认只有一个进程能监听发现端口，UDP 绑定失败时仍可手动连接 TCP。访客网络、不同子网或广播受限时，请手动填写服务器地址。
+
+```powershell
+# 给局域网服务端设置可辨识的名称
+java "-Dltalk.discovery.name=教室服务器" -jar target/ltalk-1.0.0.jar
+
+# 云部署或不需要广播发现时关闭 UDP 监听
+java "-Dltalk.discovery.enabled=false" -jar target/ltalk-1.0.0.jar
+```
+
+如果需要更换发现 UDP 端口，在服务端和使用命令行启动的客户端都设置 `-Dltalk.discovery.port=端口`。最近列表仅保存地址和端口，文件为当前系统用户目录下的 `.ltalk/recent-servers.properties`。发现数据包格式见 [通信协议](docs/protocol.md)。
+
 服务端用 `0.0.0.0` 或本机网卡地址监听。在服务端运行 `ipconfig`，找到同一局域网的 IPv4，例如 `192.168.1.20`。**其他设备的客户端填服务端 IPv4，不能填 `127.0.0.1` 或 `0.0.0.0`。**
 
 仅在需要的网络配置下允许 Java 或指定 TCP 端口入站；无需关闭整机防火墙。确认设备接入同一可互访网络、无线 AP 未启用客户端隔离。远端设备可用 Windows `Test-NetConnection <服务端IP> -Port 9000` 排查连通性。
@@ -129,7 +143,7 @@ java -cp target/ltalk-1.0.0.jar cn.ltalk.client.ChatWindow 127.0.0.1 9000 carol
 
 ## 测试
 
-最近一次完整功能回归为 2026-11-16 的 `build.ps1 -o package`。**109 项通过，0 失败、错误或跳过**，约 1:29。覆盖本机回环 TCP、晚登录补齐公共消息、重登时加载离线期间的公共消息，以及删除和导出隔离。v6 多设备和独立 JDK 17 运行时尚未验收。各阶段的结果与证据见 [当前状态](docs/STATUS.md) 和 [测试报告](docs/test-report.md)。
+最近一次完整功能回归为 2026-11-16 的 `build.ps1 -o package`。**116 项通过，0 失败、错误或跳过**，约 1:28。验证包含 Windows 启动页、回环 UDP 发现、最近服务器和既有聊天功能。另验证了本机网卡广播和打包启动器。各阶段的结果与证据见 [当前状态](docs/STATUS.md) 和 [测试报告](docs/test-report.md)。
 
 运行完整测试需允许本机回环 TCP，并提供图形桌面环境。平时回归可使用 `build.ps1 test` 或 `mvn test`。
 

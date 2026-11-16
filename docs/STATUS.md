@@ -1,6 +1,6 @@
 # LTalk 当前状态与开发交接
 
-更新于 **2026-11-16（Asia/Shanghai）**。工作目录为 `D:\Agent\AllProjects\LTalk`，核对时分支为 `master`，未配置远端。当前功能包括公共历史补齐、发送反馈和聊天页重连，使用 **Java 17 目标字节码、Swing、Maven 和协议 v6**。接续时先检查实际 Git 状态和提交，再按用户的新需求继续。
+更新于 **2026-11-16（Asia/Shanghai）**。工作目录为 `D:\Agent\AllProjects\LTalk`，核对时分支为 `master`，未配置远端。当前功能包括 Windows 双击启动和局域网发现，使用 **Java 17 目标字节码、Swing、Maven、TCP 协议 v6 和 UDP 发现 v1**。接续时先检查实际 Git 状态和提交，再按用户的新需求继续。
 
 ## 从哪里接手
 
@@ -19,6 +19,7 @@
 | 范围 | 行为与边界 |
 | --- | --- |
 | 连接与登录 | 启动页先连接服务器，再注册或登录。预填地址自动连接，注册成功后自动登录。双向心跳检测静默失联。断线后聊天页可按原地址重新连接，预填原用户名并重新验证密码。同址同账号登录恢复所选会话与窗口内草稿。 |
+| 启动与发现 | Windows 构建附带 `start-client.cmd`。未指定地址时后台查找约 2 秒，一台自动尝试连接，多台可选择。手动地址优先，最近列表保存 6 个通过握手的地址。命令行服务端默认监听发现 UDP 9001，可关闭。 |
 | 群聊与私聊 | 单一公共聊天室，私聊仅双方。消息以服务端回显为准，用户路由键为区分大小写的用户名。同名昵称可通过悬停确认用户名。私聊对象离线时保留会话和草稿，重新上线后需明确重选才能发送。 |
 | 发送反馈 | 本人新消息逐条显示发送中、已确认、发送失败或结果待确认。失败或待确认时可取回正文到输入框。客户端等待匹配的服务端回显，默认 5 秒；迟到回显可更新同一条消息。待确认消息保留在当前窗口，重连后可核对本人归档。 |
 | 账号切换 | 候选使用独立连接，登录成功后才移交并清理旧界面资料。取消或失败保留原会话。退出登录清除窗口内的历史和草稿，服务端本人归档保留。 |
@@ -38,6 +39,7 @@
 - 默认监听 `0.0.0.0:9000`，最多 20 个连接，含未认证连接。初始握手或直接登录期限为 10 秒，心跳默认间隔 10 秒、响应期限 20 秒。仅匹配的 PONG 完成本轮探测，实际时间受调度影响。
 - 登录态绑定 TCP。账号保存随机盐与 PBKDF2-HMAC-SHA256 散列，服务端持有数据目录锁。资料与改密先原子写文件再发布结果，历史和导出按认证账号隔离。
 - 背景保持可选纯色或渐变，浅深色与窄屏均可用。外观只写 `${user.home}/.ltalk/appearance.properties`，项目采用自身的中性描述。
+- 最近服务器单独保存于 `${user.home}/.ltalk/recent-servers.properties`，内容为服务器地址和端口。发现数据包只提供连接候选。
 
 ## 代码入口
 
@@ -47,15 +49,17 @@
 | common/ConversationScope、UserProfile、AvatarData | 会话键、本人资料、头像格式约束 |
 | server/AccountStore、ChatArchive | 账号、改密、展示资料、公共共享归档和本人历史 |
 | server/MessageRouter、ClientSession、SessionRegistry、ChatServer | 握手与认证、会话权限、路由、心跳、连接清理 |
+| common/LanDiscovery、server/DiscoveryResponder、client/DiscoveryClient、ServerSelection、RecentServers | UDP 发现帧、后台应答与查找、启动页选择、最近地址保存 |
 | client/ChatClient、ClientSessions、HistoryChannel、HistoryExport | 后台连接、候选账号交接、历史分页和导出 |
 | client/ChatWindow、client/ui/WelcomePanel、ConnectionPanel、AuthenticationPanel | 窗口组装、连接及认证界面 |
 | client/ContactProfile、AvatarImporter、client/ui/ProfileAvatar、ProfilePanel、PasswordChangePanel | 头像导入、展示资料、本人资料编辑及改密 |
 | client/ui/ConversationStore、ConversationId、ConversationList、MessageTimeline、ResponsiveShell | EDT 展示、会话选择、分组气泡与布局 |
 | client/ui/Appearance*、ColorPicker、ChatTheme、ThemePalette、FileDialogs、WindowsFilePicker | 外观与色盘、主题、系统文件对话框 |
-| pom.xml、build.ps1 | Java 17 编译目标、固定 Maven 3.9.9、含依赖打包 |
+| pom.xml、build.ps1、start-client.cmd | Java 17 编译目标、固定 Maven 3.9.9、含依赖打包与 Windows 启动 |
 
 ## 已有验证与后续核对
 
+- Windows 启动与发现于 2026-11-16 执行 `build.ps1 -o package`，**116 项通过，0 失败、错误或跳过**，约 1:28。验证包括本机网卡 IPv4 广播与回环去重、打包启动器、关闭发现后的 TCP 握手、窄屏深色启动页。日志为 `.tools/lan-discovery-repeat.log`。跨设备与防火墙配置仍待现场验收。
 - 公共历史补齐于 2026-11-16 执行 `build.ps1 -o package`，**109 项通过，0 失败、错误或跳过**，约 1:29。覆盖晚登录、离线期间公共消息、重启、旧归档、个人删除和私聊隔离。日志为 `.tools/public-history-final.log`，已更新 `target/ltalk-1.0.0.jar`。使用本机回环、隔离数据与 Swing 组件验证。
 - 发送反馈和重连于 2026-11-16 执行 `powershell -NoProfile -File .\build.ps1 -o package`，**107 项通过，0 失败、错误或跳过**，约 1:25。Windows、JDK 25.0.4、Maven 3.9.9，以 release 17 编译。验证使用回环 TCP、临时数据与 Swing 组件。构建产物为 `target/ltalk-1.0.0.jar`，本机日志为 `.tools/chat-experience-final.log`。
 - 此前功能提交包括 `74aa291` 改密、`d629d5e` 高清头像、`c4840f3` 资料同步、`984cb5b` 消息组头像裁切。各阶段的结果与历史人工反馈见 [测试报告](test-report.md)。
