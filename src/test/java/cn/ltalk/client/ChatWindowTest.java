@@ -496,6 +496,8 @@ class ChatWindowTest {
                 });
                 awaitEdt(() -> button(window, "connect").isEnabled()); assertEquals(2, server.onlineCount());
                 bob.group("在切换页继续收到的消息"); awaitEdt(() -> history(window).contains("切换页继续收到"));
+                bob.privateTo("alice", "切换期间仍收到的私聊");
+                awaitEdt(() -> summary(window, "bob").preview().contains("切换期间仍收到的私聊"));
                 onEdt(() -> { text(window, "userId").setText("other"); text(window, "password").setText("wrong!12"); button(window, "connect").doClick(); });
                 awaitEdt(() -> label(window, "authFeedback").getText().contains("LOGIN_FAILED"));
                 onEdt(() -> {
@@ -522,8 +524,10 @@ class ChatWindowTest {
                 });
                 awaitEdt(() -> "@other".equals(label(window, "identityUsername").getText()) && !find(window, "welcomeScroll").isVisible());
                 awaitEdt(() -> server.onlineCount() == 2 && server.connectionCount() == 2);
+                awaitEdt(() -> history(window).contains("切换页继续收到") && label(window, "status").getText().contains("已加载"));
                 onEdt(() -> {
-                    assertEquals("", area(window, "input").getText()); assertFalse(history(window).contains("切换页继续收到"));
+                    assertEquals("", area(window, "input").getText());
+                    assertFalse(summary(window, "bob").preview().contains("切换期间仍收到的私聊"));
                     assertEquals("", text(window, "password").getText()); render(window, 1000, 760, "account-switch-success.png");
                 });
                 bob.privateTo("alice", "old session gone"); bob.error("USER_OFFLINE");
@@ -542,8 +546,10 @@ class ChatWindowTest {
             server.start(); Peer.seed(server);
             try (Peer alice = Peer.login(server.port(),"alice"); Peer bob = Peer.login(server.port(),"bob")) {
                 alice.group("历史公共一"); alice.type(MessageType.GROUP_MESSAGE); bob.type(MessageType.GROUP_MESSAGE);
-                bob.group("历史公共二"); alice.type(MessageType.GROUP_MESSAGE); bob.type(MessageType.GROUP_MESSAGE);
                 bob.privateTo("alice","离线联系人历史"); alice.type(MessageType.PRIVATE_MESSAGE); bob.type(MessageType.PRIVATE_MESSAGE);
+                alice.close();
+                bob.users(1);
+                bob.group("历史公共二"); bob.type(MessageType.GROUP_MESSAGE);
             }
             awaitEdt(() -> server.onlineCount()==0);
             BufferedImage picture = new BufferedImage(144, 144, BufferedImage.TYPE_INT_RGB);

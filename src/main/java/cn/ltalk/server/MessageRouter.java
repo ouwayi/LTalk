@@ -86,7 +86,7 @@ final class MessageRouter {
                     validateChat(request);
                     var recipients = registry.readySessions();
                     Message event = server.archive().record(MessageType.GROUP_MESSAGE, session.userId, server.accounts().nickname(session.userId), request,
-                            recipients.stream().map(s -> s.userId).toList());
+                            List.of());
                     for (ClientSession recipient : recipients) server.deliver(recipient, event);
                 }
                 case PRIVATE_SEND -> {

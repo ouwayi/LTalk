@@ -189,7 +189,11 @@ class AuthenticationExportTest {
             int count = 0;
             while (cursor.next() != null) count++;
             assertEquals(400, count, "Snapshot must exclude subsequent appends");
-            try (ChatArchive.Cursor other = archive.open("Alice")) { assertNull(other.next()); }
+            try (ChatArchive.Cursor lateJoiner = archive.open("Alice", ConversationScope.PUBLIC)) {
+                int sharedCount = 0;
+                while (lateJoiner.next() != null) sharedCount++;
+                assertEquals(401, sharedCount, "Later public snapshots include messages sent before login");
+            }
         }
         ChatRecord record = new ChatRecord("id", "GROUP:PUBLIC", "alice", null, "\"\n中文🙂", "GROUP_MESSAGE", "2026-10-29T00:00:00Z");
         try (HistoryExport export = new HistoryExport(directory, "alice", "json")) {

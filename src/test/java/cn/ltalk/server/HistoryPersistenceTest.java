@@ -2,6 +2,7 @@ package cn.ltalk.server;
 
 import cn.ltalk.common.*;
 import cn.ltalk.support.Peer;
+import com.google.gson.Gson;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.*;
@@ -21,6 +22,86 @@ class HistoryPersistenceTest {
             assertEquals(MessageType.HISTORY_PAGE, page.type()); result.add(page.record()); cursor = page.cursor();
         } while (result.size() < 1000);
         throw new AssertionError("unbounded history");
+    }
+
+    @Test void lateRegistrationAndOfflineLoginCatchUpWithPublicHistoryOnly() throws Exception {
+        List<String> originalIds = new ArrayList<>();
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.dataDirectory(directory); server.start();
+            try (Peer alice = Peer.login(server.port(), "alice")) {
+                for (int i = 1; i <= 4; i++) {
+                    alice.group("公共消息 " + i);
+                    originalIds.add(alice.type(MessageType.GROUP_MESSAGE).messageId());
+                }
+                try (Peer bob = Peer.login(server.port(), "bob")) {
+                    assertEquals(originalIds, records(bob).stream().map(ChatRecord::messageId).toList());
+                    alice.privateTo("bob", "仅双方");
+                    alice.type(MessageType.PRIVATE_MESSAGE); bob.type(MessageType.PRIVATE_MESSAGE);
+                    try (Peer carol = Peer.login(server.port(), "carol")) {
+                        String cursor = null;
+                        for (String id : originalIds) {
+                            carol.send(Message.of(MessageType.EXPORT_REQUEST).requestId("public-export")
+                                    .conversationId(ConversationScope.PUBLIC).cursor(cursor).build());
+                            Message page = carol.type(MessageType.EXPORT_PAGE);
+                            assertEquals(id, page.record().messageId());
+                            cursor = page.cursor();
+                        }
+                        carol.send(Message.of(MessageType.EXPORT_REQUEST).requestId("public-export")
+                                .conversationId(ConversationScope.PUBLIC).cursor(cursor).build());
+                        carol.type(MessageType.EXPORT_END);
+                        assertEquals(4, records(carol).size());
+                    }
+                    alice.close();
+                    bob.await(m -> m.type() == MessageType.USER_LIST && !m.users().contains("alice"));
+                    bob.privateTo("alice", "不得创建离线私聊"); bob.error("USER_OFFLINE");
+                    bob.group("离线期间的公共消息");
+                    originalIds.add(bob.type(MessageType.GROUP_MESSAGE).messageId());
+                }
+            }
+        }
+        try (ChatServer restarted = new ChatServer("127.0.0.1", 0)) {
+            restarted.dataDirectory(directory); restarted.start();
+            try (Peer alice = Peer.login(restarted.port(), "alice")) {
+                List<ChatRecord> all = records(alice);
+                assertEquals(List.of("公共消息 1", "公共消息 2", "公共消息 3", "公共消息 4", "仅双方", "离线期间的公共消息"),
+                        all.stream().map(ChatRecord::content).toList());
+                assertEquals(originalIds, all.stream().filter(record -> ConversationScope.PUBLIC.equals(record.conversationId()))
+                        .map(ChatRecord::messageId).toList());
+            }
+        }
+    }
+
+    @Test void legacyPublicRecordsKeepTheirVisibilityAndPersonalDeletionSurvivesRestart() throws Exception {
+        Path history = Files.createDirectory(directory.resolve("history"));
+        String time = "2099-01-01T00:00:00Z";
+        ChatRecord legacy = new ChatRecord(UUID.randomUUID().toString(), ConversationScope.PUBLIC, "alice", null,
+                "旧版仅 Alice 的副本", "GROUP_MESSAGE", time);
+        Files.writeString(history.resolve("last-time"), time);
+        Files.writeString(history.resolve(AccountStore.fileKey("alice") + ".jsonl"), new Gson().toJson(legacy) + "\n");
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.dataDirectory(directory); server.start();
+            try (Peer alice = Peer.login(server.port(), "alice"); Peer bob = Peer.login(server.port(), "bob")) {
+                alice.group("共享公共消息"); String shared = alice.type(MessageType.GROUP_MESSAGE).messageId();
+                bob.type(MessageType.GROUP_MESSAGE);
+                assertEquals(List.of(legacy.messageId(), shared), records(alice).stream().map(ChatRecord::messageId).toList());
+                assertEquals(List.of(shared), records(bob).stream().map(ChatRecord::messageId).toList());
+                alice.send(Message.of(MessageType.HISTORY_DELETE).requestId("one").conversationId(ConversationScope.PUBLIC)
+                        .messageId(shared).build()); alice.type(MessageType.HISTORY_DELETED);
+                assertEquals(List.of(legacy), records(alice));
+                assertEquals(List.of(shared), records(bob).stream().map(ChatRecord::messageId).toList());
+                alice.send(Message.of(MessageType.HISTORY_DELETE).requestId("clear").conversationId(ConversationScope.PUBLIC).build());
+                alice.type(MessageType.HISTORY_DELETED);
+                assertTrue(records(alice).isEmpty());
+            }
+        }
+        try (ChatServer restarted = new ChatServer("127.0.0.1", 0)) {
+            restarted.dataDirectory(directory); restarted.start();
+            try (Peer alice = Peer.login(restarted.port(), "alice"); Peer bob = Peer.login(restarted.port(), "bob")) {
+                bob.group("清空后的新消息"); alice.type(MessageType.GROUP_MESSAGE); bob.type(MessageType.GROUP_MESSAGE);
+                assertEquals(List.of("清空后的新消息"), records(alice).stream().map(ChatRecord::content).toList());
+                assertEquals(List.of("共享公共消息", "清空后的新消息"), records(bob).stream().map(ChatRecord::content).toList());
+            }
+        }
     }
     @Test void deleteOneAndClearConversationAffectOnlyOwnerAndRemainDeletedAfterRestart() throws Exception {
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {

@@ -114,11 +114,11 @@ nickname strip 后 1～40 char；userId 沿用 1～20 ASCII 字母/数字/下划
 
 新增错误：MISSING_FIELD 缺必填参数；INVALID_NICKNAME 昵称越界；INVALID_PASSWORD 密码长度非法；INVALID_USER_ID 用户名非法；USER_EXISTS 注册重名或已有在线会话；LOGIN_FAILED 统一用户名或密码错误（不区分不存在与密码错误）；NOT_AUTHENTICATED 未认证；FORBIDDEN 他人历史或无效/过期/跨连接游标；STORAGE_ERROR 注册/归档文件失败；EXPORT_FAILED 历史读取失败。原 BAD_MESSAGE 继续处理未知模式、方向/类型/帧错误。客户端本地文件错误或逐页响应超时也提示 EXPORT_FAILED，不自动重试或断开健康聊天连接。
 
-record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC 或 PRIVATE:按用户名排序的双方）、sender、recipient（群聊为 null）、content、messageType、sentAt（ISO 8601 UTC）。聊天回显另增加 messageId/conversationId，不以此提供幂等重试。记录按服务端生成时间升序写入，时钟回拨以持久化的上次时间钳制，相同时间按追加顺序。归档只保存路由时在线用户有权接收的公共消息、私聊双方消息，不保存离线投递或给新上线者补公共历史。
+record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC 或 PRIVATE:按用户名排序的双方）、sender、recipient（群聊为 null）、content、messageType、sentAt（ISO 8601 UTC）。聊天回显另增加 messageId/conversationId，不以此提供幂等重试。新版服务端给新消息分配递增时间，时钟回拨或重复时在上次时间上增加一纳秒。历史和导出按服务端时间合并共享公共归档及本人归档。所有已认证账号都可读取新版记录的公共消息，包含登录前和离线期间的消息。旧版公共记录沿用各账号已有的可见范围。私聊归档仅双方可读，离线私聊仍返回 USER_OFFLINE。
 
 游标为原认证连接私有的随机标识，开始时固定文件末尾，新消息不进入该快照。导出和历史查询各有一个独立快照，同类新请求替换旧游标，完成或连接结束时关闭。客户端消费一页后再请求下一页。导出为 JSON UTF-8 数组（保留 null recipient），或带七列表头和双引号转义的 CSV。客户端负责本地文件路径，发布失败会清理临时文件。
 
-TCP 尚无 TLS。现有归档用于本人历史恢复和导出，范围以账号此前收到的授权记录为准。
+TCP 尚无 TLS。历史与导出共享当前账号的可见范围和删除状态。
 
 ## 按会话导出（2026-10-30）
 
@@ -157,9 +157,9 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 | HISTORY_DELETE | requestId, conversationId（必填）；无 messageId 清空当前会话的本人副本，有 messageId 删除本会话中该条本人副本。userId 可省略/本人；不接受他人文件/任意路径 |
 | HISTORY_DELETED | requestId, conversationId, messageId（逐条时）；仅在本人文件替换成功后确认，不广播给对方 |
 
-历史与导出各占一个独立游标，均只属于原认证连接；新查询替换旧历史游标。删除会关闭该账号已有历史/导出快照，使旧游标失效；客户端重新查询已删除后的归档。不存在的单条记录返回 NOT_FOUND，无会话/无效编号为 BAD_MESSAGE，他人账号/私聊/无效游标为 FORBIDDEN，文件失败为 STORAGE_ERROR。删除写同目录临时文件，成功原子替换；解析/写出失败保留旧文件、不确认成功，不能以删除绕过损坏文件恢复。
+历史与导出各占一个独立游标，均只属于原认证连接；新查询替换旧历史游标。删除会关闭该账号已有历史/导出快照，使旧游标失效；客户端重新查询已删除后的归档。不存在的单条记录返回 NOT_FOUND，无会话/无效编号为 BAD_MESSAGE，他人账号/私聊/无效游标为 FORBIDDEN，文件失败为 STORAGE_ERROR。公共删除原子更新当前账号的隐藏记录，私聊删除原子重写当前账号的文件。文件错误时保留原有可见记录。
 
-聊天归档+投递与删除确认串行排序，防止删除前的实时消息在确认后重新进入本人窗口；新产生的消息正常保存。该顺序仍受原同步网络写入慢端限制，不代表全系统所有事件的全局顺序或送达确认。查询只回放本人此前有权接收的归档，不补上线前公共历史/离线投递。客户端以 messageId 合并历史与实时消息，不使用 requestId 去重；历史不增加未读。超时/失败显示可重试，删除超时结果可能已生效，重新加载核对。
+聊天归档+投递与删除确认串行排序，防止删除前的实时消息在确认后重新进入本人窗口。清空公共会话覆盖当时可见的旧版和共享记录，之后发出的消息正常显示。客户端以 messageId 合并历史与实时消息，历史不增加未读。超时/失败显示可重试，删除超时结果可能已生效，重新加载核对。
 
 这些历史查询与删除类型自 v4 引入，v6 沿用上述授权与分页规则。
 
