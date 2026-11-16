@@ -155,6 +155,7 @@ docs/                   需求、协议、设计、测试与演示
 
 - [需求与用户流程](docs/requirements.md)
 - [当前状态与开发交接](docs/STATUS.md)
+- [后续开发路线图](docs/ROADMAP.md)
 - [按阶段整理的开发日志](docs/DEVLOG.md)
 - [通信协议与错误码](docs/protocol.md)
 - [架构、线程与关键设计](docs/design.md)
