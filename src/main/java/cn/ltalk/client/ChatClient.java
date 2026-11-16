@@ -5,13 +5,25 @@ import cn.ltalk.common.*;
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.Consumer;
 
 public final class ChatClient implements AutoCloseable {
     private static final String PASSWORD_REQUEST_PREFIX = "password-";
+    private static final String CHAT_REQUEST_PREFIX = "chat-";
+    private static final int MAX_PENDING_CHAT = 64;
     private record PasswordChange(String id, Consumer<Message> completion, ScheduledFuture<?> deadline) { }
+    private static final class ChatSend {
+        final Message request;
+        ScheduledFuture<?> deadline;
+        boolean writing;
+
+        ChatSend(Message request) { this.request = request; }
+    }
     public enum State { DISCONNECTED, CONNECTING, SERVER_CONNECTED, AUTHENTICATING, CONNECTED }
     private final Object lifecycle = new Object();
     private final ClientEventListener listener;
@@ -240,10 +252,15 @@ public final class ChatClient implements AutoCloseable {
                 if (message.from() == null || message.content() == null || message.serverTime() == null
                         || (message.type() == MessageType.PRIVATE_MESSAGE && message.to() == null))
                     throw new IOException("聊天事件缺少字段");
-                emit(connection, () -> {
-                    if (message.type() == MessageType.GROUP_MESSAGE) listener.onGroup(message);
-                    else listener.onPrivate(message);
-                });
+                synchronized (lifecycle) {
+                    if (connection.closed.get()) return;
+                    ChatSend pending = connection.chatSends.get(message.requestId());
+                    if (pending != null && matchesEcho(connection, pending.request, message)) finishChat(connection, pending);
+                    emit(connection, () -> {
+                        if (message.type() == MessageType.GROUP_MESSAGE) listener.onGroup(message);
+                        else listener.onPrivate(message);
+                    });
+                }
             }
             case USER_LIST -> {
                 if (message.users() == null || message.revision() == null) throw new IOException("在线列表缺少字段");
@@ -262,13 +279,27 @@ public final class ChatClient implements AutoCloseable {
                 emit(connection, () -> listener.onDisplayProfile(profile));
             }
             case SYSTEM -> emit(connection, () -> listener.onSystem(message));
-            case ERROR -> emit(connection, () -> listener.onError(message));
+            case ERROR -> {
+                if (message.requestId() != null && message.requestId().startsWith(CHAT_REQUEST_PREFIX)) {
+                    synchronized (lifecycle) {
+                        if (connection.closed.get()) return;
+                        ChatSend pending = connection.chatSends.get(message.requestId());
+                        if (pending != null) finishChat(connection, pending);
+                        boolean uncertain = switch (message.code() == null ? "" : message.code()) {
+                            case "BAD_MESSAGE", "EMPTY_CONTENT", "CONTENT_TOO_LONG", "NOT_AUTHENTICATED",
+                                    "SELF_PRIVATE_NOT_ALLOWED", "USER_OFFLINE" -> false;
+                            default -> true;
+                        };
+                        emit(connection, () -> listener.onChatSendError(message, uncertain));
+                    }
+                } else emit(connection, () -> listener.onError(message));
+            }
             case PROFILE_OK, PASSWORD_CHANGED -> { /* Ignore expired account responses. */ }
             default -> throw new IOException("服务端发送了不允许的消息类型");
         }
     }
 
-    public void sendGroup(String content) throws IOException { submitChat(null, content); }
+    public String sendGroup(String content) throws IOException { return submitChat(null, content); }
     private Connection authenticated() throws IOException {
         synchronized (lifecycle) {
             if (state != State.CONNECTED || active == null || active.closed.get()) throw new IOException("请先登录");
@@ -423,13 +454,13 @@ public final class ChatClient implements AutoCloseable {
             terminate(connection, "心跳无法入队，请手动重新连接；待发送消息未确认");
         }
     }
-    public void sendPrivate(String target, String content) throws IOException {
+    public String sendPrivate(String target, String content) throws IOException {
         if (target == null || !target.matches("[A-Za-z0-9_]{1,20}"))
             throw new ProtocolException("BAD_MESSAGE", "请选择当前在线的私聊对象");
-        submitChat(target, content);
+        return submitChat(target, content);
     }
 
-    private void submitChat(String target, String content) throws IOException {
+    private String submitChat(String target, String content) throws IOException {
         Validation.content(content);
         synchronized (lifecycle) {
             Connection connection = active;
@@ -437,17 +468,55 @@ public final class ChatClient implements AutoCloseable {
                 throw new IOException("尚未连接，请先连接服务端");
             if (connection.userId.equals(target))
                 throw new ProtocolException("SELF_PRIVATE_NOT_ALLOWED", "不能给自己发私聊");
+            if (connection.chatSends.size() >= MAX_PENDING_CHAT) throw new IOException("待确认消息过多，请稍后发送");
             Message request = Message.of(target == null ? MessageType.GROUP_SEND : MessageType.PRIVATE_SEND)
-                    .requestId(connection.nextId()).to(target).content(content).build();
+                    .requestId(CHAT_REQUEST_PREFIX + UUID.randomUUID()).to(target).content(content).build();
             MessageCodec.encode(request); // Local frame validation does not tear down a healthy connection.
+            ChatSend pending = new ChatSend(request);
+            connection.chatSends.put(request.requestId(), pending);
+            pending.deadline = deadlines.schedule(() -> {
+                synchronized (lifecycle) {
+                    if (connection.chatSends.get(request.requestId()) != pending) return;
+                    finishChat(connection, pending);
+                    reportUnconfirmed(connection, pending, "等待发送超时，消息未发出", "未及时收到服务端回显");
+                }
+            }, loginTimeoutMillis, TimeUnit.MILLISECONDS);
             try {
-                connection.sender.execute(() -> {
-                    if (connection.closed.get()) return;
-                    try { MessageCodec.write(connection.socket.getOutputStream(), request); }
-                    catch (IOException ex) { terminate(connection, "消息发送失败：" + ex.getMessage() + "，请重新连接；消息未确认"); }
-                });
-            } catch (RejectedExecutionException ex) { throw new IOException("发送队列已满或连接已关闭，请稍后重试"); }
+                connection.sender.execute(() -> writeChat(connection, pending));
+            } catch (RejectedExecutionException ex) {
+                finishChat(connection, pending);
+                throw new IOException("发送队列已满或连接已关闭，请稍后重试");
+            }
+            return request.requestId();
         }
+    }
+
+    private void writeChat(Connection connection, ChatSend pending) {
+        synchronized (lifecycle) {
+            if (connection.closed.get() || connection.chatSends.get(pending.request.requestId()) != pending) return;
+            pending.writing = true;
+        }
+        try { MessageCodec.write(connection.socket.getOutputStream(), pending.request); }
+        catch (IOException ex) { terminate(connection, "消息写入中断，请重新连接"); }
+    }
+
+    private static boolean matchesEcho(Connection connection, Message request, Message echo) {
+        return echo.messageId() != null && connection.userId.equals(echo.from()) && request.content().equals(echo.content())
+                && (request.to() == null ? echo.type() == MessageType.GROUP_MESSAGE
+                : echo.type() == MessageType.PRIVATE_MESSAGE && request.to().equals(echo.to()));
+    }
+
+    // All send tracking is guarded by lifecycle.
+    private static void finishChat(Connection connection, ChatSend pending) {
+        connection.chatSends.remove(pending.request.requestId());
+        pending.deadline.cancel(false);
+    }
+
+    private void reportUnconfirmed(Connection connection, ChatSend pending, String unsent, String unconfirmed) {
+        boolean uncertain = pending.writing;
+        Message error = Message.error(pending.request.requestId(), uncertain ? "CHAT_UNCONFIRMED" : "CHAT_NOT_SENT",
+                uncertain ? unconfirmed : unsent);
+        emit(connection, () -> listener.onChatSendError(error, uncertain));
     }
 
     /** Closing TCP also performs normal logout; no network write runs on the calling UI thread. */
@@ -469,6 +538,11 @@ public final class ChatClient implements AutoCloseable {
         closeExport(connection);
         connection.sender.shutdownNow();
         synchronized (lifecycle) {
+            for (ChatSend pending : connection.chatSends.values()) {
+                pending.deadline.cancel(false);
+                reportUnconfirmed(connection, pending, "连接已断开，消息未发出", "连接已断开，未收到服务端回显");
+            }
+            connection.chatSends.clear();
             if (connection.passwordChange != null) {
                 connection.passwordChange.deadline().cancel(false);
                 connection.passwordChange = null;
@@ -506,6 +580,7 @@ public final class ChatClient implements AutoCloseable {
         volatile String profileRequest;
         volatile ScheduledFuture<?> profileDeadline;
         PasswordChange passwordChange; // Guarded by lifecycle.
+        final Map<String, ChatSend> chatSends = new LinkedHashMap<>();
         final Socket socket = new Socket();
         final AtomicBoolean closed = new AtomicBoolean();
         final AtomicLong sequence = new AtomicLong();

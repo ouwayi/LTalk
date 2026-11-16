@@ -11,6 +11,7 @@ public interface ClientEventListener {
     default void onUserList(Message message) { }
     default void onSystem(Message message) { }
     default void onError(Message message) { }
+    default void onChatSendError(Message message, boolean uncertain) { onError(message); }
     default void onRegistered(String userId) { }
     default void onExported(java.nio.file.Path path) { }
     default void onProfile(cn.ltalk.common.UserProfile profile) { }

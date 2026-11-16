@@ -7,6 +7,7 @@ import org.junit.jupiter.api.*;
 
 import java.io.*;
 import java.net.*;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.BooleanSupplier;
@@ -122,6 +123,57 @@ class ChatClientTest {
         }
     }
 
+    @Test void unconfirmedSendStillAcceptsLateEchoAndOtherSendersCannotConfirmIt() throws Exception {
+        Events events = new Events();
+        ExecutorService fake = Executors.newSingleThreadExecutor();
+        CountDownLatch timedOut = new CountDownLatch(1);
+        try (ServerSocket endpoint = new ServerSocket(0); ChatClient client = new ChatClient(events, Runnable::run, 3000, 1200)) {
+            endpoint.setSoTimeout(5000);
+            Future<?> serving = fake.submit(() -> {
+                try (Socket socket = endpoint.accept()) {
+                    socket.setSoTimeout(5000);
+                    MessageCodec.FrameReader reader = new MessageCodec.FrameReader(socket.getInputStream());
+                    assertEquals(MessageType.LOGIN, reader.read().type());
+                    MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.LOGIN_OK).userId("alice").build());
+                    Message group = reader.read();
+                    MessageCodec.write(socket.getOutputStream(), groupEcho(group, "bob"));
+                    assertTrue(timedOut.await(5, TimeUnit.SECONDS));
+                    MessageCodec.write(socket.getOutputStream(), groupEcho(group, "alice"));
+                    Message priv = reader.read();
+                    MessageCodec.write(socket.getOutputStream(), Message.error(priv.requestId(), "DELIVERY_UNCONFIRMED", "写入中断"));
+                    assertEquals(-1, socket.getInputStream().read());
+                }
+                return null;
+            });
+            client.connect("127.0.0.1", endpoint.getLocalPort(), "alice", "test123!");
+            events.state(ChatClient.State.CONNECTED);
+            String id = client.sendGroup("repeat");
+            Message other = events.message(MessageType.GROUP_MESSAGE);
+            assertEquals("bob", other.from());
+            assertEquals(id, other.requestId());
+            SendError timeout = events.sendErrors.poll(4, TimeUnit.SECONDS);
+            assertNotNull(timeout);
+            assertTrue(timeout.uncertain());
+            assertEquals(id, timeout.message().requestId());
+            assertEquals("CHAT_UNCONFIRMED", timeout.message().code());
+            assertEquals(ChatClient.State.CONNECTED, client.state());
+            timedOut.countDown();
+            assertEquals("alice", events.message(MessageType.GROUP_MESSAGE).from());
+            String rejected = client.sendPrivate("bob", "private message");
+            SendError unconfirmed = events.sendErrors.poll(4, TimeUnit.SECONDS);
+            assertNotNull(unconfirmed);
+            assertTrue(unconfirmed.uncertain());
+            assertEquals(rejected, unconfirmed.message().requestId());
+            client.disconnect();
+            serving.get(4, TimeUnit.SECONDS);
+        } finally { fake.shutdownNow(); }
+    }
+
+    private static Message groupEcho(Message request, String from) {
+        return Message.of(MessageType.GROUP_MESSAGE).requestId(request.requestId()).messageId(UUID.randomUUID().toString())
+                .from(from).content(request.content()).serverTime(Instant.now().toString()).build();
+    }
+
     @Test void repeatedConnectionsReleaseClientAndServerResources() throws Exception {
         Events events = new Events();
         try (ChatClient client = new ChatClient(events, Runnable::run)) {
@@ -141,12 +193,15 @@ class ChatClientTest {
         assertTrue(condition.getAsBoolean(), "Condition did not become true");
     }
 
+    private record SendError(Message message, boolean uncertain) { }
+
     private static final class Events implements ClientEventListener {
         final BlockingQueue<ChatClient.State> states = new LinkedBlockingQueue<>();
         final BlockingQueue<Message> messages = new LinkedBlockingQueue<>();
         final List<String> details = new CopyOnWriteArrayList<>();
         final List<Message> lists = new CopyOnWriteArrayList<>();
         final List<UserProfile> profiles = new CopyOnWriteArrayList<>();
+        final BlockingQueue<SendError> sendErrors = new LinkedBlockingQueue<>();
         @Override public void onProfile(UserProfile profile) { profiles.add(profile); }
         @Override public void onStateChanged(ChatClient.State state, String detail) { details.add(detail); states.add(state); }
         @Override public void onGroup(Message message) { messages.add(message); }
@@ -154,6 +209,10 @@ class ChatClientTest {
         @Override public void onUserList(Message message) { lists.add(message); messages.add(message); }
         @Override public void onSystem(Message message) { messages.add(message); }
         @Override public void onError(Message message) { messages.add(message); }
+        @Override public void onChatSendError(Message message, boolean uncertain) {
+            sendErrors.add(new SendError(message, uncertain));
+            ClientEventListener.super.onChatSendError(message, uncertain);
+        }
         void state(ChatClient.State expected) throws Exception {
             ChatClient.State actual;
             do { actual = states.poll(5, TimeUnit.SECONDS); assertNotNull(actual, "Missing state " + expected); } while (actual != expected);

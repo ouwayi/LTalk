@@ -12,6 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.IdentityHashMap;
 import java.util.ArrayList;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /** Selectable, plain-text bubbles. Layout measures against viewport width, including narrow windows. */
@@ -25,9 +26,11 @@ public final class MessageTimeline extends JScrollPane {
     private String renderedSelf = "";
     private ThemePalette renderedPalette;
     private Function<String, ContactProfile> profiles = userId -> null;
-    private java.util.function.Consumer<ConversationStore.Entry> onDelete = entry -> { };
+    private Consumer<ConversationStore.Entry> onDelete = entry -> { };
+    private Consumer<ConversationStore.Entry> onRecover = entry -> { };
     private boolean deletionEnabled;
-    public void deletion(boolean enabled, java.util.function.Consumer<ConversationStore.Entry> action) { deletionEnabled = enabled; onDelete = action; }
+    public void deletion(boolean enabled, Consumer<ConversationStore.Entry> action) { deletionEnabled = enabled; onDelete = action; }
+    public void onRecover(Consumer<ConversationStore.Entry> action) { onRecover = action; }
 
     public MessageTimeline() {
         super(); setName("timeline"); setViewportView(column); ChatTheme.scroll(this, true);
@@ -75,8 +78,8 @@ public final class MessageTimeline extends JScrollPane {
         AvatarGroup avatar = null;
         for (ConversationStore.Entry entry : entries) {
             LocalDate date = entry.time().atZone(zone).toLocalDate();
-            boolean message = entry.kind() == ConversationStore.EntryKind.MESSAGE;
-            if (!message || prior == null || prior.kind() != ConversationStore.EntryKind.MESSAGE
+            boolean message = isChat(entry);
+            if (!message || prior == null || !isChat(prior)
                     || !entry.from().equals(prior.from()) || !date.equals(previousDate)) {
                 shownInRun = false;
                 avatar = null;
@@ -93,7 +96,8 @@ public final class MessageTimeline extends JScrollPane {
             Component row = previous.get(entry);
             if (message) {
                 boolean own = entry.from().equals(self);
-                BubbleRow bubble = row == null ? new BubbleRow(entry, own, palette, () -> onDelete.accept(entry)) : (BubbleRow) row;
+                BubbleRow bubble = row == null ? new BubbleRow(entry, own, palette,
+                        () -> onDelete.accept(entry), () -> onRecover.accept(entry)) : (BubbleRow) row;
                 bubble.setDisplayName(displayName);
                 bubble.startsRun(!shownInRun);
                 bubble.delete.setEnabled(deletionEnabled && entry.messageId() != null);
@@ -114,6 +118,10 @@ public final class MessageTimeline extends JScrollPane {
             column.add(row);
             plain.append(entry.content()).append('\n');
         }
+    }
+
+    private static boolean isChat(ConversationStore.Entry entry) {
+        return entry.kind() == ConversationStore.EntryKind.MESSAGE || entry.kind() == ConversationStore.EntryKind.OUTGOING;
     }
 
     private static boolean matches(ConversationStore.Entry entry, String displayName, String needle) {
@@ -209,10 +217,11 @@ public final class MessageTimeline extends JScrollPane {
         private final MessageText body;
         private final JLabel sender;
         private final JMenuItem delete;
+        private final JPanel footer = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
         private Dimension measured;
         private int measuredWidth = -1;
         private boolean startsRun = true;
-        BubbleRow(ConversationStore.Entry entry, boolean own, ThemePalette palette, Runnable onDelete) {
+        BubbleRow(ConversationStore.Entry entry, boolean own, ThemePalette palette, Runnable onDelete, Runnable onRecover) {
             super(null); this.own = own; setOpaque(false);
             bubble = new ChatTheme.RoundedPanel(new BorderLayout(0, 3), 20, own ? palette.outgoing() : palette.surface(), true);
             bubble.setBorder(new EmptyBorder(9, 13, 7, 13));
@@ -224,11 +233,30 @@ public final class MessageTimeline extends JScrollPane {
             sender = ChatTheme.label("", 12, avatarColor(entry.from(), palette.dark()), true);
             if (!own) bubble.add(sender, BorderLayout.NORTH);
             String time = DateTimeFormatter.ofPattern("HH:mm").format(entry.time().atZone(ZoneId.systemDefault()));
-            JLabel stamp = ChatTheme.label(time, 10, palette.muted(), false);
-            if (own) { stamp.setIcon(new LineIcon(LineIcon.Kind.CHECK, palette.muted(), 12)); stamp.setHorizontalTextPosition(SwingConstants.LEFT); }
-            stamp.setHorizontalAlignment(SwingConstants.RIGHT);
-            if (own) stamp.setToolTipText("服务端已回显，不代表对方已读");
-            bubble.add(stamp, BorderLayout.SOUTH); add(bubble);
+            ConversationStore.SendStatus status = entry.sendStatus();
+            String result = status == null ? "" : switch (status) {
+                case SENDING -> " · 发送中";
+                case CONFIRMED -> " · 已确认";
+                case FAILED -> " · 发送失败";
+                case UNCONFIRMED -> " · 结果待确认";
+            };
+            JLabel stamp = ChatTheme.label(time + result, 10,
+                    status == ConversationStore.SendStatus.FAILED ? palette.danger() : palette.muted(), false);
+            stamp.setName("sendStatus");
+            stamp.setToolTipText(status == ConversationStore.SendStatus.CONFIRMED ? "已收到服务端回显" : entry.sendDetail());
+            footer.setOpaque(false);
+            footer.add(stamp);
+            if (status == ConversationStore.SendStatus.FAILED || status == ConversationStore.SendStatus.UNCONFIRMED) {
+                JButton recover = ChatTheme.pill("取回正文");
+                recover.setName("recoverMessage");
+                recover.setFont(ChatTheme.FONT.deriveFont(11f));
+                recover.setBorder(new EmptyBorder(2, 5, 2, 5));
+                recover.setToolTipText(entry.sendDetail());
+                recover.addActionListener(e -> onRecover.run());
+                ChatTheme.apply(recover, palette);
+                footer.add(recover);
+            }
+            bubble.add(footer, BorderLayout.SOUTH); add(bubble);
         }
         void setDisplayName(String name) {
             if (name.equals(sender.getText())) return;
@@ -249,11 +277,13 @@ public final class MessageTimeline extends JScrollPane {
             if (measured != null && measuredWidth == availableWidth) return measured;
             int maximum = Math.max(120, Math.min(560, availableWidth - 86));
             int natural = Math.max(100, body.naturalWidth() + 34);
+            natural = Math.max(natural, footer.getPreferredSize().width + 26);
             boolean showSender = !own && startsRun;
             if (showSender) natural = Math.max(natural, sender.getPreferredSize().width + 26);
             int width = Math.min(maximum, natural);
             body.setSize(Math.max(70, width - 26), Short.MAX_VALUE);
-            int height = body.getPreferredSize().height + (showSender ? sender.getPreferredSize().height + 3 : 0) + 36;
+            int height = body.getPreferredSize().height + footer.getPreferredSize().height + 22
+                    + (showSender ? sender.getPreferredSize().height + 3 : 0);
             measuredWidth = availableWidth; measured = new Dimension(width, Math.max(52, height)); return measured;
         }
         @Override public void doLayout() {

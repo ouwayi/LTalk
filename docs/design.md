@@ -38,7 +38,7 @@ ClientSession 用 AtomicBoolean 保证清理一次。先关闭 Socket（不等�
 
 每次连接创建独立 Connection 对象，包含新 Socket、原子请求编号、单线程发送执行器及最多 64 项等待队列、一个读取线程。发送线程完成 DNS 和 TCP 连接，发出 HELLO 或直登 LOGIN，再启动读取线程。界面走 HELLO 时，收到 HELLO_OK 后可输入注册或登录资料。收到 LOGIN_OK 才进入 CONNECTED，所有协议写入在后台执行。
 
-客户端传入 `SwingUtilities::invokeLater` 作为回调执行器。每个回调在实际执行时检查 `active == connection`，所以已排队的旧 EDT 回调不会覆盖新连接。旧读取线程发生异常时也仅能终止自己的 Connection。发送出错关闭当前连接并明确提示“未确认”，不自动重发。
+客户端传入 `SwingUtilities::invokeLater` 作为回调执行器。每个回调在实际执行时检查 `active == connection`，所以已排队的旧 EDT 回调不会覆盖新连接。旧读取线程发生异常时也仅能终止自己的 Connection。连接内按请求编号跟踪发送期限及写入是否开始，窗口在 EDT 按会话保留本地发送气泡。服务端回显用正式记录替换匹配气泡，写入中断关闭当前连接并更新未完成的发送状态。重连时重新认证并加载本人归档，当前窗口仅在地址和用户名均匹配时保留原会话状态。
 
 主动断开直接关闭 TCP，服务端通过 EOF 完成退出；协议同样支持显式 LOGOUT。窗口关闭调用 client.close，释放 Socket、发送执行器和计时器。客户端线程设为 daemon 作为进程退出兜底；测试验证重复连接后线程结束。
 

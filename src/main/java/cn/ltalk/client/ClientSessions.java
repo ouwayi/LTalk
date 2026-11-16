@@ -47,8 +47,8 @@ public final class ClientSessions implements AutoCloseable {
         authentication().client.registerAndLogin(userId, nickname, password, random);
     }
     public void disconnect() { authentication().client.disconnect(); }
-    public void sendGroup(String text) throws IOException { current.client.sendGroup(text); }
-    public void sendPrivate(String target, String text) throws IOException { current.client.sendPrivate(target, text); }
+    public String sendGroup(String text) throws IOException { return current.client.sendGroup(text); }
+    public String sendPrivate(String target, String text) throws IOException { return current.client.sendPrivate(target, text); }
     public void exportHistory(Path directory, String format, String scope) throws IOException { current.client.exportHistory(directory, format, scope); }
     public void exportTo(Path path, String format, String scope, boolean replace) throws IOException { current.client.exportTo(path, format, scope, replace); }
     public void updateProfile(String nickname, String avatar) throws IOException { current.client.updateProfile(nickname, avatar); }
@@ -92,6 +92,9 @@ public final class ClientSessions implements AutoCloseable {
         }
         @Override public void onError(Message message) {
             if (active()) listener.onError(message); else if (candidate()) listener.onSwitchError(message);
+        }
+        @Override public void onChatSendError(Message message, boolean uncertain) {
+            if (active()) listener.onChatSendError(message, uncertain);
         }
         @Override public void onGroup(Message message) { if (active()) listener.onGroup(message); }
         @Override public void onPrivate(Message message) { if (active()) listener.onPrivate(message); }

@@ -2,6 +2,7 @@ package cn.ltalk.client;
 
 import cn.ltalk.common.MessageType;
 import cn.ltalk.common.Message;
+import cn.ltalk.common.MessageCodec;
 import cn.ltalk.client.ui.*;
 import cn.ltalk.server.ChatServer;
 import cn.ltalk.support.Peer;
@@ -14,7 +15,13 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.file.*;
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -24,6 +31,154 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Exercises our own non-visible Swing component tree on the EDT, without OS input automation. */
 class ChatWindowTest {
     @TempDir Path appearanceDirectory;
+
+    @Test @Timeout(25)
+    void sendFeedbackAndReconnectKeepConversationAndDrafts() throws Exception {
+        AtomicReference<ChatWindow> windowRef = new AtomicReference<>();
+        CountDownLatch reject = new CountDownLatch(1), drop = new CountDownLatch(1);
+        ExecutorService fake = Executors.newSingleThreadExecutor();
+        try (ServerSocket endpoint = new ServerSocket(0, 2, InetAddress.getByName("127.0.0.1"))) {
+            endpoint.setSoTimeout(6000);
+            Future<?> server = fake.submit(() -> {
+                try (Socket socket = endpoint.accept()) {
+                    MessageCodec.FrameReader reader = handshake(socket);
+                    acceptLogin(socket, reader.read());
+                    finishLoading(socket, reader);
+                    Message rejected = reader.read();
+                    assertEquals("被拒绝的消息", rejected.content());
+                    assertTrue(reject.await(5, TimeUnit.SECONDS));
+                    MessageCodec.write(socket.getOutputStream(), Message.error(rejected.requestId(), "USER_OFFLINE", "目标用户不在线"));
+                    Message lost = reader.read();
+                    assertEquals("断线时的消息", lost.content());
+                    assertTrue(drop.await(5, TimeUnit.SECONDS));
+                }
+                try (Socket socket = endpoint.accept()) {
+                    MessageCodec.FrameReader reader = handshake(socket);
+                    Message wrong = reader.read();
+                    assertEquals("alice", wrong.userId());
+                    MessageCodec.write(socket.getOutputStream(), Message.error(wrong.requestId(), "LOGIN_FAILED", "用户名或密码错误"));
+                    acceptLogin(socket, reader.read());
+                    finishLoading(socket, reader);
+                    Message sent = reader.read();
+                    assertEquals(MessageType.PRIVATE_SEND, sent.type());
+                    assertEquals("bob", sent.to());
+                    assertEquals("私聊草稿", sent.content());
+                    MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.PRIVATE_MESSAGE)
+                            .requestId(sent.requestId()).messageId(UUID.randomUUID().toString())
+                            .from("alice").to("bob").content(sent.content()).serverTime(Instant.now().toString()).build());
+                    assertEquals(-1, socket.getInputStream().read());
+                }
+                return null;
+            });
+            onEdt(() -> windowRef.set(new ChatWindow("127.0.0.1", Integer.toString(endpoint.getLocalPort()), "alice",
+                    appearanceDirectory.resolve("appearance.properties"))));
+            ChatWindow window = windowRef.get();
+            awaitEdt(() -> button(window, "connect").isEnabled());
+            onEdt(() -> { text(window, "password").setText("test123!"); button(window, "connect").doClick(); });
+            awaitEdt(() -> button(window, "send").isEnabled() && list(window).getModel().getSize() == 2);
+            onEdt(() -> {
+                area(window, "input").setText("群聊草稿");
+                selectPeer(window, "bob");
+                area(window, "input").setText("被拒绝的消息");
+                button(window, "send").doClick();
+                assertTrue(hasSendStatus(window, "发送中"));
+                assertEquals("", area(window, "input").getText());
+                button(window, "group").doClick();
+            });
+            reject.countDown();
+            onEdt(() -> selectPeer(window, "bob"));
+            awaitEdt(() -> hasSendStatus(window, "发送失败"));
+            onEdt(() -> {
+                button(window, "recoverMessage").doClick();
+                assertEquals("被拒绝的消息", area(window, "input").getText());
+                area(window, "input").setText("断线时的消息");
+                button(window, "send").doClick();
+                area(window, "input").setText("私聊草稿");
+            });
+            drop.countDown();
+            awaitEdt(() -> !button(window, "send").isEnabled() && hasSendStatus(window, "结果待确认"));
+            onEdt(() -> {
+                assertFalse(find(window, "welcomeScroll").isVisible());
+                assertTrue(label(window, "recoveryStatus").getText().contains("断开"));
+                assertTrue(label(window, "recipient").getText().contains("暂未连接"));
+                assertEquals("私聊草稿", area(window, "input").getText());
+                window.applyAppearance(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK), false);
+                render(window, 360, 580, "chat-reconnect-narrow.png");
+                JButton recovery = button(window, "reconnect");
+                assertTrue(recovery.getWidth() > 0 && recovery.isEnabled());
+                recovery.doClick();
+                assertEquals("127.0.0.1", text(window, "host").getText());
+                assertEquals(Integer.toString(endpoint.getLocalPort()), text(window, "port").getText());
+                assertEquals("alice", text(window, "userId").getText());
+                assertEquals(0, ((JPasswordField) text(window, "password")).getPassword().length);
+            });
+            awaitEdt(() -> button(window, "connect").isEnabled());
+            onEdt(() -> {
+                button(window, "backToChat").doClick();
+                assertEquals("私聊草稿", area(window, "input").getText());
+                assertFalse(button(window, "send").isEnabled());
+                assertEquals("继续登录", button(window, "reconnect").getText());
+                button(window, "reconnect").doClick();
+            });
+            onEdt(() -> { text(window, "password").setText("wrong!"); button(window, "connect").doClick(); });
+            awaitEdt(() -> label(window, "authFeedback").getText().contains("LOGIN_FAILED"));
+            onEdt(() -> { text(window, "password").setText("test123!"); button(window, "connect").doClick(); });
+            awaitEdt(() -> button(window, "send").isEnabled());
+            onEdt(() -> {
+                assertTrue(label(window, "recipient").getText().contains("私聊 bob"));
+                assertTrue(hasSendStatus(window, "发送失败"));
+                assertTrue(hasSendStatus(window, "结果待确认"));
+                assertEquals("私聊草稿", area(window, "input").getText());
+                button(window, "group").doClick();
+                assertEquals("群聊草稿", area(window, "input").getText());
+                selectPeer(window, "bob");
+                button(window, "send").doClick();
+            });
+            awaitEdt(() -> hasSendStatus(window, "已确认"));
+            onEdt(() -> {
+                assertEquals(1, history(window).split("私聊草稿", -1).length - 1);
+                window.dispatchEvent(new WindowEvent(window, WindowEvent.WINDOW_CLOSING));
+            });
+            server.get(5, TimeUnit.SECONDS);
+        } finally {
+            if (windowRef.get() != null && windowRef.get().isDisplayable())
+                onEdt(() -> windowRef.get().dispatchEvent(new WindowEvent(windowRef.get(), WindowEvent.WINDOW_CLOSING)));
+            fake.shutdownNow();
+        }
+    }
+
+    private static MessageCodec.FrameReader handshake(Socket socket) throws Exception {
+        socket.setSoTimeout(6000);
+        MessageCodec.FrameReader reader = new MessageCodec.FrameReader(socket.getInputStream());
+        Message hello = reader.read();
+        assertEquals(MessageType.HELLO, hello.type());
+        MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.HELLO_OK).requestId(hello.requestId()).build());
+        return reader;
+    }
+
+    private static void acceptLogin(Socket socket, Message login) throws Exception {
+        assertEquals(MessageType.LOGIN, login.type());
+        assertEquals("alice", login.userId());
+        assertEquals("test123!", login.password());
+        MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.LOGIN_OK).requestId(login.requestId())
+                .userId("alice").nickname("Alice").build());
+    }
+
+    private static void finishLoading(Socket socket, MessageCodec.FrameReader reader) throws Exception {
+        Message history = reader.read();
+        assertEquals(MessageType.HISTORY_REQUEST, history.type());
+        MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.HISTORY_END).requestId(history.requestId()).build());
+        MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.USER_LIST).revision(1L).users(List.of("alice", "bob")).build());
+    }
+
+    private static boolean hasSendStatus(Container root, String status) {
+        for (Component component : root.getComponents()) {
+            if (component instanceof JLabel label && "sendStatus".equals(label.getName()) && label.getText().endsWith(status)) return true;
+            if (component instanceof Container nested && hasSendStatus(nested, status)) return true;
+        }
+        return false;
+    }
+
     @Test @Timeout(20)
     void connectionPrivateTargetLossDraftAndGroupEcho() throws Exception {
         AtomicReference<ChatWindow> windowRef = new AtomicReference<>();

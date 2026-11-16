@@ -22,7 +22,7 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 | LOGIN_OK | S → 当前 C | requestId, userId, nickname, avatar, createdAt（旧账号可缺省） | 客户端切为 CONNECTED |
 | GROUP_SEND | C → S | requestId, content | 当前全部就绪会话收到 GROUP_MESSAGE，包括发送者 |
 | GROUP_MESSAGE | S → 在线 C | requestId, messageId, conversationId, from, content, serverTime, nickname（可选） | 群聊展示，以服务端事件为唯一正式回显 |
-| PRIVATE_SEND | C → S | requestId, to, content | 先写目标，成功后回显发送者；失败只向发送者 ERROR |
+| PRIVATE_SEND | C → S | requestId, to, content | 校验目标在线并归档后，先写目标，成功后回显发送者；出错向发送者返回相关 ERROR |
 | PRIVATE_MESSAGE | S → 私聊双方 | requestId, messageId, conversationId, from, to, content, serverTime, nickname（可选） | 仅双方收包，不通过广播 |
 | USER_LIST | S → 在线 C | users: string[], revision: 非负 long | 全量列表，按较新版本覆盖 |
 | SYSTEM | S → 在线 C | content, serverTime | 上下线提示，不作为列表数据来源 |
@@ -34,6 +34,8 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 `userId` strip 首尾空白后必须匹配 `[A-Za-z0-9_]{1,20}`，区分大小写；只代表当前连接的路由名称。`to` 必须是精确匹配的合法用户标识，不做目标名称自动规范化。`content` 不为 null、不能全为空白、最长 2000 个 Java UTF-16 char 单元，保留前后空白和换行。所有字符串都受帧字节上限约束。
 
 `from` 取自连接身份。聊天事件由服务端生成 UUID 和会话 ID，时间读取服务端时钟并按归档时间下限钳制。时间为 ISO-8601 UTC，例如 `2026-10-24T13:00:00Z`，客户端气泡以当地 HH:mm 展示。SYSTEM 也使用服务端时间。
+
+桌面客户端用唯一请求编号关联待确认的发送。收到来自当前账号、会话和正文均匹配的实时回显后，将本地气泡替换为服务端事件。等待期限默认从入队起 5 秒，尚未开始写入的消息在超时或断开时取消发送。已开始写入后未收到回显、出现 `STORAGE_ERROR` 或 `DELIVERY_UNCONFIRMED` 时保留待确认状态。迟到的匹配回显仍可确认该消息。历史记录无发送请求编号，客户端仅按服务端消息 ID 合并正式记录。请求编号没有去重保证。
 
 `revision` 在单个服务端进程内递增。就绪成员变化、版本增加、快照生成在同一注册表短锁内完成，所有网络发送都在该锁外。并发快照发送可能乱序，因此客户端忽略小于或等于已见版本的快照；重新连接将版本重置为 -1。列表按名称排序，包含自己。
 
@@ -61,7 +63,8 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 | EMPTY_CONTENT | 正文全为空白 | 保留连接 |
 | CONTENT_TOO_LONG | 正文超过 2000 char | 保留连接 |
 | FRAME_TOO_LARGE | 帧超过其类型允许的上限 | 返回错误并关闭 |
-| USER_OFFLINE | 目标不在就绪表中或向目标写入失败 | 不发送成功回显，保留发送者连接 |
+| USER_OFFLINE | 归档前发现目标不在就绪表中 | 拒绝本次发送，保留发送者连接 |
+| DELIVERY_UNCONFIRMED | 已写归档，但向目标 Socket 写入失败 | 保留发送者连接，提示核对归档 |
 | SELF_PRIVATE_NOT_ALLOWED | 私聊目标为自己 | 保留连接 |
 | WRONG_PASSWORD | 修改密码时当前密码不匹配 | 保留连接，可重新填写 |
 

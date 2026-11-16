@@ -100,7 +100,8 @@ final class MessageRouter {
                         throw new ProtocolException("USER_OFFLINE", "目标用户不在线，请重新选择");
                     Message event = server.archive().record(MessageType.PRIVATE_MESSAGE, session.userId, server.accounts().nickname(session.userId), request,
                             List.of(session.userId, target.userId));
-                    if (!server.deliver(target, event)) throw new ProtocolException("USER_OFFLINE", "目标用户不在线，请重新选择");
+                    if (!server.deliver(target, event))
+                        throw new ProtocolException("DELIVERY_UNCONFIRMED", "私聊写入中断，消息可能已归档，请核对记录");
                     server.deliver(session, event);
                 }
                 default -> throw new ProtocolException("BAD_MESSAGE", "此消息类型不能由客户端发送");

@@ -11,11 +11,16 @@ import java.util.*;
 
 /** EDT-confined presentation state; no sockets, protocol changes, persistence or delivery claims. */
 public final class ConversationStore {
-    public enum EntryKind { MESSAGE, SYSTEM, ERROR }
-    public record Entry(EntryKind kind, String from, String to, String content, Instant time, String messageId, String nickname) {
+    public enum EntryKind { MESSAGE, OUTGOING, SYSTEM, ERROR }
+    public enum SendStatus { SENDING, CONFIRMED, FAILED, UNCONFIRMED }
+    public record Entry(EntryKind kind, String from, String to, String content, Instant time, String messageId,
+                        String nickname, SendStatus sendStatus, String sendDetail) {
         public Entry(EntryKind kind, String from, String to, String content, Instant time) { this(kind, from, to, content, time, null); }
         public Entry(EntryKind kind, String from, String to, String content, Instant time, String messageId) {
             this(kind, from, to, content, time, messageId, null);
+        }
+        public Entry(EntryKind kind, String from, String to, String content, Instant time, String messageId, String nickname) {
+            this(kind, from, to, content, time, messageId, nickname, null, null);
         }
         public String displayName() {
             return ContactProfile.displayName(from, nickname);
@@ -39,10 +44,13 @@ public final class ConversationStore {
     private final Map<String, ContactProfile> profiles = new HashMap<>();
     private final Set<String> messageIds = new HashSet<>();
     private final Set<String> liveIds = new HashSet<>();
+    private final Map<String, Entry> outgoing = new HashMap<>();
+    private final Set<String> confirmedSends = new HashSet<>();
     private String self = "";
     private ConversationId selected = ConversationId.PUBLIC;
     private boolean visible = true;
     private boolean selectionConfirmed = true;
+    private boolean awaitingUsers;
     private List<String> onlineUsers = List.of();
 
     public ConversationStore() { reset(); }
@@ -51,10 +59,12 @@ public final class ConversationStore {
         clearProfiles();
         messageIds.clear();
         liveIds.clear();
+        outgoing.clear();
+        confirmedSends.clear();
         Conversation group = new Conversation(ConversationId.PUBLIC);
         group.emptyPreview = "和局域网里的伙伴开始聊天";
         conversations.put(group.id, group);
-        selected = group.id; selectionConfirmed = true; onlineUsers = List.of();
+        selected = group.id; selectionConfirmed = true; awaitingUsers = false; onlineUsers = List.of();
     }
 
     /** Switching identities must never expose the previous identity's private history or drafts. */
@@ -124,7 +134,9 @@ public final class ConversationStore {
     public boolean updateUsers(List<String> users) {
         onlineUsers = List.copyOf(users);
         Conversation current = conversations.get(selected);
-        boolean invalidated = selected.kind() == ConversationId.Kind.PRIVATE && current.online && !users.contains(selected.key());
+        boolean invalidated = selected.kind() == ConversationId.Kind.PRIVATE && selectionConfirmed
+                && (current.online || awaitingUsers) && !users.contains(selected.key());
+        awaitingUsers = false;
         for (Conversation conversation : conversations.values()) conversation.online = false;
         conversations.get(ConversationId.PUBLIC).online = !users.isEmpty();
         for (String name : users) {
@@ -134,6 +146,12 @@ public final class ConversationStore {
         return invalidated;
     }
 
+    public void disconnected() {
+        onlineUsers = List.of();
+        for (Conversation conversation : conversations.values()) conversation.online = false;
+        awaitingUsers = true;
+    }
+
     private Conversation ensurePrivate(String user) {
         ConversationId id = ConversationId.privateWith(user);
         return conversations.computeIfAbsent(id, Conversation::new);
@@ -141,6 +159,23 @@ public final class ConversationStore {
 
     public ConversationId receive(Message message) {
         return receive(message, false);
+    }
+    public void submitted(ConversationId id, String requestId, String content) {
+        String to = id.kind() == ConversationId.Kind.PRIVATE ? id.key() : null;
+        Entry entry = new Entry(EntryKind.OUTGOING, self, to, content, Instant.now(), null, null, SendStatus.SENDING, null);
+        outgoing.put(requestId, entry);
+        conversations.get(id).entries.add(entry);
+    }
+    public ConversationId sendError(String requestId, boolean uncertain, String detail) {
+        Entry entry = outgoing.get(requestId);
+        if (entry == null || entry.sendStatus() == SendStatus.FAILED) return null;
+        ConversationId id = entry.to() == null ? ConversationId.PUBLIC : ConversationId.privateWith(entry.to());
+        List<Entry> entries = conversations.get(id).entries;
+        Entry replacement = new Entry(EntryKind.OUTGOING, entry.from(), entry.to(), entry.content(), entry.time(),
+                null, null, uncertain ? SendStatus.UNCONFIRMED : SendStatus.FAILED, detail);
+        entries.set(entries.indexOf(entry), replacement);
+        outgoing.put(requestId, replacement);
+        return id;
     }
     public void beginHistory() {
         messageIds.clear();
@@ -160,11 +195,27 @@ public final class ConversationStore {
         boolean group = message.type() == MessageType.GROUP_MESSAGE;
         String peer = self.equals(message.from()) ? message.to() : message.from();
         Conversation conversation = group ? conversations.get(ConversationId.PUBLIC) : ensurePrivate(peer);
+        if (!historical && self.equals(message.from()) && message.messageId() != null) {
+            Entry submitted = outgoing.get(message.requestId());
+            if (submitted != null && Objects.equals(submitted.to(), message.to()) && (submitted.to() == null) == group
+                    && submitted.content().equals(message.content())) {
+                outgoing.remove(message.requestId());
+                conversation.entries.remove(submitted);
+                confirmedSends.add(message.messageId());
+                // A history page may already have added the archive row while the echo was pending.
+                if (messageIds.contains(message.messageId())) {
+                    conversation.entries.removeIf(entry -> message.messageId().equals(entry.messageId()));
+                    messageIds.remove(message.messageId());
+                    updateSummary(conversation);
+                }
+            }
+        }
         boolean firstLive = !historical && (message.messageId() == null || liveIds.add(message.messageId()));
         if (firstLive && !self.equals(message.from()) && !(visible && selected.equals(conversation.id))) conversation.unread++;
         if (message.messageId() != null && !messageIds.add(message.messageId())) return conversation.id;
         Instant time = parseTime(message.serverTime());
-        Entry entry = new Entry(EntryKind.MESSAGE, message.from(), message.to(), message.content(), time, message.messageId(), message.nickname());
+        Entry entry = new Entry(EntryKind.MESSAGE, message.from(), message.to(), message.content(), time, message.messageId(), message.nickname(),
+                confirmedSends.contains(message.messageId()) ? SendStatus.CONFIRMED : null, null);
         int index = Collections.binarySearch(conversation.entries, entry, Comparator.comparing(Entry::time));
         if (index < 0) index = -index - 1;
         else while (index < conversation.entries.size() && !conversation.entries.get(index).time().isAfter(time)) index++;
@@ -177,8 +228,11 @@ public final class ConversationStore {
                 : ConversationId.privateWith(Arrays.stream(scope.split(":" )).skip(1).filter(p -> !p.equals(self)).findFirst().orElseThrow());
         Conversation conversation = conversations.get(target); if (conversation == null) return;
         conversation.entries.removeIf(entry -> {
-            boolean remove = id == null || id.equals(entry.messageId());
-            if (remove && entry.messageId() != null) { messageIds.remove(entry.messageId()); liveIds.remove(entry.messageId()); } return remove;
+            boolean remove = entry.kind() != EntryKind.OUTGOING && (id == null || id.equals(entry.messageId()));
+            if (remove && entry.messageId() != null) {
+                messageIds.remove(entry.messageId()); liveIds.remove(entry.messageId()); confirmedSends.remove(entry.messageId());
+            }
+            return remove;
         });
         conversation.unread = Math.min(conversation.unread, (int) conversation.entries.stream().filter(e -> e.kind() == EntryKind.MESSAGE && !self.equals(e.from())).count());
         updateSummary(conversation);
@@ -194,8 +248,6 @@ public final class ConversationStore {
         conversations.get(ConversationId.PUBLIC).entries.add(new Entry(EntryKind.SYSTEM, "", "", text, Instant.now()));
     }
     public ConversationId error(Message message) {
-        // The existing network API returns no submission ID. An uncorrelated error is shown in the
-        // current view and global status, never fabricated as a successfully delivered bubble.
         ConversationId id = selected;
         notice(id, message.code() + "：" + message.message(), true);
         return id;
