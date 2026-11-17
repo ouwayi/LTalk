@@ -1,20 +1,20 @@
 # 当前需求与操作流程
 
-基线为根目录的[课程任务拆解](../局域网聊天项目任务拆解.md)。当前范围为单服务端、单公共聊天室、5～10 个正常桌面客户端，私聊由服务端路由。已实现双向心跳、注册登录、本人授权历史恢复及导出、头像昵称同步和改密。最新功能与验证范围见 [STATUS](STATUS.md)。
+基线为根目录的[课程任务拆解](../局域网聊天项目任务拆解.md)。原课程目标为单服务端、单公共聊天室和 5～10 个桌面客户端。当前版本支持私聊、双向心跳、注册登录、授权历史恢复及导出、资料同步和改密，另有可选的单机公网 TLS 模式。最新功能与验证范围见 [STATUS](STATUS.md)。
 
 | 需求 | 实现与约束 | 验证入口 |
 | --- | --- | --- |
 | R-01 配置并启动 | CLI 端口/IP/连接上限，默认 9000/0.0.0.0/20 | ChatServerTest.occupiedPortAndShutdownAreObservable |
 | R-02 账号注册登录 | 昵称/用户名/密码，或随机用户名；密码验证后加入。用户名 strip 后 `[A-Za-z0-9_]{1,20}`；重名保留原会话；LOGIN_OK 最先返回 | duplicateLogin / concurrentSameName 测试 |
 | R-03 在线列表 | 加入/离开推送全量快照；版本递增；重连重置本地版本 | userListVersions / logoutAbruptClose 测试 |
-| R-04 群聊 | 在线就绪用户各收到一次，包括发送者。本人在线期间的授权记录可在下次登录恢复 | ChatServerTest、HistoryPersistenceTest |
+| R-04 群聊 | 在线就绪用户各收到一次，包括发送者。共享归档支持登录后查看新版服务端保存的公共消息，包括首次登录前与离线期间的消息 | ChatServerTest、HistoryPersistenceTest |
 | R-05 私聊 | 只发目标和发送者；不存在/自己/缺目标反馈错误 | groupEchoPrivateIsolation / privateErrors 测试 |
 | R-06 消息展示 | 纯文本、当地时间、当前会话标识，接收气泡按发送者连续分组，显示同步昵称和头像 | ChatWindowTest、MessageTimelineTest |
 | R-07 边界与协议 | 2000 UTF-16 单元正文、普通帧 16 KiB、指定头像帧 176 KiB，换行转义，错误按连接处理 | MessageCodecTest、ChatServerTest |
 | R-08 清理与手动重连 | EOF/RST/读写失败清理；服务端停止关闭会话；旧连接不能影响新连接 | ChatServerTest / ChatClientTest |
 | R-09 桌面响应 | 后台连接/收发、EDT 更新、连接中禁重复提交、断线禁发送 | ChatClientTest + Swing 人工验收 |
 | R-10 目标离线保护 | 保留私聊会话与草稿，撤销发送许可，目标重新上线后须明确重选 | ConversationStoreTest、ChatWindowTest |
-| R-11 资源限制 | 20 连接含未登录；10 秒绝对握手/直接登录期限；HELLO 后心跳保活；客户端有界发送队列 | loginTimeout / tricklingBytes / LoadTest |
+| R-11 资源限制 | 局域网模式默认 20 连接；TLS 模式默认 140 个总连接、24 个未认证连接和单独的认证期限。初始握手 10 秒，HELLO 后心跳保活，逐连接有界发送队列 | ChatServerTest、LoadTest、PublicCapacityTest |
 | R-12 局域网交付 | 跨系统群聊、私聊、上下线；说明真实环境与证据来源 | docs/test-report.md 的 Q16，宿主机＋虚拟机人工通过（用户反馈）；双物理设备未测 |
 | X1 心跳与失联 | HELLO 或直接登录成功后双向 PING/PONG，间隔/响应期限可配置，正常空闲不踢，静默失联清理并允许手动重连 | HeartbeatIntegrationTest / HeartbeatSettingsTest 本机通过；2026-10-28 用户反馈虚拟机断网后自动检测断开正常，实际测试日期/配置/精确耗时未提供 |
 | X2 当前会话导出 | 本人可选择 JSON/CSV、文件名和位置，旧文件覆盖需确认 | AuthenticationExportTest、HistoryExportTest、FileDialogsTest |
@@ -66,7 +66,7 @@ X2：仅导出本人归档，其他账号/伪造游标 FORBIDDEN；空 JSON/CSV�
 
 切换操作不会立即退出原账号；候选使用独立连接，原账号继续收消息/心跳。成功 LOGIN_OK 后才关闭旧连接和清理旧界面数据；失败、名额不足、取消不影响旧会话。认证过程中允许返回聊天，取消候选后迟到回调不得切换身份；跨服务端同名账号也清除旧展示记录。验证入口为 ClientSessionsTest、ChatWindowTest。
 
-## 历史与本人副本管理（2026-11-01）
+## 历史与本人副本管理（2026-11-01，历史阶段）
 
 用户明确选择同时支持逐条删除和清空当前会话。已保存的本人归档每次登录可恢复到群/私聊，离线对象也可阅读；不补离线未投递或登录前公共历史。删除服务端本人副本，不能影响对方/第三人，成功确认后不再恢复/导出，失败保留；删除与并发投递须有清楚顺序。保存窗口同窗选择类型/位置/文件名，JSON 每条一行且可标准解析。验证入口 HistoryPersistenceTest、HistoryClientTest、HistoryStoreTest、ChatWindowTest、HistoryExportTest。
 

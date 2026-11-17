@@ -12,9 +12,9 @@
 - **JDK 17 或更高版本**，须包含 `java`、`javac`；客户端需要图形桌面环境。
 - **Maven 3.9.x**（Windows 可使用下面的脚本自动下载固定的 3.9.9）。
 - 固定依赖：Gson **2.11.0**、JNA Platform **5.14.0**（含 JNA，Windows 原生文件选择）、JUnit Jupiter **5.11.4**（仅测试）；均由构建打包，无需另装。
-- 实际验证环境：Windows、JDK **25.0.4**、Maven **3.9.9**，以 `--release 17` 编译；没有在 JDK 17 运行时实测。
+- 本机完整回归使用 Windows、JDK **25.0.4**、Maven **3.9.9**，以 `--release 17` 编译。用户另在 Oracle Cloud Ubuntu 24.04 运行打包后的服务端，云端 Java 的实际版本未单独记录。
 
-构建前确认 `java -version` 与 `javac -version` 均可运行，并将 `JAVA_HOME`（如设置）指向 JDK。运行已打包 JAR 只需 Java 运行环境；编译和测试需要完整 JDK。其他操作系统可使用已安装 Maven，尚无独立运行验收记录。
+构建前确认 `java -version` 与 `javac -version` 均可运行，并将 `JAVA_HOME`（如设置）指向 JDK。运行已打包 JAR 只需 Java 运行环境。编译和测试需要完整 JDK，其他操作系统可使用已安装的 Maven。
 
 以下命令均在项目根目录 `D:\Agent\AllProjects\LTalk` 运行（先 `Set-Location D:\Agent\AllProjects\LTalk`）。首次下载需要联网；缓存齐全后可用 `-o package`，离线 `clean` 另需已缓存 clean 插件。
 
@@ -42,7 +42,7 @@ mvn test
 
 **Windows 客户端**可双击 `start-client.cmd`。构建后，`target/start-client.cmd` 和 `target/ltalk-1.0.0.jar` 可一起复制到其他 Windows 设备运行。启动器从 `JAVA_HOME` 或 `PATH` 查找 `javaw.exe`，需要 Java 17 或更高版本。
 
-云主机部署、TLS 证书、客户端连接和备份恢复见 [单机云部署手册](docs/deployment.md)。公网客户端请勾选「使用 TLS 加密连接」，并填写证书对应的主机名。
+公网客户端勾选「使用 TLS 加密连接」，填写证书对应的域名或公网 IP。首次部署、更新 JAR 和复测见 [单机云部署手册](docs/deployment.md)。
 
 先启动服务端：
 
@@ -145,7 +145,7 @@ java "-Dltalk.discovery.enabled=false" -jar target/ltalk-1.0.0.jar
 
 ## 测试
 
-最近一次完整功能回归为 2026-11-17 的 `build.ps1 -o package`。**120 项通过，0 失败、错误或跳过**，约 1:58。另运行 100 个 TLS 客户端的 180 秒本机压测，持续阶段验证 88,100 次群聊投递。各阶段结果见 [当前状态](docs/STATUS.md) 和 [测试报告](docs/test-report.md)。
+最近一次完整功能回归为 2026-11-17 的 `build.ps1 -o package`。**120 项通过，0 失败、错误或跳过**，约 1:58。另运行 100 个 TLS 客户端的 180 秒本机压测，持续阶段验证 88,100 次群聊投递。用户已在 Oracle Cloud 实例部署并通过 Windows 宿主机和虚拟机完成私网和公网 TLS 的基本验证。详细范围见 [测试报告](docs/test-report.md)。
 
 运行完整测试需允许本机回环 TCP，并提供图形桌面环境。平时回归可使用 `build.ps1 test` 或 `mvn test`。
 

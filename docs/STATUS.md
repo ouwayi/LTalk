@@ -8,11 +8,11 @@
 2. 改功能前按需查 [需求与用户流程](requirements.md)、[架构](design.md)、[界面设计](ui-design.md) 和 [协议](protocol.md)，再核对对应代码与测试。
 3. [测试报告](test-report.md) 以日期和阶段区分证据，[开发日志](DEVLOG.md) 保留决策与变更详情。根目录的[任务拆解](../局域网聊天项目任务拆解.md)和[早期草稿](devlog-early-draft.md)属于历史资料。
 4. `target/`、`.tools/` 和默认 `data/` 为本机构建、证据或数据目录，均不提交。验证使用独立临时数据目录。运行已有账号时，用原数据目录，或通过 `-Dltalk.dataDir` 指定其绝对路径。
-5. 选择下一项开发工作时，查阅 [后续开发路线图](ROADMAP.md)。
+5. 选择下一项开发工作时，查阅 [后续开发路线图](ROADMAP.md)。下一项功能由用户指定。云端复测按[更新 JAR 与复测](deployment.md#更新-jar-与复测)操作。
 
 新对话可以直接发送：
 
-> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 AGENTS.md 阅读 docs/STATUS.md 和 README.md，检查 Git 状态，再根据我接下来提出的需求继续。
+> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 AGENTS.md 阅读 docs/STATUS.md、README.md，以及 docs/DEVLOG.md 和 docs/ROADMAP.md 的相关部分，核对 Git 状态，再按我指定的需求继续。
 
 ## 当前功能
 
@@ -59,13 +59,19 @@
 | client/ui/Appearance*、ColorPicker、ChatTheme、ThemePalette、FileDialogs、WindowsFilePicker | 外观与色盘、主题、系统文件对话框 |
 | pom.xml、build.ps1、start-client.cmd | Java 17 编译目标、固定 Maven 3.9.9、含依赖打包与 Windows 启动 |
 
+## 云端测试交接
+
+- 用户已在 Oracle Cloud 的 Ubuntu 24.04 实例完成 Tailscale 私网和公网 TLS 基本验收。Windows 宿主机和虚拟机均可连接、登录及收发消息。具体证据边界见 [测试报告](test-report.md#oracle-cloud-私网与公网验收)。
+- 公网服务由 `ltalk.service` 管理，使用 `/opt/ltalk/ltalk-1.0.0.jar`、`/var/lib/ltalk` 和 `/etc/ltalk/server.p12`。用户计划停掉服务并保留云端 `ltalk-public-test` 的 TCP 9000 测试入站规则。复测先核对进程状态、来源 IP、Ubuntu 临时防火墙规则和证书有效期。更换版本时让服务端和测试客户端使用同版 JAR。[部署手册](deployment.md#更新-jar-与复测)
+- 不同物理设备和独立接入网络、长期证书续签、实际云规格的百人容量仍待验收。当前反馈足以接续新功能开发。
+
 ## 已有验证与后续核对
 
-- 公网阶段于 2026-11-17 完整回归 **120 项通过**，约 1:58。本机 100 个 TLS 客户端连续验证约 180 秒，持续阶段 88,100 次群聊投递、无意外断线。已验证慢端关闭、TLS 证书及主机名拒绝、连接及认证限制、备份复制后恢复、打包 JAR 启动。需要在实际云主机和外部网络复验。[部署手册](deployment.md) · [测试报告](test-report.md)
+- 公网阶段于 2026-11-17 完整回归 **120 项通过**，约 1:58。本机 100 个 TLS 客户端连续验证约 180 秒，持续阶段 88,100 次群聊投递、无意外断线。已验证慢端关闭、TLS 证书及主机名拒绝、连接及认证限制、备份复制后恢复、打包 JAR 启动。[测试报告](test-report.md)
 - Windows 启动与发现于 2026-11-16 执行 `build.ps1 -o package`，**116 项通过，0 失败、错误或跳过**，约 1:28。验证包括本机网卡 IPv4 广播与回环去重、打包启动器、关闭发现后的 TCP 握手、窄屏深色启动页。日志为 `.tools/lan-discovery-repeat.log`。跨设备与防火墙配置仍待现场验收。
 - 公共历史补齐于 2026-11-16 执行 `build.ps1 -o package`，**109 项通过，0 失败、错误或跳过**，约 1:29。覆盖晚登录、离线期间公共消息、重启、旧归档、个人删除和私聊隔离。日志为 `.tools/public-history-final.log`，已更新 `target/ltalk-1.0.0.jar`。使用本机回环、隔离数据与 Swing 组件验证。
 - 发送反馈和重连于 2026-11-16 执行 `powershell -NoProfile -File .\build.ps1 -o package`，**107 项通过，0 失败、错误或跳过**，约 1:25。Windows、JDK 25.0.4、Maven 3.9.9，以 release 17 编译。验证使用回环 TCP、临时数据与 Swing 组件。构建产物为 `target/ltalk-1.0.0.jar`，本机日志为 `.tools/chat-experience-final.log`。
 - 此前功能提交包括 `74aa291` 改密、`d629d5e` 高清头像、`c4840f3` 资料同步、`984cb5b` 消息组头像裁切。各阶段的结果与历史人工反馈见 [测试报告](test-report.md)。
-- 当前 v6 的多设备流程、独立 JDK 17 运行时、各档 DPI、其他系统和长时间负载尚未完整验收。早期用户反馈的宿主机＋虚拟机验证属于当时版本。
+- 当前 v6 的多设备资料同步等完整流程、独立 JDK 17 自动化回归、各档 DPI、其他客户端系统和长时间负载仍待验收。早期宿主机＋虚拟机的局域网反馈保持原版本归属。
 - 跨账号私聊归档写入没有事务保证。窗口保留全部已加载历史，缺少容量淘汰。改密、资料保存或删除超时可能已生效，可重新登录或重载历史核对。
 - 实机可核对点击发送期间断网、重连后核对归档、离线私聊对象重新上线，以及 v6 多设备资料同步、改密后重登与 256/512 头像上传。后续开发选项见 [路线图](ROADMAP.md)。
