@@ -6,30 +6,22 @@ import java.awt.*;
 import java.util.function.Consumer;
 
 public final class EmojiPicker extends JPopupMenu {
-    private static final String[] EMOJI = {
-            "😀", "😂", "😊", "🥰", "😎", "🤔",
-            "😅", "😭", "😮", "😴", "🙃", "😤",
-            "👍", "👎", "👏", "🙌", "🙏", "👋",
-            "❤️", "🔥", "🎉", "⭐", "✅", "💡"
-    };
-
     public EmojiPicker(ThemePalette palette, Consumer<String> selected) {
         setName("emojiPicker");
         setLabel("选择 Emoji");
-        JPanel grid = new JPanel(new GridLayout(0, 6, 3, 3));
+        setBorder(BorderFactory.createLineBorder(palette.line()));
+        JPanel grid = new JPanel(new GridLayout(0, 9, 2, 2));
         grid.setBorder(new EmptyBorder(5, 5, 5, 5));
         ChatTheme.surface(grid);
-        Font emojiFont = new Font("Segoe UI Emoji", Font.PLAIN, 20);
-        Font fallback = new Font(Font.DIALOG, Font.PLAIN, 20);
-        for (String value : EMOJI) {
-            JButton choice = ChatTheme.pill(value);
-            choice.setName("emoji-" + value);
-            choice.setFont(emojiFont.canDisplay(value.codePointAt(0)) ? emojiFont : fallback);
+        for (EmojiIcons.Choice item : EmojiIcons.CHOICES) {
+            JButton choice = ChatTheme.iconButton(LineIcon.Kind.EMOJI, item.label());
+            choice.setName("emoji-" + item.value());
+            choice.setIcon(EmojiIcons.icon(item.value(), 25));
             choice.setBorder(new EmptyBorder(0, 0, 0, 0));
-            choice.setPreferredSize(new Dimension(33, 33));
+            choice.setPreferredSize(new Dimension(31, 31));
             choice.addActionListener(e -> {
                 setVisible(false);
-                selected.accept(value);
+                selected.accept(item.value());
             });
             grid.add(choice);
         }

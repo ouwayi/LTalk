@@ -1,5 +1,13 @@
 # 测试报告与验收记录
 
+## 彩色 Emoji 与输入栏对齐（2026-11-17，阶段 35）
+
+Windows、JDK 25.0.4、Maven 3.9.9，编译目标 Java 17。完整离线 `build.ps1 -o package` **137 项通过，0 失败、错误或跳过**，日志 `.tools/emoji-verified.log`。
+
+- `EmojiTextTest` 验证草稿和气泡的彩色渲染、连续相同 Emoji、带变体选择符的 Emoji、方向键、删除键与原 Unicode 剪贴板内容。
+- `ChatWindowTest` 渲染 420 像素宽的输入栏，验证单行文字与工具图标中心相差至多 2 个逻辑像素，并通过回环验证文字和 Emoji 混排发送。人工查看离屏的面板和输入框预览。
+- 本轮在 Windows 运行 Swing 与本机回环测试。不同系统的字体回退及实际高 DPI 窗口待现场验收。
+
 ## Emoji、图片和文件传输（2026-11-17，阶段 34）
 
 Windows、JDK 25.0.4、Maven 3.9.9，编译目标 Java 17。完整离线 `build.ps1 -o package` **135 项通过，0 失败、错误或跳过**，约 2:14。生成含依赖 JAR，日志 `.tools/attachments-final.log`。

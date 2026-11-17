@@ -16,6 +16,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import javax.imageio.ImageIO;
 import javax.swing.*;
+import javax.swing.text.JTextComponent;
 import java.awt.*;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
@@ -398,9 +399,9 @@ class ChatWindowTest {
                     area(window, "input").setText("公共草稿"); selectPeer(window, "bob");
                     assertEquals(0, summary(window, "bob").unread()); assertTrue(history(window).contains("私聊未读消息"));
                     area(window, "input").setText("第一行");
-                    JTextArea editor = area(window, "input"); editor.setCaretPosition(editor.getDocument().getLength());
+                    JTextComponent editor = area(window, "input"); editor.setCaretPosition(editor.getDocument().getLength());
                     invokeKey(editor, java.awt.event.KeyEvent.VK_ENTER, java.awt.event.InputEvent.SHIFT_DOWN_MASK);
-                    editor.append("第二行"); assertEquals("第一行\n第二行", editor.getText());
+                    editor.replaceSelection("第二行"); assertEquals("第一行\n第二行", editor.getText());
                     button(window, "group").doClick(); assertEquals("公共草稿", editor.getText());
                     selectPeer(window, "bob"); assertEquals("第一行\n第二行", editor.getText());
                     invokeKey(editor, java.awt.event.KeyEvent.VK_ENTER, 0); assertEquals("", editor.getText());
@@ -429,12 +430,26 @@ class ChatWindowTest {
                         assertTrue(button(window, name).isEnabled(), name);
                         assertTrue(button(window, name).getWidth() > 0, name);
                     }
-                    JTextArea narrowEditor = area(window, "input");
+                    JTextComponent narrowEditor = area(window, "input");
                     assertTrue(narrowEditor.getWidth() > 80);
                     narrowEditor.setText("窄屏消息");
                     narrowEditor.setCaretPosition(2);
-                    ((JButton) find(window.emojiPicker(), "emoji-😀")).doClick();
+                    EmojiPicker picker = window.emojiPicker();
+                    Dimension pickerSize = picker.getPreferredSize();
+                    renderContainer(picker, pickerSize.width, pickerSize.height, "ui-emoji-picker.png");
+                    ((JButton) find(picker, "emoji-😀")).doClick();
                     assertEquals("窄屏😀消息", narrowEditor.getText());
+                    render(window, 420, 760, "ui-emoji-composer.png");
+                    try {
+                        Rectangle textRow = narrowEditor.modelToView2D(0).getBounds();
+                        Point rowCenter = SwingUtilities.convertPoint(narrowEditor, textRow.x,
+                                (int) Math.round(textRow.getCenterY()), window);
+                        JButton attachment = button(window, "attach");
+                        Point toolCenter = SwingUtilities.convertPoint(attachment, 0, attachment.getHeight() / 2, window);
+                        assertTrue(Math.abs(rowCenter.y - toolCenter.y) <= 2, "Single line should align with toolbar icons");
+                    } catch (javax.swing.text.BadLocationException ex) {
+                        throw new AssertionError(ex);
+                    }
                     invokeKey(narrowEditor, java.awt.event.KeyEvent.VK_ENTER, 0);
                     button(window, "back").doClick(); layout(window.getContentPane());
                     assertTrue(find(window, "sidebar").isVisible()); assertFalse(find(window, "chatPane").isVisible());
@@ -1075,7 +1090,7 @@ class ChatWindowTest {
             if(child instanceof Container nested) { JMenuItem item=messageAction(nested,content,action); if(item!=null) return item; }
         } return null;
     }
-    private static void invokeKey(JTextArea editor, int key, int modifiers) {
+    private static void invokeKey(JTextComponent editor, int key, int modifiers) {
         Object binding = editor.getInputMap().get(KeyStroke.getKeyStroke(key, modifiers));
         editor.getActionMap().get(binding).actionPerformed(new java.awt.event.ActionEvent(editor, 0, binding.toString()));
     }
@@ -1118,7 +1133,7 @@ class ChatWindowTest {
     }
     private static JButton button(ChatWindow window, String name) { return (JButton) find(window, name); }
     private static JTextField text(ChatWindow window, String name) { return (JTextField) find(window, name); }
-    private static JTextArea area(ChatWindow window, String name) { return (JTextArea) find(window, name); }
+    private static JTextComponent area(ChatWindow window, String name) { return (JTextComponent) find(window, name); }
     private static JLabel label(ChatWindow window, String name) { return (JLabel) find(window, name); }
     @SuppressWarnings("unchecked") private static JList<ConversationStore.Summary> list(ChatWindow window) { return (JList<ConversationStore.Summary>) find(window, "conversations"); }
 

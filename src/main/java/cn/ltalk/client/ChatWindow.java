@@ -49,15 +49,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private List<SocialItem> socialItems = List.of();
     private boolean socialLoading, socialDirty, privateRequesting;
     private final JTextField search = ChatTheme.field("", "conversationSearch");
-    private final JTextArea input = new JTextArea(1, 16) {
-        @Override protected void paintComponent(Graphics graphics) {
-            super.paintComponent(graphics);
-            if (getText().isEmpty()) {
-                Graphics2D g = (Graphics2D) graphics.create(); ChatTheme.quality(g); g.setFont(getFont()); g.setColor(ChatTheme.palette(this).muted());
-                g.drawString("消息", getInsets().left + 2, getInsets().top + g.getFontMetrics().getAscent()); g.dispose();
-            }
-        }
-    };
+    private final ComposerInput input = new ComposerInput();
     private final JLabel status = ChatTheme.label("未连接 · 点击连接聊天室开始", 11, ChatTheme.MUTED, false);
     private final JLabel recoveryStatus = ChatTheme.label("连接已断开", 12, ChatTheme.MUTED, false);
     private final JButton reconnect = ChatTheme.pill("重新连接");
@@ -95,6 +87,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private final JLabel quoteDraftText = ChatTheme.label("", 12, ChatTheme.MUTED, false);
     private final ResponsiveShell shell;
     private final JScrollPane editorScroll;
+    private final JPanel mediaActions = new JPanel(new GridLayout(1, 2));
+    private final JPanel composeActions = new JPanel(new BorderLayout(4, 0));
     private final ChatTheme.RoundedPanel header;
     private final ChatTheme.RoundedPanel composer;
     private ChatClient.State connectionState = ChatClient.State.DISCONNECTED;
@@ -173,16 +167,19 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             if (e.getValueIsAdjusting()) readIfAtLatest();
         });
 
-        input.setFont(ChatTheme.FONT.deriveFont(15f)); ChatTheme.foreground(input, ThemePalette.Role.TEXT);
-        input.setLineWrap(true); input.setWrapStyleWord(true); input.setOpaque(false);
-        input.setBorder(new EmptyBorder(4, 2, 4, 2)); input.setMargin(new Insets(0, 0, 0, 0));
         input.setToolTipText("输入消息；Enter 发送，Shift+Enter 换行");
         editorScroll = new JScrollPane(input); ChatTheme.scroll(editorScroll, true);
+        JPanel centeredEditor = new JPanel(new GridBagLayout());
+        centeredEditor.setOpaque(false);
+        GridBagConstraints editorLayout = new GridBagConstraints();
+        editorLayout.weightx = 1;
+        editorLayout.fill = GridBagConstraints.HORIZONTAL;
+        centeredEditor.add(editorScroll, editorLayout);
         composer = new ChatTheme.RoundedPanel(new BorderLayout(8, 0), 26, Color.WHITE, true);
-        JPanel media = new JPanel(new GridLayout(1, 2, 0, 0));
-        media.setOpaque(false);
-        media.add(attach); media.add(image);
-        composer.setBorder(new EmptyBorder(8, 8, 8, 8)); composer.add(media, BorderLayout.WEST); composer.add(editorScroll, BorderLayout.CENTER);
+        mediaActions.setOpaque(false);
+        mediaActions.add(attach); mediaActions.add(image);
+        composer.setBorder(new EmptyBorder(8, 8, 8, 8));
+        composer.add(mediaActions, BorderLayout.WEST); composer.add(centeredEditor, BorderLayout.CENTER);
         quoteDraft.setOpaque(false);
         quoteDraft.setBorder(new EmptyBorder(0, 8, 4, 0));
         quoteDraftText.setName("quoteDraftText");
@@ -194,7 +191,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         quoteDraft.add(cancelQuote, BorderLayout.EAST);
         quoteDraft.setVisible(false);
         composer.add(quoteDraft, BorderLayout.NORTH);
-        JPanel composeActions = new JPanel(new BorderLayout(4, 0)); composeActions.setOpaque(false);
+        composeActions.setOpaque(false);
         composeActions.add(emoji, BorderLayout.WEST); composeActions.add(send, BorderLayout.EAST);
         send.setIcon(new LineIcon(LineIcon.Kind.SEND, Color.WHITE, 23)); send.setPreferredSize(new Dimension(44, 44));
         send.setToolTipText("发送消息"); send.getAccessibleContext().setAccessibleName("发送消息");
@@ -583,7 +580,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private void refreshConversation() {
         refreshConversationHeader();
         restoringDraft = true;
-        try { input.setText(store.draft()); } finally { restoringDraft = false; }
+        try { if (!input.getText().equals(store.draft())) input.setText(store.draft()); }
+        finally { restoringDraft = false; }
         send.setEnabled(connectionState == ChatClient.State.CONNECTED && store.canSend());
         attach.setEnabled(send.isEnabled());
         image.setEnabled(send.isEnabled());
@@ -1401,7 +1399,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         return new DocumentListener() {
             @Override public void insertUpdate(DocumentEvent e) { task.run(); }
             @Override public void removeUpdate(DocumentEvent e) { task.run(); }
-            @Override public void changedUpdate(DocumentEvent e) { task.run(); }
+            @Override public void changedUpdate(DocumentEvent e) { /* Display attributes do not change the draft. */ }
         };
     }
 
@@ -1413,8 +1411,13 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             int width = Math.max(260, Math.min(920, getWidth() - inset * 2)); int x = (getWidth() - width) / 2;
             int top = getWidth() < 500 ? 12 : 24; int headerHeight = historyTools.isVisible() ? 104 : 70;
             header.setBounds(x, top, width, headerHeight);
-            input.setSize(Math.max(100, width - 164), Short.MAX_VALUE);
+            Insets border = composer.getInsets();
+            int toolWidth = mediaActions.getPreferredSize().width + composeActions.getPreferredSize().width;
+            int editorWidth = width - toolWidth - border.left - border.right - 2 * ((BorderLayout) composer.getLayout()).getHgap();
+            input.setSize(Math.max(1, editorWidth), Short.MAX_VALUE);
             int editorHeight = Math.min(108, Math.max(24, input.getPreferredSize().height));
+            Dimension editorSize = new Dimension(1, editorHeight);
+            if (!editorSize.equals(editorScroll.getPreferredSize())) editorScroll.setPreferredSize(editorSize);
             int composeHeight = Math.max(60, editorHeight + 18) + (quoteDraft.isVisible() ? quoteDraft.getPreferredSize().height : 0);
             int composeY = getHeight() - composeHeight - 30;
             composer.setBounds(x, composeY, width, composeHeight);
