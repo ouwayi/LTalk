@@ -21,9 +21,9 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 | LOGIN | C → S | requestId, userId, password | 成功 LOGIN_OK；HELLO 模式失败保留连接，直接登录失败关闭 |
 | LOGIN_OK | S → 当前 C | requestId, userId, nickname, avatar, createdAt（旧账号可缺省） | 客户端切为 CONNECTED |
 | GROUP_SEND | C → S | requestId, content, 可选 conversationId、replyTo | 公共聊天室发往全部就绪会话；独立群组校验成员并仅投递给就绪成员。均含发送者回显 |
-| GROUP_MESSAGE | S → 在线 C | requestId, messageId, conversationId, from, content, serverTime, nickname（可选） | 群聊展示，以服务端事件为唯一正式回显 |
+| GROUP_MESSAGE | S → 在线 C | requestId, messageId, conversationId, from, content, serverTime, 可选 nickname、replyTo | 群聊展示，以服务端事件为唯一正式回显 |
 | PRIVATE_SEND | C → S | requestId, to, content, 可选 replyTo | 必须是好友，或已获许可且目标在线。归档后在线目标先入投递队列，离线好友从其归档收取。最后回显发送者 |
-| PRIVATE_MESSAGE | S → 私聊双方 | requestId, messageId, conversationId, from, to, content, serverTime, nickname（可选） | 仅双方收包，不通过广播 |
+| PRIVATE_MESSAGE | S → 私聊双方的就绪连接 | requestId, messageId, conversationId, from, to, content, serverTime, 可选 nickname、replyTo | 仅双方接收，离线好友通过历史读取 |
 | USER_LIST | S → 在线 C | users: string[], revision: 非负 long | 全量列表，按较新版本覆盖 |
 | SYSTEM | S → 在线 C | content, serverTime | 上下线提示，不作为列表数据来源 |
 | ERROR | S → 当前 C | code, message, requestId（可选） | 本次请求失败；能识别合法 requestId 时附回 |
@@ -35,7 +35,7 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 
 `from` 取自连接身份。聊天事件由服务端生成 UUID 和会话 ID，时间读取服务端时钟并按归档时间下限钳制。时间为 ISO-8601 UTC，例如 `2026-10-24T13:00:00Z`，客户端气泡以当地 HH:mm 展示。SYSTEM 也使用服务端时间。
 
-桌面客户端用唯一请求编号关联待确认的发送。收到来自当前账号、会话和正文均匹配的实时回显后，将本地气泡替换为服务端事件。等待期限默认从入队起 5 秒，尚未开始写入的消息在超时或断开时取消发送。已开始写入后未收到回显、出现 `STORAGE_ERROR` 或 `DELIVERY_UNCONFIRMED` 时保留待确认状态。迟到的匹配回显仍可确认该消息。历史记录无发送请求编号，客户端仅按服务端消息 ID 合并正式记录。请求编号没有去重保证。
+桌面客户端用唯一请求编号关联待确认的发送。收到发送账号、会话、正文及引用编号均匹配的实时回显后，将本地气泡替换为服务端事件。等待期限默认从入队起 5 秒，尚未开始写入的消息在超时或断开时取消发送。已开始写入后未收到回显、出现 `STORAGE_ERROR` 或 `DELIVERY_UNCONFIRMED` 时保留待确认状态。迟到的匹配回显仍可确认该消息。历史记录无发送请求编号，客户端仅按服务端消息 ID 合并正式记录。请求编号没有去重保证。
 
 `revision` 在单个服务端进程内递增。就绪成员变化、版本增加、快照生成在同一注册表短锁内完成，所有网络发送都在该锁外。并发快照发送可能乱序，因此客户端忽略小于或等于已见版本的快照；重新连接将版本重置为 -1。列表按名称排序，包含自己。
 
@@ -84,7 +84,8 @@ TLS 模式对监听端口统一启用 TLS 1.2/1.3，服务端从 PKCS12 加载�
 | EMPTY_CONTENT | 正文全为空白 | 保留连接 |
 | CONTENT_TOO_LONG | 正文超过 2000 char | 保留连接 |
 | FRAME_TOO_LARGE | 帧超过其类型允许的上限 | 返回错误并关闭 |
-| USER_OFFLINE | 归档前发现目标不在就绪表中 | 拒绝本次发送，保留发送者连接 |
+| USER_OFFLINE | 私聊请求的目标离线，或尝试向离线非好友发送消息 | 拒绝本次操作，保留连接 |
+| PRIVATE_FORBIDDEN | 在线私聊缺少许可，或私聊申请受屏蔽限制 | 拒绝本次操作，保留连接 |
 | DELIVERY_UNCONFIRMED | 已写归档，但目标连接在消息进入其发送队列前失效 | 保留发送者连接，提示核对归档 |
 | RATE_LIMITED | 认证请求超过频率限制 | HELLO 模式可稍后重试 |
 | SERVER_BUSY | 密码散列并发达到上限，等候超时 | HELLO 模式可稍后重试 |
@@ -95,7 +96,7 @@ TLS 模式对监听端口统一启用 TLS 1.2/1.3，服务端从 PKCS12 加载�
 
 ## 示例
 
-以下为当前格式的帧示例。实际连接还会收到在线名单、展示资料和系统提示。
+以下为当前格式的帧示例，假设 alice 与 bob 已建立好友关系。实际连接还会收到在线名单、展示资料和系统提示。
 
 ```json
 {"type":"HELLO","requestId":"hello"}
@@ -108,9 +109,10 @@ TLS 模式对监听端口统一启用 TLS 1.2/1.3，服务端从 PKCS12 加载�
 {"type":"DISPLAY_PROFILE","userId":"alice","nickname":"Alice","avatar":"","revision":0}
 {"type":"GROUP_SEND","requestId":"r2","content":"大家好\n第二行🙂"}
 {"type":"GROUP_MESSAGE","requestId":"r2","from":"alice","content":"大家好\n第二行🙂","serverTime":"2026-10-24T13:00:00Z","nickname":"Alice","messageId":"46538ebe-da93-423d-98ee-4bd116929586","conversationId":"GROUP:PUBLIC"}
+{"type":"GROUP_SEND","requestId":"quote-1","content":"收到","replyTo":"46538ebe-da93-423d-98ee-4bd116929586"}
+{"type":"GROUP_MESSAGE","requestId":"quote-1","messageId":"53c40108-dd65-4d51-8079-635bc7e8d269","conversationId":"GROUP:PUBLIC","from":"alice","content":"收到","serverTime":"2026-10-24T13:00:01Z","replyTo":"46538ebe-da93-423d-98ee-4bd116929586"}
 {"type":"PRIVATE_SEND","requestId":"r3","to":"bob","content":"P-001"}
-{"type":"PRIVATE_MESSAGE","requestId":"r3","from":"alice","to":"bob","content":"P-001","serverTime":"2026-10-24T13:00:01Z","nickname":"Alice","messageId":"7b89d42a-b45a-4dd7-95e5-6627b23c5de1","conversationId":"PRIVATE:alice:bob"}
-{"type":"ERROR","requestId":"r4","code":"USER_OFFLINE","message":"目标用户不在线，请重新选择"}
+{"type":"PRIVATE_MESSAGE","requestId":"r3","from":"alice","to":"bob","content":"P-001","serverTime":"2026-10-24T13:00:02Z","nickname":"Alice","messageId":"7b89d42a-b45a-4dd7-95e5-6627b23c5de1","conversationId":"PRIVATE:alice:bob"}
 {"type":"PING","requestId":"h1"}
 {"type":"PONG","requestId":"h1"}
 {"type":"PASSWORD_CHANGE","requestId":"p1","password":"example-pass","newPassword":"example-new"}
@@ -118,7 +120,7 @@ TLS 模式对监听端口统一启用 TLS 1.2/1.3，服务端从 PKCS12 加载�
 {"type":"LOGOUT"}
 ```
 
-服务端回显是客户端的正式消息来源。群聊分发到当前就绪连接的独立 FIFO，私聊回显表示归档完成并进入对端发送队列。对端掉线或队列超限后，实时投递可能中断。本人授权归档可在重连后按原协议恢复。旧实时事件和同一连接的删除回执按入队顺序发送。
+服务端回显是客户端的正式消息来源。群聊分发到符合会话范围的就绪连接 FIFO。在线私聊回显表示归档完成且对端队列已接受投递，离线好友留言回显表示归档完成。对端掉线或队列超限后，实时投递可能中断。本人可见归档可在重连后查询。同一连接的聊天事件和删除回执按入队顺序发送。
 
 ## 注册、身份与导出扩展（2026-10-29）
 
@@ -246,7 +248,7 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 
 `DISPLAY_PROFILE` 是仅服务端发送的事件。字段为 `userId`、`nickname`、`avatar`、`revision`，其中 `revision` 是该账号独立的非负 long 版本。每次成功保存资料后递增，并和账号一起原子持久化。旧账号默认版本 0。该事件只含展示所需的资料，注册时间仍只发给本人。客户端向服务端发送此类型会被拒绝。
 
-登录进入就绪状态后，新会话收到在线账号资料，其他就绪会话收到新登录账号的资料。资料修改成功后，新的展示资料分发给就绪会话。浏览本人历史时，服务端先发送对应发送者以及私聊接收者的最新资料，再发送该历史页。这样离线联系人也可恢复展示，同一连接中每个账号只接收更新版本。未登录的连接没有资料同步，也没有按用户名查询任意账号资料的接口。
+登录进入就绪状态后，新会话收到在线账号资料，其他就绪会话收到新登录账号的资料。资料修改成功后，新的展示资料分发给就绪会话。加载摘要、消息或定位上下文时，服务端先发送涉及账号的最新展示资料，再发送历史页。按关键词搜索的结果携带当前昵称。同一连接中每个账号只接收更新版本。已认证账号可通过 `FIND_USER` 按用户名查询基本目录信息。
 
 展示资料独立成帧，v6 上限为 176 KiB。`USER_LIST` 继续承载用户名与在线列表版本，聊天、历史和导出记录维持 16 KiB 帧上限。收到旧版本资料时保留新版本。请同时升级客户端与服务端。
 

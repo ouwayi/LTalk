@@ -1,14 +1,14 @@
 # 当前需求与操作流程
 
-基线为根目录的[课程任务拆解](../局域网聊天项目任务拆解.md)。原课程目标为单服务端、单公共聊天室和 5～10 个桌面客户端。当前版本支持私聊、双向心跳、注册登录、授权历史恢复及导出、资料同步和改密，另有可选的单机公网 TLS 模式。最新功能与验证范围见 [STATUS](STATUS.md)。
+基线为根目录的[课程任务拆解](../局域网聊天项目任务拆解.md)。原课程目标为单服务端、单公共聊天室和 5～10 个桌面客户端。当前版本还支持独立群组、好友离线留言、按需浏览和搜索历史、未读定位与引用回复，以及可选的单机公网 TLS 模式。功能总览与验证范围见 [STATUS](STATUS.md)。
 
 | 需求 | 实现与约束 | 验证入口 |
 | --- | --- | --- |
 | R-01 配置并启动 | CLI 端口/IP/连接上限，默认 9000/0.0.0.0/20 | ChatServerTest.occupiedPortAndShutdownAreObservable |
 | R-02 账号注册登录 | 昵称/用户名/密码，或随机用户名；密码验证后加入。用户名 strip 后 `[A-Za-z0-9_]{1,20}`；重名保留原会话；LOGIN_OK 最先返回 | duplicateLogin / concurrentSameName 测试 |
 | R-03 在线列表 | 加入/离开推送全量快照；版本递增；重连重置本地版本 | userListVersions / logoutAbruptClose 测试 |
-| R-04 群聊 | 在线就绪用户各收到一次，包括发送者。共享归档支持登录后查看新版服务端保存的公共消息，包括首次登录前与离线期间的消息 | ChatServerTest、HistoryPersistenceTest |
-| R-05 私聊 | 只发目标和发送者；不存在/自己/缺目标反馈错误 | groupEchoPrivateIsolation / privateErrors 测试 |
+| R-04 群聊 | 公共消息发给所有就绪账号，独立群消息只发给就绪的当前成员，均含发送者回显。公共归档可查登录前和离线期间的共享记录 | ChatServerTest、HistoryPersistenceTest、SocialIntegrationTest |
+| R-05 私聊 | 已有好友关系，或已获私聊许可且对方在线时允许发送。在线投递只涉及发送者和目标，离线好友从本人历史查阅 | ChatServerTest、SocialIntegrationTest |
 | R-06 消息展示 | 纯文本、当地时间、当前会话标识，接收气泡按发送者连续分组，显示同步昵称和头像 | ChatWindowTest、MessageTimelineTest |
 | R-07 边界与协议 | 2000 UTF-16 单元正文、普通帧 16 KiB、指定头像帧 176 KiB，换行转义，错误按连接处理 | MessageCodecTest、ChatServerTest |
 | R-08 清理与手动重连 | EOF/RST/读写失败清理；服务端停止关闭会话；旧连接不能影响新连接 | ChatServerTest / ChatClientTest |
@@ -23,6 +23,7 @@
 | X5 私聊离线投递 | 已互为好友时可发送离线消息，接收人通过本人历史查阅 | SocialIntegrationTest、ChatWindowTest |
 | X6 聊天文件传输 | 待实现 | 预留范围见课程任务拆解 |
 | 好友与独立群组 | 用户名查找、双方确认好友关系、独立私聊许可、加群审核与邀请、管理员移交或解散、授权群历史 | SocialIntegrationTest、ChatWindowTest |
+| 未读定位与引用 | 进入会话定位本窗口的首条未读。右键可复制完整正文或引用，点击引用按本人历史权限定位 | ChatWindowTest、ConversationStoreTest、MessageTimelineTest、HistoryPersistenceTest |
 
 ## 用户流程
 
@@ -46,7 +47,7 @@ stateDiagram-v2
 
 - 加入失败：聊天功能保持禁用，错误原因可见，修正名称/地址后重试。
 - 群聊：确认目标为群聊 → 输入 → 提交 → 等待服务端回显，不在按钮处理时添加正式聊天消息。
-- 私聊：选择列表中的其他用户 → 目标标签更新 → 输入 → 提交；在线列表变化导致目标消失时必须重新选择。
+- 私聊选择目标后查看标题状态。好友离线时可留言。陌生人需在线接受请求，获许可后重新上线仍需重选会话。
 - 故障或普通断开后，保留本窗口记录和草稿，禁用发送。重新登录会重新加载摘要和所选会话最近一页。明确退出登录清理窗口身份、历史、草稿和密码。切换账号在独立连接验证成功后才交接，失败或返回时保留原会话。
 - 关闭窗口：关闭 Socket、发送任务、登录及心跳计时器；客户端后台线程设为 daemon，但仍显式清理。
 

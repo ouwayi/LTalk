@@ -74,7 +74,7 @@ sudo journalctl -u ltalk -n 20 --no-pager
 
 云控制台添加有状态入站规则 `ltalk-public-test`，目标端口 TCP `9000`，来源 CIDR 填测试电脑的公网 IPv4 加 `/32`。从这台电脑直连实例公网 IP 的 SSH 会话里，`echo "$SSH_CONNECTION"` 的第一列为服务端看到的来源 IP。Ubuntu 按下节的方式检查并放行 TCP 9000。公网客户端断开 Tailscale，填写证书对应的域名或公网 IP，端口 `9000`，勾选「使用 TLS 加密连接」。使用私有 CA 时，需要给客户端 Java 配置信任库。 [Oracle JSSE 文档](https://docs.oracle.com/en/java/javase/17/security/java-secure-socket-extension-jsse-reference-guide.html)
 
-验收时登录两个账号，检查群聊、私聊、历史恢复及断线重连。证书与输入地址不匹配时应拒绝连接。用不同接入网络复测时，确保来源地址已获得访问权限。[已完成的云端验收](test-report.md#oracle-cloud-私网与公网验收)
+验收时登录两个账号，检查公共群聊、已获许可的私聊、历史恢复及断线重连。证书与输入地址不匹配时应拒绝连接。用不同接入网络复测时，确保来源地址已获得访问权限。[已完成的云端验收](test-report.md#oracle-cloud-私网与公网验收)
 
 ## 更新 JAR 与复测
 
@@ -106,7 +106,9 @@ sudo journalctl -u ltalk -n 20 --no-pager
 
 4. Windows 宿主机和虚拟机都退出旧客户端，将各自的 JAR 换成同一份新版，再双击 `start-client.cmd`。连接失败时，先在 Windows PowerShell 执行 `Test-NetConnection -ComputerName <公网地址> -Port 9000`（将 `<公网地址>` 换成实际地址）。如果 TCP 已通，继续检查证书有效期、地址匹配和客户端 TLS 选项。
 
-5. 测试结束可运行 `sudo systemctl stop ltalk`；`sudo systemctl is-active ltalk` 显示 `inactive` 表示已停止。若要关闭测试端口，在云控制台移除 `ltalk-public-test`，并执行 `sudo iptables -D INPUT -p tcp --dport 9000 -m comment --comment ltalk-public-test -j ACCEPT`。账号和聊天记录保存在 `/var/lib/ltalk`。
+5. 用演示账号复测登录后首批公共消息出现的时间、离线好友留言、独立群加入前与退出后的权限，以及在两个会话间切换时的未读和引用跳转。记录服务端与客户端所用提交、网络环境、复现步骤和耗时。旧版公网验收范围见 [测试报告](test-report.md#oracle-cloud-私网与公网验收)。
+
+6. 测试结束可运行 `sudo systemctl stop ltalk`，用 `sudo systemctl is-active ltalk` 确认显示 `inactive`。若要关闭测试端口，在云控制台移除 `ltalk-public-test`，并执行 `sudo iptables -D INPUT -p tcp --dport 9000 -m comment --comment ltalk-public-test -j ACCEPT`。账号和聊天记录保存在 `/var/lib/ltalk`。
 
 ## 容量与限制
 
