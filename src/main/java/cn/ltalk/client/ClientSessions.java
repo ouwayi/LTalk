@@ -4,6 +4,7 @@ import cn.ltalk.common.*;
 import javax.swing.SwingUtilities;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.function.Consumer;
 
 /** EDT-confined session handoff. Authentication callbacks never mutate the old chat presentation. */
 public final class ClientSessions implements AutoCloseable {
@@ -65,6 +66,13 @@ public final class ClientSessions implements AutoCloseable {
         });
     }
     public void loadHistory() throws IOException { current.client.loadHistory(); }
+    void browseHistory(HistoryQuery mode, String scope, String cursor, String query, String anchor,
+                       Consumer<HistoryPage> completion) throws IOException {
+        Slot slot = current;
+        slot.client.browseHistory(mode, scope, cursor, query, anchor, page -> {
+            if (slot.active()) completion.accept(page);
+        });
+    }
     public void deleteHistory(String scope, String id) throws IOException { current.client.deleteHistory(scope, id); }
     @Override public void close() {
         closed = true; cancelSwitch(); current.client.close();

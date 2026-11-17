@@ -1,5 +1,13 @@
 # 测试报告与验收记录
 
+## 按需加载历史与搜索定位（2026-11-17，阶段 30）
+
+Windows、JDK 25.0.4、Maven 3.9.9，编译目标 Java 17。完整离线 `build.ps1 -o package` **122 项通过，0 失败、错误或跳过**，生成含依赖 JAR。最终日志 `.tools/history-view-verified.log`。
+
+- 回环 TCP 核对会话摘要、最近 20 条及追加实时消息后继续翻页。验证跨 JSONL 读取块的中文、emoji 和换行、按当前昵称搜索、搜索分页和定位前后记录。覆盖旧版公共记录和共享记录合并、个人删除和清空、会话范围不匹配与第三方私聊拒绝。
+- Swing 验证退出再登录后显示离线联系人摘要，进入会话才取正文。使用 61 条公共消息验证首次加载边界、上滚追加一页、保留原正文的可见位置、搜索尚未加载的消息、可视区内定位、查看上下文、回到实时聊天和草稿保留。深色窄屏预览见 `target/ui-preview/history-recent-narrow.png`、`history-search-narrow.png` 和 `history-location-narrow.png`。
+- 本轮使用临时数据和本机回环。大归档搜索延迟、独立 JDK 17 运行时、多设备及各档 DPI 尚待实测。
+
 ## Oracle Cloud 私网与公网验收
 
 根据 2026-11-17 整理的用户反馈。服务端为 Oracle Cloud 的 Ubuntu 24.04 实例，桌面客户端为 Windows 宿主机及其虚拟机。精确测试时刻、各端 Java 版本和详细云端日志未提供。

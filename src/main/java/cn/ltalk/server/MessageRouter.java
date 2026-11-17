@@ -3,7 +3,9 @@ package cn.ltalk.server;
 import cn.ltalk.common.*;
 
 import java.io.IOException;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.logging.Logger;
 
 final class MessageRouter {
@@ -56,6 +58,7 @@ final class MessageRouter {
                 case LOGOUT -> session.close("用户主动退出");
                 case EXPORT_REQUEST -> export(session, request);
                 case HISTORY_REQUEST -> history(session, request);
+                case HISTORY_VIEW_REQUEST -> historyView(session, request);
                 case HISTORY_DELETE -> {
                     Validation.requestId(request.requestId()); ownArchive(session, request);
                     server.archive().delete(session.userId, request.conversationId(), request.messageId());
@@ -200,6 +203,36 @@ final class MessageRouter {
                         .cursor(session.historyCursor.token).nickname(server.accounts().nickname(record.sender())).record(record).build());
             }
         }
+    }
+
+    private void historyView(ClientSession session, Message request) throws IOException {
+        Validation.requestId(request.requestId());
+        ownArchive(session, request);
+        HistoryQuery mode;
+        try { mode = HistoryQuery.valueOf(request.historyMode()); }
+        catch (IllegalArgumentException | NullPointerException ex) {
+            throw new ProtocolException("BAD_MESSAGE", "无效的历史浏览方式");
+        }
+        ArchiveView.Page page = new ArchiveView(server.archive(), server.accounts()).read(session.userId, mode, request);
+        if (mode != HistoryQuery.SEARCH) {
+            Set<String> profiles = new HashSet<>();
+            for (ChatRecord row : page.rows()) {
+                profiles.add(row.sender());
+                if (row.recipient() != null) profiles.add(row.recipient());
+            }
+            for (String user : profiles) {
+                Message display = displayMessage(user);
+                if (display != null && !server.deliverAndWait(session, display)) {
+                    session.close("历史资料发送失败");
+                    return;
+                }
+            }
+        }
+        for (ChatRecord row : page.rows()) {
+            if (!server.deliver(session, Message.of(MessageType.HISTORY_VIEW_ROW).requestId(request.requestId())
+                    .record(row).nickname(server.accounts().nickname(row.sender())).build())) return;
+        }
+        server.deliver(session, Message.of(MessageType.HISTORY_VIEW_END).requestId(request.requestId()).cursor(page.next()).build());
     }
 
     private static void validateChat(Message request) throws ProtocolException {

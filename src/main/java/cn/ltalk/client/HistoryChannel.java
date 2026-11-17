@@ -3,7 +3,7 @@ package cn.ltalk.client;
 import cn.ltalk.common.*;
 import java.io.IOException;
 import java.time.Instant;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.*;
 
@@ -18,6 +18,7 @@ final class HistoryChannel implements AutoCloseable {
     private final int timeout;
     private String reading, deleting, deleteScope, deleteId;
     private ScheduledFuture<?> readDeadline, deleteDeadline;
+    private final Map<String, ViewRequest> browsing = new HashMap<>();
     private volatile long generation;
     private volatile boolean closed;
     HistoryChannel(Sender sender, Consumer<Runnable> emit, ClientEventListener listener, ScheduledExecutorService timer,
@@ -46,7 +47,94 @@ final class HistoryChannel implements AutoCloseable {
         try { sender.send(Message.of(MessageType.HISTORY_DELETE).requestId(deleting).conversationId(scope).messageId(id).build()); }
         catch (IOException ex) { deleteFailed(ex.getMessage()); throw ex; }
     }
+    synchronized void browse(HistoryQuery mode, String scope, String cursor, String query, String anchor,
+                             Consumer<HistoryPage> done) throws IOException {
+        if (closed) throw new IOException("连接已关闭");
+        if (browsing.size() >= 8) throw new IOException("历史请求过多，请稍后重试");
+        ConversationScope.validate(self.get(), scope);
+        String id = "view-" + ids.get();
+        ViewRequest request = new ViewRequest(mode, scope, anchor, done);
+        browsing.put(id, request);
+        request.deadline = timer.schedule(() -> {
+            synchronized (this) {
+                if (browsing.containsKey(id)) completeView(id, HistoryPage.failed("历史请求超时，请重试"));
+            }
+        }, timeout, TimeUnit.MILLISECONDS);
+        try {
+            sender.send(Message.of(MessageType.HISTORY_VIEW_REQUEST).requestId(id).historyMode(mode.name())
+                    .conversationId(scope).cursor(cursor).content(query).messageId(anchor).build());
+        } catch (IOException ex) {
+            browsing.remove(id);
+            request.deadline.cancel(false);
+            throw ex;
+        }
+    }
+
+    private void receiveView(Message message, ViewRequest request) {
+        String id = message.requestId();
+        try {
+            switch (message.type()) {
+                case ERROR -> completeView(id, HistoryPage.failed(message.message() == null ? "历史请求失败" : message.message()));
+                case HISTORY_VIEW_END -> {
+                    validateViewEnd(request, message.cursor());
+                    completeView(id, new HistoryPage(List.copyOf(request.rows), message.cursor(), null));
+                }
+                case HISTORY_VIEW_ROW -> {
+                    ChatRecord record = message.record();
+                    if (record == null || request.rows.size() >= HistoryQuery.PAGE_SIZE)
+                        throw new IOException("无效历史页");
+                    validate(record);
+                    if (request.mode != HistoryQuery.SUMMARIES && !Objects.equals(request.scope, record.conversationId()))
+                        throw new IOException("历史会话不匹配");
+                    request.rows.add(new HistoryPage.Row(record, message.nickname()));
+                }
+                default -> { /* Other events can independently reuse a request identifier. */ }
+            }
+        } catch (IOException | RuntimeException ex) {
+            completeView(id, HistoryPage.failed("历史加载失败：" + ex.getMessage()));
+        }
+    }
+
+    private static void validateViewEnd(ViewRequest request, String next) throws IOException {
+        if (request.mode == HistoryQuery.CONTEXT) {
+            if (next != null || request.rows.stream().noneMatch(row -> row.record().messageId().equals(request.anchor)))
+                throw new IOException("定位结果中缺少原消息");
+        } else if (next != null) {
+            if (request.rows.size() != HistoryQuery.PAGE_SIZE) throw new IOException("历史页游标无效");
+            ChatRecord last = request.rows.get(request.rows.size() - 1).record();
+            String expected = request.mode == HistoryQuery.SUMMARIES ? last.conversationId() : last.messageId();
+            if (!next.equals(expected)) throw new IOException("历史页游标无效");
+        }
+    }
+
+    private void completeView(String id, HistoryPage page) {
+        ViewRequest request = browsing.remove(id);
+        request.deadline.cancel(false);
+        event(() -> request.done.accept(page));
+    }
+
+    private static final class ViewRequest {
+        final HistoryQuery mode;
+        final String scope, anchor;
+        final Consumer<HistoryPage> done;
+        final List<HistoryPage.Row> rows = new ArrayList<>();
+        ScheduledFuture<?> deadline;
+
+        ViewRequest(HistoryQuery mode, String scope, String anchor, Consumer<HistoryPage> done) {
+            this.mode = mode;
+            this.scope = scope;
+            this.anchor = anchor;
+            this.done = done;
+        }
+    }
+
     synchronized boolean receive(Message message) {
+        if (message.type() == MessageType.HISTORY_VIEW_ROW || message.type() == MessageType.HISTORY_VIEW_END
+                || (message.type() == MessageType.ERROR && message.requestId() != null && message.requestId().startsWith("view-"))) {
+            ViewRequest request = browsing.get(message.requestId());
+            if (request != null) receiveView(message, request);
+            return true;
+        }
         if (message.requestId() != null && message.requestId().equals(reading)) {
             readDeadline.cancel(false);
             try {
@@ -99,5 +187,7 @@ final class HistoryChannel implements AutoCloseable {
     }
     @Override public synchronized void close() {
         closed = true; cancelRead(); deleting = null; if (deleteDeadline != null) deleteDeadline.cancel(false);
+        for (ViewRequest request : browsing.values()) request.deadline.cancel(false);
+        browsing.clear();
     }
 }

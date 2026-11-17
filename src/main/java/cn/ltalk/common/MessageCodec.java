@@ -18,7 +18,7 @@ public final class MessageCodec {
     private static final Pattern AVATAR_PREFIX = Pattern.compile("\\A[ \\r\\t]*\\{[ \\r\\t]*\"type\"[ \\r\\t]*:[ \\r\\t]*\"(LOGIN_OK|PROFILE_OK|PROFILE_UPDATE|DISPLAY_PROFILE)\"[ \\r\\t]*,");
     private static final Gson GSON = new GsonBuilder().setStrictness(Strictness.STRICT).disableHtmlEscaping().create();
     private static final Set<String> STRING_FIELDS = Set.of("requestId", "userId", "from", "to", "content",
-            "serverTime", "code", "message", "nickname", "password", "newPassword", "usernameMode", "messageId", "conversationId", "cursor", "avatar", "createdAt");
+            "serverTime", "code", "message", "nickname", "password", "newPassword", "usernameMode", "messageId", "conversationId", "cursor", "avatar", "createdAt", "historyMode");
 
     private MessageCodec() { }
 

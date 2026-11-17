@@ -326,6 +326,10 @@ public final class ChatClient implements AutoCloseable {
         }
     }
     public void loadHistory() throws IOException { authenticated().history.load(); }
+    void browseHistory(HistoryQuery mode, String scope, String cursor, String query, String anchor,
+                       Consumer<HistoryPage> done) throws IOException {
+        authenticated().history.browse(mode, scope, cursor, query, anchor, done);
+    }
     public void deleteHistory(String scope, String id) throws IOException {
         // The server invalidates affected export cursors; their background response/timeout path cleans files.
         Connection c = authenticated(); c.history.delete(scope, id);

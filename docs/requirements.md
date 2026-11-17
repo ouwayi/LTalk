@@ -19,7 +19,7 @@
 | X1 心跳与失联 | HELLO 或直接登录成功后双向 PING/PONG，间隔/响应期限可配置，正常空闲不踢，静默失联清理并允许手动重连 | HeartbeatIntegrationTest / HeartbeatSettingsTest 本机通过；2026-10-28 用户反馈虚拟机断网后自动检测断开正常，实际测试日期/配置/精确耗时未提供 |
 | X2 当前会话导出 | 本人可选择 JSON/CSV、文件名和位置，旧文件覆盖需确认 | AuthenticationExportTest、HistoryExportTest、FileDialogsTest |
 | X3 账号与资料 | 注册登录、资料编辑与同步、本人改密。改密成功后当前会话继续，下次用新密码登录 | AccountFlowTest、ProfileConnectionTest、PasswordChangeTest、ChatWindowTest |
-| X4 授权历史 | 服务端重启后仍保留本人授权记录，登录恢复，支持逐条删除或清空本人当前会话 | HistoryPersistenceTest、HistoryClientTest、HistoryStoreTest |
+| X4 授权历史 | 服务端重启后保留本人可见记录，登录恢复会话摘要及当前会话最近一页，上滚取旧记录，搜索可定位到原消息，支持逐条删除或清空本人当前会话 | HistoryPersistenceTest、HistoryClientTest、HistoryStoreTest、ChatWindowTest |
 | X5/X6 | 私聊离线投递和聊天文件传输待实现 | 预留范围见课程任务拆解 |
 
 ## 用户流程
@@ -45,7 +45,7 @@ stateDiagram-v2
 - 加入失败：聊天功能保持禁用，错误原因可见，修正名称/地址后重试。
 - 群聊：确认目标为群聊 → 输入 → 提交 → 等待服务端回显，不在按钮处理时添加正式聊天消息。
 - 私聊：选择列表中的其他用户 → 目标标签更新 → 输入 → 提交；在线列表变化导致目标消失时必须重新选择。
-- 故障或普通断开后，保留本窗口记录和草稿，禁用发送。重新登录会加载本人授权历史。明确退出登录清理窗口身份、历史、草稿和密码。切换账号在独立连接验证成功后才交接，失败或返回时保留原会话。
+- 故障或普通断开后，保留本窗口记录和草稿，禁用发送。重新登录会重新加载摘要和所选会话最近一页。明确退出登录清理窗口身份、历史、草稿和密码。切换账号在独立连接验证成功后才交接，失败或返回时保留原会话。
 - 关闭窗口：关闭 Socket、发送任务、登录及心跳计时器；客户端后台线程设为 daemon，但仍显式清理。
 
 ## 验收条件

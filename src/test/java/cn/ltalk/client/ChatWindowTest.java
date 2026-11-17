@@ -3,6 +3,8 @@ package cn.ltalk.client;
 import cn.ltalk.common.MessageType;
 import cn.ltalk.common.Message;
 import cn.ltalk.common.MessageCodec;
+import cn.ltalk.common.ConversationScope;
+import cn.ltalk.common.HistoryQuery;
 import cn.ltalk.client.ui.*;
 import cn.ltalk.server.ChatServer;
 import cn.ltalk.support.Peer;
@@ -166,7 +168,8 @@ class ChatWindowTest {
                 try (Socket socket = endpoint.accept()) {
                     MessageCodec.FrameReader reader = handshake(socket);
                     acceptLogin(socket, reader.read());
-                    finishLoading(socket, reader);
+                    finishLoading(socket, reader, ConversationScope.PUBLIC);
+                    finishHistoryRequest(socket, reader, HistoryQuery.MESSAGES, "PRIVATE:alice:bob");
                     Message rejected = reader.read();
                     assertEquals("被拒绝的消息", rejected.content());
                     assertTrue(reject.await(5, TimeUnit.SECONDS));
@@ -181,7 +184,8 @@ class ChatWindowTest {
                     assertEquals("alice", wrong.userId());
                     MessageCodec.write(socket.getOutputStream(), Message.error(wrong.requestId(), "LOGIN_FAILED", "用户名或密码错误"));
                     acceptLogin(socket, reader.read());
-                    finishLoading(socket, reader);
+                    finishLoading(socket, reader, "PRIVATE:alice:bob");
+                    finishHistoryRequest(socket, reader, HistoryQuery.MESSAGES, ConversationScope.PUBLIC);
                     Message sent = reader.read();
                     assertEquals(MessageType.PRIVATE_SEND, sent.type());
                     assertEquals("bob", sent.to());
@@ -287,11 +291,18 @@ class ChatWindowTest {
                 .userId("alice").nickname("Alice").build());
     }
 
-    private static void finishLoading(Socket socket, MessageCodec.FrameReader reader) throws Exception {
-        Message history = reader.read();
-        assertEquals(MessageType.HISTORY_REQUEST, history.type());
-        MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.HISTORY_END).requestId(history.requestId()).build());
+    private static void finishLoading(Socket socket, MessageCodec.FrameReader reader, String selected) throws Exception {
+        finishHistoryRequest(socket, reader, HistoryQuery.MESSAGES, selected);
+        finishHistoryRequest(socket, reader, HistoryQuery.SUMMARIES, null);
         MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.USER_LIST).revision(1L).users(List.of("alice", "bob")).build());
+    }
+
+    private static void finishHistoryRequest(Socket socket, MessageCodec.FrameReader reader, HistoryQuery mode, String scope) throws Exception {
+        Message history = reader.read();
+        assertEquals(MessageType.HISTORY_VIEW_REQUEST, history.type());
+        assertEquals(mode.name(), history.historyMode());
+        assertEquals(scope, history.conversationId());
+        MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.HISTORY_VIEW_END).requestId(history.requestId()).build());
     }
 
     private static boolean hasSendStatus(Container root, String status) {
@@ -410,8 +421,6 @@ class ChatWindowTest {
                     render(window, 420, 760, "ui-narrow-list.png");
                     button(window, "group").doClick(); layout(window.getContentPane()); assertTrue(find(window, "chatPane").isVisible());
                     assertTrue(history(window).contains("讨论项目"));
-                    text(window, "messageSearch").setText("欢迎"); assertTrue(history(window).contains("欢迎")); assertFalse(history(window).contains("讨论项目"));
-                    text(window, "messageSearch").setText("");
                     area(window, "input").setText("\n "); button(window, "send").doClick();
                     assertEquals("\n ", area(window, "input").getText()); assertTrue(label(window, "status").getText().contains("空白"));
                 });
@@ -684,16 +693,22 @@ class ChatWindowTest {
             server.accounts().updateProfile("bob", "离线昵称", avatar);
             onEdt(() -> ref.set(new ChatWindow("127.0.0.1",Integer.toString(server.port()),"alice",appearanceDirectory.resolve("history.properties"))));
             ChatWindow window=ref.get(); login(window);
-            awaitEdt(() -> history(window).contains("历史公共一") && history(window).contains("[离线昵称] 历史公共二") && label(window,"status").getText().contains("已加载"));
+            awaitEdt(() -> list(window).getModel().getSize() == 2 && history(window).contains("历史公共一")
+                    && history(window).contains("[离线昵称] 历史公共二") && label(window,"status").getText().contains("已加载"));
             onEdt(() -> {
                 assertEquals("离线昵称：历史公共二", summary(window, ConversationId.PUBLIC).preview());
                 assertEquals("离线昵称", summary(window, "bob").title());
                 BufferedImage receivedAvatar = summary(window, "bob").profile().avatar();
                 assertEquals(256, receivedAvatar.getWidth());
                 assertEquals(avatarColor.getRGB(), receivedAvatar.getRGB(128, 128));
-                selectPeer(window,"bob"); assertTrue(history(window).contains("[离线昵称] 离线联系人历史")); assertFalse(button(window,"send").isEnabled());
+                selectPeer(window,"bob");
+                assertFalse(history(window).contains("离线联系人历史"), "A summary must not add a message to the timeline");
+                assertFalse(button(window,"send").isEnabled());
                 assertEquals("离线昵称", label(window, "conversationTitle").getText());
                 assertEquals(avatarColor.getRGB(), iconCenter(label(window, "conversationAvatar")));
+            });
+            awaitEdt(() -> history(window).contains("[离线昵称] 离线联系人历史"));
+            onEdt(() -> {
                 button(window,"group").doClick(); area(window,"input").setText("删除不影响草稿");
                 render(window,1000,760,"history-restored.png");
                 JMenuItem item=messageDelete(window,"历史公共一"); assertNotNull(item); assertTrue(item.isEnabled());
@@ -708,8 +723,9 @@ class ChatWindowTest {
             onEdt(() -> window.dispatchEvent(new WindowEvent(window,WindowEvent.WINDOW_CLOSING))); ref.set(null); awaitEdt(() -> server.onlineCount()==0);
             onEdt(() -> ref.set(new ChatWindow("127.0.0.1",Integer.toString(server.port()),"alice",appearanceDirectory.resolve("history.properties"))));
             ChatWindow reopened=ref.get(); login(reopened);
-            awaitEdt(() -> label(reopened,"status").getText().contains("已加载"));
-            onEdt(() -> { assertFalse(history(reopened).contains("历史公共")); selectPeer(reopened,"bob"); assertTrue(history(reopened).contains("离线联系人历史")); });
+            awaitEdt(() -> list(reopened).getModel().getSize() == 2 && label(reopened,"status").getText().contains("已加载"));
+            onEdt(() -> { assertFalse(history(reopened).contains("历史公共")); selectPeer(reopened,"bob"); });
+            awaitEdt(() -> history(reopened).contains("离线联系人历史"));
             try (Peer bob=Peer.login(server.port(),"bob")) {
                 bob.send(Message.of(MessageType.HISTORY_REQUEST).requestId("other-copy").build());
                 assertEquals("历史公共一",bob.type(MessageType.HISTORY_PAGE).record().content());
@@ -742,6 +758,104 @@ class ChatWindowTest {
             }
         }); timer.start();
     }
+
+    @Test @Timeout(25)
+    void olderHistoryKeepsTheViewportAndSearchLocatesAnUnloadedMessageWithContext() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start();
+            try (Peer bob = Peer.login(server.port(), "bob")) {
+                for (int i = 1; i <= 61; i++) {
+                    bob.group(String.format("公开历史-%02d", i) + (i == 4 ? " 独特关键词" : ""));
+                    bob.type(MessageType.GROUP_MESSAGE);
+                }
+                server.accounts().register("alice", "alice", "test123!", false);
+                onEdt(() -> ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice",
+                        appearanceDirectory.resolve("paged-history.properties"))));
+                ChatWindow window = ref.get();
+                login(window);
+                awaitEdt(() -> history(window).contains("公开历史-42") && history(window).contains("公开历史-61"));
+                int[] anchorY = new int[1];
+                onEdt(() -> {
+                    assertFalse(history(window).contains("公开历史-41"));
+                    window.applyAppearance(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK), false);
+                    button(window, "group").doClick();
+                    render(window, 420, 680, "history-recent-narrow.png");
+                    assertTrue(find(window, "chatPane").isVisible());
+                });
+                onEdt(() -> {
+                    MessageTimeline timeline = (MessageTimeline) find(window, "timeline");
+                    timeline.getVerticalScrollBar().setValue(0);
+                    anchorY[0] = viewportY(timeline, "公开历史-42");
+                    assertTrue(anchorY[0] >= 0 && anchorY[0] < timeline.getViewport().getHeight());
+                    timeline.dispatchEvent(new java.awt.event.MouseWheelEvent(timeline, java.awt.event.MouseEvent.MOUSE_WHEEL,
+                            System.currentTimeMillis(), 0, 20, 40, 0, false,
+                            java.awt.event.MouseWheelEvent.WHEEL_UNIT_SCROLL, 3, -1));
+                });
+                awaitEdt(() -> history(window).contains("公开历史-22"));
+                onEdt(() -> {
+                    MessageTimeline timeline = (MessageTimeline) find(window, "timeline");
+                    assertEquals(anchorY[0], viewportY(timeline, "公开历史-42"));
+                    assertFalse(history(window).contains("公开历史-21"));
+                    assertFalse(history(window).contains("独特关键词"));
+                    area(window, "input").setText("分页期间保留的草稿");
+                    button(window, "chatSearch").doClick();
+                });
+                JDialog dialog = historySearchDialog(window);
+                onEdt(() -> {
+                    ((JTextField) find(dialog, "messageSearch")).setText("独特关键词");
+                    ((JButton) find(dialog, "submitHistorySearch")).doClick();
+                });
+                awaitEdt(() -> ((JList<?>) find(dialog, "historySearchResults")).getModel().getSize() == 1);
+                onEdt(() -> {
+                    renderContainer(dialog.getContentPane(), 420, 380, "history-search-narrow.png");
+                    ((JButton) find(dialog, "locateHistoryResult")).doClick();
+                });
+                awaitEdt(() -> find(window, "locatedMessage") != null && !dialog.isDisplayable());
+                onEdt(() -> {
+                    assertTrue(history(window).contains("公开历史-03"));
+                    assertTrue(history(window).contains("公开历史-05"));
+                    assertFalse(history(window).contains("公开历史-61"));
+                    MessageTimeline timeline = (MessageTimeline) find(window, "timeline");
+                    int y = viewportY(timeline, "公开历史-04 独特关键词");
+                    assertTrue(y >= 0 && y < timeline.getViewport().getHeight(), "Located message is in the viewport");
+                    render(window, 420, 680, "history-location-narrow.png");
+                });
+                bob.group("定位期间收到的消息");
+                bob.type(MessageType.GROUP_MESSAGE);
+                awaitEdt(() -> summary(window, ConversationId.PUBLIC).preview().contains("定位期间收到的消息"));
+                onEdt(() -> {
+                    assertFalse(history(window).contains("定位期间收到的消息"));
+                    button(window, "returnLatest").doClick();
+                    assertTrue(history(window).contains("定位期间收到的消息"));
+                    assertFalse(history(window).contains("独特关键词"));
+                    assertEquals("分页期间保留的草稿", area(window, "input").getText());
+                });
+            }
+        } finally { closeWindow(ref); }
+    }
+
+    private static JDialog historySearchDialog(ChatWindow window) throws Exception {
+        AtomicReference<JDialog> dialog = new AtomicReference<>();
+        onEdt(() -> {
+            for (Window child : window.getOwnedWindows()) {
+                if ("historySearchDialog".equals(child.getName())) dialog.set((JDialog) child);
+            }
+        });
+        assertNotNull(dialog.get());
+        return dialog.get();
+    }
+
+    private static int viewportY(MessageTimeline timeline, String content) {
+        Container column = (Container) timeline.getViewport().getView();
+        for (Component row : column.getComponents()) {
+            Component body = row instanceof Container container ? find(container, "messageText") : null;
+            if (body instanceof JTextPane text && content.equals(text.getText()))
+                return SwingUtilities.convertPoint(text, new Point(), timeline.getViewport()).y;
+        }
+        throw new AssertionError("Missing message: " + content);
+    }
+
     private static JOptionPane findOptionPane(Container root) {
         for(Component child:root.getComponents()) {
             if(child instanceof JOptionPane pane) return pane;

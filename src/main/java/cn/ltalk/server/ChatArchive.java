@@ -59,8 +59,17 @@ final class ChatArchive {
         return open(user, null);
     }
     synchronized Cursor open(String user, String scope) throws IOException {
+        return open(user, scope, false, true);
+    }
+    synchronized Cursor openNewest(String user, String scope) throws IOException {
+        return open(user, scope, true, true);
+    }
+    synchronized Cursor openPersonalNewest(String user) throws IOException {
+        return open(user, null, true, false);
+    }
+    private Cursor open(String user, String scope, boolean newestFirst, boolean includeShared) throws IOException {
         ConversationScope.validate(user, scope);
-        Cursor cursor = snapshot(user, scope);
+        Cursor cursor = snapshot(user, scope, newestFirst, includeShared);
         cursors.computeIfAbsent(user, key -> new HashSet<>()).add(cursor); return cursor;
     }
 
@@ -68,13 +77,13 @@ final class ChatArchive {
         return directory.resolve(AccountStore.fileKey(user) + ".jsonl");
     }
 
-    private Cursor snapshot(String user, String scope) throws IOException {
+    private Cursor snapshot(String user, String scope, boolean newestFirst, boolean includeShared) throws IOException {
         boolean includePublic = scope == null || ConversationScope.PUBLIC.equals(scope);
         PublicDeletion deletion = includePublic ? readPublicDeletion(user) : PublicDeletion.NONE;
-        Journal personal = new Journal(accountJournal(user));
+        Journal personal = new Journal(accountJournal(user), newestFirst);
         try {
-            Journal shared = includePublic ? new Journal(publicJournal) : null;
-            return new Cursor(personal, shared, scope, deletion);
+            Journal shared = includePublic && includeShared ? new Journal(publicJournal, newestFirst) : null;
+            return new Cursor(personal, shared, scope, deletion, newestFirst);
         } catch (IOException ex) {
             try { personal.close(); }
             catch (IOException close) { ex.addSuppressed(close); }
@@ -117,7 +126,7 @@ final class ChatArchive {
         Path original = accountJournal(user);
         Path temporary = Files.createTempFile(directory, ".history-delete-", ".tmp"); boolean found = false;
         try {
-            try (Journal input = new Journal(original);
+            try (Journal input = new Journal(original, false);
                  BufferedWriter output = Files.newBufferedWriter(temporary)) {
                 ChatRecord record;
                 while ((record = input.next()) != null) {
@@ -132,7 +141,7 @@ final class ChatArchive {
 
     private void deletePublic(String user, String id) throws IOException {
         PublicDeletion updated;
-        try (Cursor input = snapshot(user, ConversationScope.PUBLIC)) {
+        try (Cursor input = snapshot(user, ConversationScope.PUBLIC, false, true)) {
             ChatRecord record;
             if (id == null) {
                 while (input.next() != null) { /* Check the snapshot before publishing the clear. */ }
@@ -158,45 +167,59 @@ final class ChatArchive {
         final String scope;
         final PublicDeletion deletion;
         final Instant clearedThrough;
+        final boolean newestFirst;
         ChatRecord personalHead, sharedHead;
         boolean closed;
+        private boolean sharedCleared;
 
-        Cursor(Journal personal, Journal shared, String scope, PublicDeletion deletion) {
+        Cursor(Journal personal, Journal shared, String scope, PublicDeletion deletion, boolean newestFirst) {
             this.personal = personal; this.shared = shared; this.scope = scope; this.deletion = deletion;
+            this.newestFirst = newestFirst;
             clearedThrough = deletion.clearedThrough() == null ? Instant.MIN : Instant.parse(deletion.clearedThrough());
         }
 
-        ChatRecord next() throws IOException {
-            synchronized (ChatArchive.this) {
-                if (closed) throw new IOException("历史快照已失效，请重新加载或导出");
-                if (personalHead == null) personalHead = nextVisible(personal, false);
-                if (sharedHead == null && shared != null) sharedHead = nextVisible(shared, true);
-                if (personalHead != null && (sharedHead == null || !sentAt(personalHead).isAfter(sentAt(sharedHead)))) {
-                    ChatRecord result = personalHead; personalHead = null; return result;
-                }
-                ChatRecord result = sharedHead; sharedHead = null; return result;
+        synchronized ChatRecord next() throws IOException {
+            if (closed) throw new IOException("历史快照已失效，请重新加载或导出");
+            if (personalHead == null) personalHead = nextVisible(personal, false);
+            if (sharedHead == null && shared != null) sharedHead = nextVisible(shared, true);
+            if (personalHead != null && (sharedHead == null || personalFirst())) {
+                ChatRecord result = personalHead; personalHead = null; return result;
             }
+            ChatRecord result = sharedHead; sharedHead = null; return result;
+        }
+
+        private boolean personalFirst() throws IOException {
+            int order = sentAt(personalHead).compareTo(sentAt(sharedHead));
+            return newestFirst ? order > 0 : order <= 0;
         }
 
         private ChatRecord nextVisible(Journal source, boolean publicOnly) throws IOException {
+            if (publicOnly && sharedCleared) return null;
             ChatRecord record;
             while ((record = source.next()) != null) {
                 boolean publicMessage = ConversationScope.PUBLIC.equals(record.conversationId());
                 if (publicOnly && (!publicMessage || record.recipient() != null || !"GROUP_MESSAGE".equals(record.messageType())))
                     throw new IOException("公共聊天室归档损坏");
                 if (scope != null && !scope.equals(record.conversationId())) continue;
-                if (!publicMessage || (sentAt(record).isAfter(clearedThrough) && !deletion.hiddenIds().contains(record.messageId())))
-                    return record;
+                if (!publicMessage) return record;
+                if (sentAt(record).isAfter(clearedThrough)) {
+                    if (!deletion.hiddenIds().contains(record.messageId())) return record;
+                } else if (publicOnly && newestFirst) {
+                    sharedCleared = true;
+                    return null;
+                }
             }
             return null;
         }
 
         @Override public void close() throws IOException {
             synchronized (ChatArchive.this) {
-                if (closed) return; closed = true;
-                for (Set<Cursor> set : cursors.values()) set.remove(this);
-                cursors.entrySet().removeIf(entry -> entry.getValue().isEmpty());
-                try (personal; shared) { /* Release both snapshot handles. */ }
+                synchronized (this) {
+                    if (closed) return; closed = true;
+                    for (Set<Cursor> set : cursors.values()) set.remove(this);
+                    cursors.entrySet().removeIf(entry -> entry.getValue().isEmpty());
+                    try (personal; shared) { /* Release both snapshot handles. */ }
+                }
             }
         }
     }
@@ -209,13 +232,19 @@ final class ChatArchive {
     private final class Journal implements AutoCloseable {
         final RandomAccessFile file;
         final long end;
+        private final byte[] block, reverseLine;
+        private long position, blockStart = -1;
 
-        Journal(Path path) throws IOException {
+        Journal(Path path, boolean newestFirst) throws IOException {
             end = Files.exists(path) ? Files.size(path) : 0;
             file = end == 0 ? null : new RandomAccessFile(path.toFile(), "r");
+            position = end;
+            block = newestFirst && end > 0 ? new byte[32 * 1024] : null;
+            reverseLine = block == null ? null : new byte[MessageCodec.MAX_FRAME_BYTES];
         }
 
         ChatRecord next() throws IOException {
+            if (block != null) return previous();
             if (file == null || file.getFilePointer() >= end) return null;
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             int b;
@@ -223,8 +252,36 @@ final class ChatArchive {
                 if (b == -1 || bytes.size() >= MessageCodec.MAX_FRAME_BYTES) throw new IOException("历史文件损坏");
                 bytes.write(b);
             }
+            return parse(bytes.toString(StandardCharsets.UTF_8));
+        }
+
+        private ChatRecord previous() throws IOException {
+            if (position == 0) return null;
+            if (byteAt(position - 1) == '\n') position--;
+            int start = reverseLine.length;
+            while (position > 0) {
+                byte value = byteAt(position - 1);
+                if (value == '\n') break;
+                if (start == 0) throw new IOException("历史文件损坏");
+                reverseLine[--start] = value;
+                position--;
+            }
+            return parse(new String(reverseLine, start, reverseLine.length - start, StandardCharsets.UTF_8));
+        }
+
+        private byte byteAt(long offset) throws IOException {
+            long start = offset - offset % block.length;
+            if (start != blockStart) {
+                file.seek(start);
+                file.readFully(block, 0, (int) Math.min(block.length, end - start));
+                blockStart = start;
+            }
+            return block[(int) (offset - start)];
+        }
+
+        private ChatRecord parse(String line) throws IOException {
             try {
-                ChatRecord r = gson.fromJson(bytes.toString(StandardCharsets.UTF_8), ChatRecord.class);
+                ChatRecord r = gson.fromJson(line, ChatRecord.class);
                 if (r == null || r.messageId() == null || r.content() == null || r.sentAt() == null) throw new IOException("历史文件损坏");
                 return r;
             } catch (RuntimeException ex) { throw new IOException("历史文件损坏", ex); }

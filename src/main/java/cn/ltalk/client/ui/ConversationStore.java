@@ -191,6 +191,15 @@ public final class ConversationStore {
         return receive(Message.of(MessageType.valueOf(record.messageType())).messageId(record.messageId()).from(record.sender())
                 .to(record.recipient()).content(record.content()).serverTime(record.sentAt()).nickname(nickname).build(), true);
     }
+    public void summarize(ChatRecord record, String nickname) {
+        Conversation conversation = ConversationScope.PUBLIC.equals(record.conversationId()) ? conversations.get(ConversationId.PUBLIC)
+                : ensurePrivate(self.equals(record.sender()) ? record.recipient() : record.sender());
+        updateLatest(conversation, archivedEntry(record, nickname));
+    }
+    public static Entry archivedEntry(ChatRecord record, String nickname) {
+        return new Entry(EntryKind.MESSAGE, record.sender(), record.recipient(), record.content(),
+                parseTime(record.sentAt()), record.messageId(), nickname);
+    }
     private ConversationId receive(Message message, boolean historical) {
         boolean group = message.type() == MessageType.GROUP_MESSAGE;
         String peer = self.equals(message.from()) ? message.to() : message.from();
@@ -206,7 +215,6 @@ public final class ConversationStore {
                 if (messageIds.contains(message.messageId())) {
                     conversation.entries.removeIf(entry -> message.messageId().equals(entry.messageId()));
                     messageIds.remove(message.messageId());
-                    updateSummary(conversation);
                 }
             }
         }
@@ -220,8 +228,12 @@ public final class ConversationStore {
         if (index < 0) index = -index - 1;
         else while (index < conversation.entries.size() && !conversation.entries.get(index).time().isAfter(time)) index++;
         conversation.entries.add(index, entry);
-        if (conversation.lastMessage == null || !time.isBefore(conversation.lastMessage.time())) conversation.lastMessage = entry;
+        updateLatest(conversation, entry);
         return conversation.id;
+    }
+    private static void updateLatest(Conversation conversation, Entry entry) {
+        if (conversation.lastMessage == null || !entry.time().isBefore(conversation.lastMessage.time()))
+            conversation.lastMessage = entry;
     }
     public void deleteHistory(String scope, String id) {
         ConversationId target = ConversationScope.PUBLIC.equals(scope) ? ConversationId.PUBLIC

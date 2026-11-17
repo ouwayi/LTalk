@@ -14,7 +14,7 @@ public final class ConversationScope {
         String[] parts = scope.split(":", -1);
         if (parts.length != 3 || !parts[0].equals("PRIVATE")
                 || !(self.equals(parts[1]) || self.equals(parts[2])))
-            throw new ProtocolException("FORBIDDEN", "无权导出此会话");
+            throw new ProtocolException("FORBIDDEN", "无权访问此会话");
         String canonical = privateChat(parts[1], parts[2]);
         if (!scope.equals(canonical)) throw new ProtocolException("BAD_MESSAGE", "无效会话标识");
     }

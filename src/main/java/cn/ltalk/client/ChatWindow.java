@@ -10,7 +10,10 @@ import java.awt.*;
 import java.awt.event.*;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 
 /** Swing presentation adapter; account and export operations stay in the background client. */
@@ -30,11 +33,12 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private boolean closed;
     private boolean choosingExport;
     private long sessionRevision;
-    private boolean historyLoading, deletingHistory;
-    private int historyCount;
-    private final Timer historyRender = new Timer(60, e -> refreshHistoryView());
+    private boolean deletingHistory;
+    private long historyRevision;
+    private final Map<ConversationId, HistoryPosition> historyPositions = new HashMap<>();
+    private HistorySearchDialog historySearch;
+    private List<ConversationStore.Entry> historyContext;
     private final JTextField search = ChatTheme.field("", "conversationSearch");
-    private final JTextField messageSearch = ChatTheme.field("", "messageSearch");
     private final JTextArea input = new JTextArea(1, 16) {
         @Override protected void paintComponent(Graphics graphics) {
             super.paintComponent(graphics);
@@ -68,7 +72,9 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private final ConversationList conversations = new ConversationList(listModel);
     private final MessageTimeline timeline = new MessageTimeline();
     private final JPanel listCards = new JPanel(new CardLayout());
-    private final JPanel historySearch = new JPanel(new BorderLayout(6, 0));
+    private final JPanel historyTools = new JPanel(new FlowLayout(FlowLayout.CENTER, 4, 0));
+    private final JButton olderHistory = ChatTheme.pill("加载更早消息");
+    private final JButton returnLatest = ChatTheme.pill("返回最近消息");
     private final JPanel sidebar = new JPanel(new BorderLayout());
     private final ChatContent chatContent = new ChatContent();
     private final ResponsiveShell shell;
@@ -109,7 +115,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         hint.setName("composerHint");
         chatSearch.setName("chatSearch"); more.setName("chatMore");
         buildSidebar();
-        search.putClientProperty("placeholder", "搜索"); messageSearch.putClientProperty("placeholder", "搜索当前会话消息");
+        search.putClientProperty("placeholder", "搜索");
         authentication.user.putClientProperty("placeholder", "例如 alice");
 
         header = new ChatTheme.RoundedPanel(new BorderLayout(8, 0), 24, Color.WHITE, true);
@@ -122,12 +128,23 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         contact.add(names, BorderLayout.CENTER); header.add(contact, BorderLayout.CENTER);
         JPanel tools = new JPanel(new GridLayout(1, 2, 2, 0)); tools.setOpaque(false); tools.add(chatSearch); tools.add(more);
         header.add(tools, BorderLayout.EAST);
-        historySearch.setOpaque(false); historySearch.setBorder(new EmptyBorder(8, 38, 0, 8));
-        messageSearch.setToolTipText("在当前会话的已接收消息中搜索");
-        JButton closeSearch = ChatTheme.iconButton(LineIcon.Kind.CLOSE, "关闭消息搜索");
-        closeSearch.addActionListener(e -> { historySearch.setVisible(false); messageSearch.setText(""); chatContent.revalidate(); });
-        historySearch.add(messageSearch); historySearch.add(closeSearch, BorderLayout.EAST); historySearch.setVisible(false);
-        header.add(historySearch, BorderLayout.SOUTH);
+        historyTools.setOpaque(false);
+        olderHistory.setName("olderHistory");
+        returnLatest.setName("returnLatest");
+        JLabel contextLabel = ChatTheme.label("搜索定位", 12, ChatTheme.MUTED, false);
+        historyTools.add(olderHistory);
+        historyTools.add(contextLabel);
+        historyTools.add(returnLatest);
+        header.add(historyTools, BorderLayout.SOUTH);
+        historyTools.setVisible(false);
+        olderHistory.addActionListener(e -> loadConversation(true));
+        returnLatest.addActionListener(e -> showLatest());
+        timeline.addMouseWheelListener(e -> {
+            if (e.getWheelRotation() < 0) SwingUtilities.invokeLater(this::loadAtTop);
+        });
+        timeline.getVerticalScrollBar().addAdjustmentListener(e -> {
+            if (e.getValueIsAdjusting() && e.getValue() == 0) loadAtTop();
+        });
 
         input.setFont(ChatTheme.FONT.deriveFont(15f)); ChatTheme.foreground(input, ThemePalette.Role.TEXT);
         input.setLineWrap(true); input.setWrapStyleWord(true); input.setOpaque(false);
@@ -175,11 +192,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         send.addActionListener(e -> send()); group.addActionListener(e -> selectConversation(ConversationId.PUBLIC));
         back.addActionListener(e -> { shell.openList(); refreshList(); });
         menu.addActionListener(e -> showMenu()); create.addActionListener(e -> showNewConversation()); more.addActionListener(e -> showChatMenu());
-        chatSearch.addActionListener(e -> {
-            historySearch.setVisible(!historySearch.isVisible());
-            if (historySearch.isVisible()) messageSearch.requestFocusInWindow(); else messageSearch.setText("");
-            chatContent.revalidate(); chatContent.repaint();
-        });
+        chatSearch.addActionListener(e -> openHistorySearch());
         attach.addActionListener(e -> showPendingTool("图片与文件附件"));
         emoji.addActionListener(e -> showPendingTool("表情选择面板"));
         conversations.addListSelectionListener(e -> {
@@ -197,7 +210,6 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             if (conversations.getSelectedValue() != null) selectConversation(conversations.getSelectedValue().id());
         }));
         search.getDocument().addDocumentListener(changed(this::refreshList));
-        messageSearch.getDocument().addDocumentListener(changed(this::renderTimeline));
         input.getDocument().addDocumentListener(changed(() -> {
             if (!restoringDraft) store.saveDraft(input.getText());
             counter.setText(input.getText().length() + " / 2000");
@@ -210,7 +222,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         input.getActionMap().put("send-message", action(() -> { if (send.isEnabled()) send(); }));
         addWindowListener(new WindowAdapter() {
             @Override public void windowClosing(WindowEvent e) {
-                closed = true; serverSelection.cancel(); historyRender.stop();
+                closed = true; serverSelection.cancel(); closeHistorySearch();
                 store.saveDraft(input.getText()); closeProfile(); client.close(); dispose();
             }
         });
@@ -219,7 +231,6 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             @Override public void windowLostFocus(WindowEvent e) { store.setVisible(false); }
         });
         connection.state(true, false); authentication.state(false, false);
-        historyRender.setRepeats(false);
         applyAppearance(appearance, false); refreshList(); refreshConversation();
         SwingUtilities.invokeLater(() -> {
             if (closed || client.state() != ChatClient.State.DISCONNECTED) return;
@@ -300,7 +311,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             String content = input.getText();
             String id = submittedTo.kind() == ConversationId.Kind.GROUP ? client.sendGroup(content) : client.sendPrivate(submittedTo.key(), content);
             store.submitted(submittedTo, id, content);
-            input.setText(""); input.requestFocusInWindow(); renderTimeline();
+            input.setText(""); input.requestFocusInWindow(); showLatest();
             hint.setText("Enter 发送 · Shift+Enter 换行"); ChatTheme.foreground(hint, ThemePalette.Role.MUTED);
         } catch (IOException ex) { showError(ex.getMessage()); }
     }
@@ -319,8 +330,15 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
 
     private void selectConversation(ConversationId id) {
+        boolean changed = !id.equals(store.selectedId());
+        if (changed) {
+            closeHistorySearch();
+            clearHistoryContext();
+        }
         store.saveDraft(input.getText()); store.select(id); shell.openChat();
-        messageSearch.setText(""); refreshList(); refreshConversation(); input.requestFocusInWindow();
+        refreshList(); refreshConversation(); input.requestFocusInWindow();
+        if (changed) timeline.scrollToBottom();
+        loadConversation(false);
     }
     private void refreshConversationHeader() {
         ConversationStore.Summary selected = store.selected();
@@ -341,16 +359,19 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         restoringDraft = true;
         try { input.setText(store.draft()); } finally { restoringDraft = false; }
         send.setEnabled(connectionState == ChatClient.State.CONNECTED && store.canSend());
+        chatSearch.setEnabled(connectionState == ChatClient.State.CONNECTED && !deletingHistory);
         input.setToolTipText(connectionState != ChatClient.State.CONNECTED ? "重新登录后可以继续发送"
                 : store.canSend() ? "消息 · Enter 发送，Shift+Enter 换行" : "草稿已保留，请明确重新选择在线联系人或群聊");
         renderTimeline();
     }
     private void renderTimeline() {
-        renderTimeline(false);
+        renderTimeline(true);
     }
     private void renderTimeline(boolean keepReadingPosition) {
-        timeline.deletion(connectionState == ChatClient.State.CONNECTED && !historyLoading && !deletingHistory, this::deleteMessage);
-        timeline.showEntries(store.entries(), store.self(), messageSearch.getText(), connectionState == ChatClient.State.CONNECTED, keepReadingPosition);
+        timeline.deletion(connectionState == ChatClient.State.CONNECTED && !deletingHistory, this::deleteMessage);
+        timeline.showEntries(historyContext == null ? store.entries() : historyContext, store.self(), "",
+                connectionState == ChatClient.State.CONNECTED, keepReadingPosition);
+        updateHistoryTools();
     }
     private void refreshList() {
         refreshingList = true;
@@ -374,7 +395,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             store.useIdentity(profile.userId());
             store.clearProfiles();
             signedInAddress = client.address();
-            if (changedIdentity) { search.setText(""); messageSearch.setText(""); }
+            if (changedIdentity) search.setText("");
             restoreAddress(); authentication.switching(false);
             hint.setText("Enter 发送 · Shift+Enter 换行"); hint.setToolTipText(null); ChatTheme.foreground(hint, ThemePalette.Role.MUTED);
             authentication.clearCredentials(false); showChat();
@@ -383,7 +404,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
                 sessionRevision++;
                 store.disconnected();
                 closeProfile();
-                historyLoading = false; deletingHistory = false; historyRender.stop();
+                deletingHistory = false; resetHistoryViews();
                 if (signedInAddress != null) {
                     hint.setText("草稿可继续编辑");
                     hint.setToolTipText(null);
@@ -416,20 +437,148 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             authentication.password.requestFocusInWindow();
     }
     private void reloadHistory() {
-        try { client.loadHistory(); } catch (IOException ex) { showError(ex.getMessage()); }
+        resetHistoryViews();
+        store.beginHistory();
+        refreshHistoryView(false);
+        loadConversation(false);
+        loadSummaries(null);
     }
-    private void refreshHistoryView() { refreshList(); refreshConversationHeader(); renderTimeline(); }
-    @Override public void onHistoryStarted() {
-        historyLoading = true; historyCount = 0; store.beginHistory(); setStatus("正在加载本人聊天记录…", false); refreshHistoryView();
+
+    private static final class HistoryPosition {
+        boolean loading, loaded, failed;
+        String next;
     }
-    @Override public void onHistoryRecord(ChatRecord record, String nickname) {
-        store.restore(record, nickname); historyCount++; if (!historyRender.isRunning()) historyRender.start();
+
+    private void loadSummaries(String cursor) {
+        long revision = historyRevision;
+        try {
+            client.browseHistory(HistoryQuery.SUMMARIES, null, cursor, null, null, page -> {
+                if (revision != historyRevision) return;
+                if (page.error() != null) { setStatus("会话摘要加载失败：" + page.error(), true); return; }
+                for (HistoryPage.Row row : page.rows()) store.summarize(row.record(), row.nickname());
+                refreshList();
+                refreshConversationHeader();
+                if (page.next() != null) loadSummaries(page.next());
+            });
+        } catch (IOException ex) { setStatus("会话摘要加载失败：" + ex.getMessage(), true); }
     }
-    @Override public void onHistoryComplete() {
-        historyLoading = false; historyRender.stop(); refreshHistoryView(); setStatus("聊天记录已加载 · " + historyCount + " 条", false);
+
+    private void loadConversation(boolean older) {
+        if (connectionState != ChatClient.State.CONNECTED || deletingHistory || historyContext != null) return;
+        ConversationId id = store.selectedId();
+        HistoryPosition position = historyPositions.computeIfAbsent(id, key -> new HistoryPosition());
+        if (position.loading || (position.loaded && (!older || position.next == null))) return;
+        String cursor = position.loaded ? position.next : null;
+        position.loading = true;
+        updateHistoryTools();
+        if (cursor == null) setStatus("正在加载最近消息…", false);
+        long revision = historyRevision;
+        try {
+            client.browseHistory(HistoryQuery.MESSAGES, scope(id), cursor, null, null, page -> {
+                if (revision != historyRevision) return;
+                position.loading = false;
+                position.failed = page.error() != null;
+                if (position.failed) {
+                    if (id.equals(store.selectedId())) setStatus(page.error(), true);
+                } else {
+                    position.loaded = true;
+                    position.next = page.next();
+                    for (int i = page.rows().size() - 1; i >= 0; i--) {
+                        HistoryPage.Row row = page.rows().get(i);
+                        store.restore(row.record(), row.nickname());
+                    }
+                    if (id.equals(store.selectedId())) {
+                        refreshHistoryView(cursor != null || historyContext != null);
+                        setStatus(cursor == null ? "最近消息已加载" : "已加载 " + page.rows().size() + " 条更早消息", false);
+                    } else refreshList();
+                }
+                updateHistoryTools();
+            });
+        } catch (IOException ex) {
+            position.loading = false;
+            position.failed = true;
+            setStatus(ex.getMessage(), true);
+            updateHistoryTools();
+        }
     }
+
+    private void loadAtTop() {
+        HistoryPosition position = historyPositions.get(store.selectedId());
+        if (position != null && position.next != null && !position.failed && timeline.getVerticalScrollBar().getValue() == 0)
+            loadConversation(true);
+    }
+
+    private void updateHistoryTools() {
+        HistoryPosition position = historyPositions.get(store.selectedId());
+        boolean context = historyContext != null;
+        boolean showOlder = !context && connectionState == ChatClient.State.CONNECTED && position != null
+                && (position.loading || position.failed || position.next != null);
+        olderHistory.setVisible(showOlder);
+        olderHistory.setEnabled(showOlder && !position.loading && !deletingHistory);
+        if (showOlder) olderHistory.setText(position.loading ? "正在加载…" : position.failed ? "重试加载消息" : "加载更早消息");
+        for (Component component : historyTools.getComponents()) if (component != olderHistory) component.setVisible(context);
+        historyTools.setVisible(context || showOlder);
+        chatContent.revalidate();
+        chatContent.repaint();
+    }
+
+    private void refreshHistoryView(boolean keepReadingPosition) {
+        refreshList(); refreshConversationHeader(); renderTimeline(keepReadingPosition);
+    }
+
+    private void openHistorySearch() {
+        if (historySearch != null && historySearch.isDisplayable()) { historySearch.toFront(); return; }
+        try {
+            String selectedScope = scope(store.selectedId());
+            historySearch = new HistorySearchDialog(this, store.selected().title(), ThemePalette.of(appearance),
+                    (mode, query, cursor, anchor, done) -> client.browseHistory(mode, selectedScope, cursor, query, anchor, done),
+                    this::showContext);
+            historySearch.setVisible(true);
+        } catch (IOException ex) { setStatus(ex.getMessage(), true); }
+    }
+
+    private void showContext(String id, HistoryPage page) {
+        List<ConversationStore.Entry> rows = new ArrayList<>();
+        for (int i = page.rows().size() - 1; i >= 0; i--) {
+            HistoryPage.Row row = page.rows().get(i);
+            rows.add(ConversationStore.archivedEntry(row.record(), row.nickname()));
+        }
+        historyContext = List.copyOf(rows);
+        timeline.highlight(id);
+        renderTimeline(false);
+        timeline.revealHighlighted();
+    }
+
+    private void showLatest() {
+        clearHistoryContext();
+        renderTimeline(false);
+        loadConversation(false);
+    }
+
+    private void clearHistoryContext() {
+        historyContext = null;
+        timeline.highlight(null);
+    }
+
+    private void closeHistorySearch() {
+        if (historySearch != null) {
+            historySearch.dispose();
+            historySearch = null;
+        }
+    }
+
+    private void resetHistoryViews() {
+        historyRevision++;
+        historyPositions.clear();
+        closeHistorySearch();
+        clearHistoryContext();
+    }
+
     @Override public void onHistoryDeleted(String scope, String id) {
-        deletingHistory = false; historyLoading = false; store.deleteHistory(scope, id); refreshHistoryView(); reloadHistory();
+        deletingHistory = false;
+        store.deleteHistory(scope, id);
+        chatSearch.setEnabled(true);
+        reloadHistory();
     }
     private String scope(ConversationId id) throws IOException {
         return id.kind() == ConversationId.Kind.GROUP ? ConversationScope.PUBLIC : ConversationScope.privateChat(store.self(), id.key());
@@ -446,11 +595,18 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         catch (IOException ex) { showError(ex.getMessage()); }
     }
     private void confirmDelete(String scope, String id, String prompt) {
-        if (historyLoading || deletingHistory || connectionState != ChatClient.State.CONNECTED) return;
+        if (deletingHistory || connectionState != ChatClient.State.CONNECTED) return;
         long revision = sessionRevision; String user = store.self();
         if (JOptionPane.showConfirmDialog(this, prompt + "\n只删除本人的副本，不影响对方或其他成员。删除后无法恢复。", "确认删除聊天记录", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION) return;
         if (revision != sessionRevision || !user.equals(store.self()) || connectionState != ChatClient.State.CONNECTED) return;
-        try { client.deleteHistory(scope, id); deletingHistory = true; renderTimeline(); setStatus("正在删除本人记录…", false); }
+        try {
+            client.deleteHistory(scope, id);
+            deletingHistory = true;
+            chatSearch.setEnabled(false);
+            closeHistorySearch();
+            renderTimeline();
+            setStatus("正在删除本人记录…", false);
+        }
         catch (IOException ex) { showError(ex.getMessage()); }
     }
     private void updateAuthentication(ChatClient.State state, String detail) {
@@ -467,8 +623,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     @Override public void onSwitchError(Message message) { authentication.feedback(message.code() + "：" + message.message(), true); }
     @Override public void onSwitchRegistered(String userId) { onRegistered(userId); }
     @Override public void onSessionReplaced() {
-        historyLoading = false; deletingHistory = false; historyRender.stop();
-        sessionRevision++; closeProfile(); store.useIdentity(""); input.setText(""); search.setText(""); messageSearch.setText("");
+        deletingHistory = false; resetHistoryViews();
+        sessionRevision++; closeProfile(); store.useIdentity(""); input.setText(""); search.setText("");
     }
     @Override public void onProfile(UserProfile value) {
         profile = value;
@@ -479,17 +635,13 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
     @Override public void onDisplayProfile(ContactProfile value) {
         if (!store.updateProfile(value)) return;
-        if (historyLoading) {
-            if (!historyRender.isRunning()) historyRender.start();
-        } else {
-            refreshList(); refreshConversationHeader(); renderTimeline(true);
-        }
+        refreshList(); refreshConversationHeader(); renderTimeline(true);
     }
     @Override public void onGroup(Message message) { receiveChat(message); }
     @Override public void onPrivate(Message message) { receiveChat(message); }
     private void receiveChat(Message message) {
         ConversationId destination = store.receive(message); refreshList();
-        if (destination.equals(store.selectedId())) renderTimeline(true);
+        if (destination.equals(store.selectedId()) && historyContext == null) renderTimeline(true);
     }
     @Override public void onChatSendError(Message message, boolean uncertain) {
         ConversationId target = store.sendError(message.requestId(), uncertain, message.message());
@@ -503,7 +655,10 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         store.system(message.content()); if (store.selectedId().equals(ConversationId.PUBLIC)) renderTimeline(true);
     }
     @Override public void onError(Message message) {
-        if (message.code() != null && message.code().startsWith("HISTORY_")) { historyLoading = false; deletingHistory = false; historyRender.stop(); }
+        if ("HISTORY_DELETE_FAILED".equals(message.code())) {
+            deletingHistory = false;
+            chatSearch.setEnabled(connectionState == ChatClient.State.CONNECTED);
+        }
         String detail = message.code() + "：" + message.message();
         authentication.feedback(detail, true);
         if (profilePanel != null && profileSaving && message.requestId() != null && message.requestId().startsWith("profile-")) {
@@ -571,7 +726,9 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         client.cancelSwitch();
         client.disconnect(); connectionState = ChatClient.State.DISCONNECTED; signedInAddress = null;
         closeProfile(); profile = null; identity.showProfile(null);
-        store.useIdentity(""); input.setText(""); search.setText(""); messageSearch.setText("");
+        deletingHistory = false;
+        resetHistoryViews();
+        store.useIdentity(""); input.setText(""); search.setText("");
         authentication.clearCredentials(false); authentication.switching(false); showWelcome(); refreshList(); refreshConversation();
         // Re-establish only the unauthenticated transport after an explicit account action.
         connectServer();
@@ -680,11 +837,11 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
     ChatPopupMenu conversationMenu() {
         ChatPopupMenu popup = new ChatPopupMenu(more, store.selected().title());
-        popup.action("chatLatest", "回到最新消息", LineIcon.Kind.BACK, timeline::scrollToBottom);
+        popup.action("chatLatest", "回到最新消息", LineIcon.Kind.BACK, this::showLatest);
         JMenuItem export = popup.action("chatExport", "导出聊天记录", LineIcon.Kind.SETTINGS, this::exportHistory);
         export.setEnabled(connectionState == ChatClient.State.CONNECTED);
         JMenuItem clear = popup.action("chatClearHistory", "清空当前会话记录（仅本人）", LineIcon.Kind.CLOSE, this::clearHistory);
-        clear.setEnabled(connectionState == ChatClient.State.CONNECTED && !historyLoading && !deletingHistory);
+        clear.setEnabled(connectionState == ChatClient.State.CONNECTED && !deletingHistory);
         JMenuItem reload = popup.action("chatReloadHistory", "重新加载聊天记录", LineIcon.Kind.BACK, this::reloadHistory);
         reload.setEnabled(connectionState == ChatClient.State.CONNECTED && !deletingHistory);
         return popup;
@@ -701,6 +858,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     void applyAppearance(AppearanceSettings value, boolean persist) {
         appearance = value; ThemePalette palette = ThemePalette.of(value); background.setAppearance(value);
         ChatTheme.apply(pages, palette); sidebar.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, palette.line()));
+        if (historySearch != null && historySearch.isDisplayable()) historySearch.applyPalette(palette);
         conversations.repaint(); renderTimeline();
         if (persist) {
             try { appearancePreferences.save(value); setStatus("外观设置已保存到本机", false); }
@@ -724,7 +882,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             if (header == null) return;
             int inset = getWidth() < 500 ? 10 : 26;
             int width = Math.max(260, Math.min(920, getWidth() - inset * 2)); int x = (getWidth() - width) / 2;
-            int top = getWidth() < 500 ? 12 : 24; int headerHeight = historySearch.isVisible() ? 112 : 70;
+            int top = getWidth() < 500 ? 12 : 24; int headerHeight = historyTools.isVisible() ? 104 : 70;
             header.setBounds(x, top, width, headerHeight);
             input.setSize(Math.max(100, width - 164), Short.MAX_VALUE);
             int editorHeight = Math.min(108, Math.max(24, input.getPreferredSize().height));

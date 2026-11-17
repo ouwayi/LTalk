@@ -22,6 +22,7 @@ public final class MessageTimeline extends JScrollPane {
     private String renderedText = "";
     private int renderGeneration;
     private boolean scrollingToBottom;
+    private String highlightedId;
     private Map<ConversationStore.Entry, Component> renderedRows = new IdentityHashMap<>();
     private String renderedSelf = "";
     private ThemePalette renderedPalette;
@@ -52,6 +53,19 @@ public final class MessageTimeline extends JScrollPane {
                             boolean keepReadingPosition) {
         Rectangle view = getViewport().getViewRect();
         boolean follow = !keepReadingPosition || scrollingToBottom || view.y + view.height >= column.getHeight() - 1;
+        ConversationStore.Entry anchor = null;
+        int offset = 0;
+        if (!follow) {
+            int firstY = Integer.MAX_VALUE;
+            for (var row : renderedRows.entrySet()) {
+                Component component = row.getValue();
+                if (component.getY() + component.getHeight() > view.y && component.getY() < firstY) {
+                    firstY = component.getY();
+                    anchor = row.getKey();
+                }
+            }
+            if (anchor != null) offset = view.y - readingY(renderedRows.get(anchor));
+        }
         ThemePalette palette = ChatTheme.palette(this);
         Map<ConversationStore.Entry, Component> previous = renderedSelf.equals(self) && palette.equals(renderedPalette) ? renderedRows : Map.of();
         renderedPalette = palette;
@@ -67,6 +81,16 @@ public final class MessageTimeline extends JScrollPane {
         renderedText = plain.toString();
         column.revalidate(); column.repaint();
         if (follow) scrollToBottom();
+        else if (renderedRows.containsKey(anchor)) {
+            layoutRows();
+            scrollTo(readingY(renderedRows.get(anchor)) + offset);
+        }
+    }
+
+    private static int readingY(Component component) {
+        // Prepending can change whether a bubble has a sender label above its text.
+        if (component instanceof BubbleRow row) return row.getY() + row.bubble.getY() + row.body.getY();
+        return component.getY();
     }
 
     private void renderEntries(List<ConversationStore.Entry> entries, String self, String needle, ThemePalette palette,
@@ -99,6 +123,7 @@ public final class MessageTimeline extends JScrollPane {
                 BubbleRow bubble = row == null ? new BubbleRow(entry, own, palette,
                         () -> onDelete.accept(entry), () -> onRecover.accept(entry)) : (BubbleRow) row;
                 bubble.setDisplayName(displayName);
+                bubble.located(highlightedId != null && highlightedId.equals(entry.messageId()));
                 bubble.startsRun(!shownInRun);
                 bubble.delete.setEnabled(deletionEnabled && entry.messageId() != null);
                 if (!own) {
@@ -138,6 +163,34 @@ public final class MessageTimeline extends JScrollPane {
             scrollingToBottom = false;
             getVerticalScrollBar().setValue(getVerticalScrollBar().getMaximum());
         });
+    }
+
+    public void highlight(String messageId) { highlightedId = messageId; }
+
+    public void revealHighlighted() {
+        String requested = highlightedId;
+        SwingUtilities.invokeLater(() -> {
+            if (requested == null || !requested.equals(highlightedId)) return;
+            for (var row : renderedRows.entrySet()) {
+                if (requested.equals(row.getKey().messageId())) {
+                    layoutRows();
+                    Component component = row.getValue();
+                    int center = Math.max(0, (getViewport().getHeight() - component.getHeight()) / 2);
+                    scrollTo(component.getY() - center);
+                    break;
+                }
+            }
+        });
+    }
+
+    private void layoutRows() {
+        getViewport().doLayout();
+        column.doLayout();
+    }
+
+    private void scrollTo(int y) {
+        int limit = Math.max(0, column.getHeight() - getViewport().getHeight());
+        getViewport().setViewPosition(new Point(0, Math.max(0, Math.min(y, limit))));
     }
 
     private static final class AvatarGroup {
@@ -221,6 +274,7 @@ public final class MessageTimeline extends JScrollPane {
         private Dimension measured;
         private int measuredWidth = -1;
         private boolean startsRun = true;
+        private boolean located;
         BubbleRow(ConversationStore.Entry entry, boolean own, ThemePalette palette, Runnable onDelete, Runnable onRecover) {
             super(null); this.own = own; setOpaque(false);
             bubble = new ChatTheme.RoundedPanel(new BorderLayout(0, 3), 20, own ? palette.outgoing() : palette.surface(), true);
@@ -270,6 +324,10 @@ public final class MessageTimeline extends JScrollPane {
             sender.setVisible(value);
             measured = null;
         }
+        void located(boolean value) {
+            located = value;
+            setName(value ? "locatedMessage" : null);
+        }
         private static Color avatarColor(String name, boolean dark) {
             return Color.getHSBColor(Math.floorMod(name.hashCode(), 360) / 360f, .58f, dark ? .96f : .62f);
         }
@@ -290,6 +348,16 @@ public final class MessageTimeline extends JScrollPane {
             Dimension size = measure(getWidth());
             int x = own ? Math.max(8, getWidth() - size.width - 14) : 52;
             bubble.setBounds(x, 0, size.width, getHeight()); bubble.doLayout();
+        }
+        @Override protected void paintChildren(Graphics graphics) {
+            super.paintChildren(graphics);
+            if (!located) return;
+            Graphics2D g = (Graphics2D) graphics.create();
+            ChatTheme.quality(g);
+            g.setColor(ChatTheme.BLUE);
+            g.setStroke(new BasicStroke(2f));
+            g.drawRoundRect(bubble.getX() + 1, 1, bubble.getWidth() - 3, bubble.getHeight() - 3, 20, 20);
+            g.dispose();
         }
     }
 

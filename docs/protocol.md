@@ -14,7 +14,7 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 
 ## 字段与消息类型
 
-所有对象必有字符串 `type`，未使用字段不输出。HELLO、REGISTER、LOGIN、PROFILE_GET、PROFILE_UPDATE、PASSWORD_CHANGE、EXPORT_REQUEST、HISTORY_REQUEST、HISTORY_DELETE、GROUP_SEND 和 PRIVATE_SEND 均需携带非空白、最多 64 个字符的 `requestId`。PING/PONG 也需要编号。客户端按连接生成请求编号，不同用户的编号可以相同。聊天的消息 ID 由服务端生成，请求编号只用于关联请求和响应。
+所有对象必有字符串 `type`，未使用字段不输出。HELLO、REGISTER、LOGIN、PROFILE_GET、PROFILE_UPDATE、PASSWORD_CHANGE、EXPORT_REQUEST、HISTORY_REQUEST、HISTORY_VIEW_REQUEST、HISTORY_DELETE、GROUP_SEND 和 PRIVATE_SEND 均需携带非空白、最多 64 个字符的 `requestId`。PING/PONG 也需要编号。客户端按连接生成请求编号，不同用户的编号可以相同。聊天的消息 ID 由服务端生成，请求编号只用于关联请求和响应。
 
 | 类型 | 方向 | 字段 | 结果 |
 | --- | --- | --- | --- |
@@ -185,6 +185,21 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 聊天归档+投递与删除确认串行排序，防止删除前的实时消息在确认后重新进入本人窗口。清空公共会话覆盖当时可见的旧版和共享记录，之后发出的消息正常显示。客户端以 messageId 合并历史与实时消息，历史不增加未读。超时/失败显示可重试，删除超时结果可能已生效，重新加载核对。
 
 这些历史查询与删除类型自 v4 引入，v6 沿用上述授权与分页规则。
+
+## 按需浏览、搜索及定位历史（v6 扩展）
+
+新版桌面客户端使用 `HISTORY_VIEW_REQUEST`。请求携带 `requestId` 和 `historyMode`，可选的 `userId` 须为本人。须升级服务端和客户端才能使用新入口。已有 `HISTORY_REQUEST`、删除、导出和归档文件格式继续适用。
+
+| historyMode | 请求参数与结果 |
+| --- | --- |
+| SUMMARIES | 可选 `cursor` 为上页末行的会话标识。按会话标识升序返回每个有可见记录的会话的最新一条。 |
+| MESSAGES | 必填 `conversationId`；可选 `cursor` 为上页最后一条的消息 UUID。无游标取最新一页，有游标取严格早于该记录的下一批。 |
+| SEARCH | 必填 `conversationId` 和 `content`，关键词非空白且最多 128 个 UTF-16 单元。去首尾空白后忽略大小写匹配正文、发送者当前昵称或用户名。可选 `cursor` 为上页末条匹配的 UUID。按从新到旧返回。 |
+| CONTEXT | 必填 `conversationId` 和目标 `messageId`。从新到旧返回目标消息及前后各最多 9 条本人可见记录。 |
+
+每次查询返回 0～20 个 `HISTORY_VIEW_ROW`，每行一帧，字段为 `requestId`、`record` 和可选的当前 `nickname`。结束帧 `HISTORY_VIEW_END` 携带同一个 `requestId`，还有记录时包含 `cursor`，定位结果无后续游标。浏览消息为从新到旧。帧上限均为 16 KiB，摘要、浏览和定位涉及的头像仍通过独立的 `DISPLAY_PROFILE` 同步。
+
+每次请求重新按认证账号、会话和删除设置打开快照。消息游标与定位目标必须在该会话的可见记录中，找不到返回 `NOT_FOUND`。参数组合或标识格式错误返回 `BAD_MESSAGE`，他人账号或不含本人的私聊范围返回 `FORBIDDEN`，存储读取失败返回 `STORAGE_ERROR`。追加的实时消息在翻页时不会让先前返回的记录重复进入下一页。客户端根据请求编号消费完整页面。超时、失败或不完整的页面可重试。
 
 ## 消息展示昵称（2026-11-15，v4 可选扩展）
 

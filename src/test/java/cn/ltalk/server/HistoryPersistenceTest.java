@@ -24,6 +24,87 @@ class HistoryPersistenceTest {
         throw new AssertionError("unbounded history");
     }
 
+    private record View(List<ChatRecord> rows, String next) { }
+
+    private static View view(Peer peer, HistoryQuery mode, String scope, String cursor, String query, String anchor) throws Exception {
+        peer.send(Message.of(MessageType.HISTORY_VIEW_REQUEST).requestId("view").historyMode(mode.name())
+                .conversationId(scope).cursor(cursor).content(query).messageId(anchor).build());
+        List<ChatRecord> rows = new ArrayList<>();
+        while (true) {
+            Message response = peer.await(m -> "view".equals(m.requestId()));
+            if (response.type() == MessageType.HISTORY_VIEW_END) return new View(rows, response.cursor());
+            assertEquals(MessageType.HISTORY_VIEW_ROW, response.type(), () -> "Unexpected view response: " + response);
+            assertTrue(rows.size() < HistoryQuery.PAGE_SIZE);
+            rows.add(response.record());
+        }
+    }
+
+    @Test void boundedViewsPageAndLocateOnlyVisibleMessagesInTheSelectedScope() throws Exception {
+        String group = ConversationScope.PUBLIC;
+        String privateScope = ConversationScope.privateChat("alice", "bob");
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.dataDirectory(directory);
+            server.start();
+            try (Peer a = Peer.login(server.port(), "alice"); Peer b = Peer.login(server.port(), "bob");
+                 Peer c = Peer.login(server.port(), "carol")) {
+                a.send(Message.of(MessageType.PROFILE_UPDATE).requestId("name").nickname("Project Alice").avatar("").build());
+                assertEquals(MessageType.PROFILE_OK, a.await(m -> "name".equals(m.requestId())).type());
+                List<String> ids = new ArrayList<>();
+                String unicode = "汉".repeat(700) + "\n😀";
+                for (int i = 1; i <= 28; i++) {
+                    a.group(i + " " + unicode);
+                    ids.add(a.type(MessageType.GROUP_MESSAGE).messageId());
+                    b.type(MessageType.GROUP_MESSAGE);
+                    c.type(MessageType.GROUP_MESSAGE);
+                }
+                a.privateTo("bob", "private-only-keyword");
+                Message secret = a.type(MessageType.PRIVATE_MESSAGE);
+                b.type(MessageType.PRIVATE_MESSAGE);
+                View summaries = view(a, HistoryQuery.SUMMARIES, null, null, null, null);
+                assertEquals(List.of(ids.get(27), secret.messageId()), summaries.rows.stream().map(ChatRecord::messageId).toList());
+                assertNull(summaries.next);
+                assertEquals(1, view(c, HistoryQuery.SUMMARIES, null, null, null, null).rows.size());
+
+                View recent = view(a, HistoryQuery.MESSAGES, group, null, null, null);
+                assertEquals(20, recent.rows.size());
+                assertEquals("28 " + unicode, recent.rows.get(0).content());
+                assertEquals(ids.get(8), recent.next);
+                b.group("a new live message between pages");
+                b.type(MessageType.GROUP_MESSAGE);
+                View older = view(a, HistoryQuery.MESSAGES, group, recent.next, null, null);
+                assertEquals(ids.get(7), older.rows.get(0).messageId());
+                assertEquals(ids.get(0), older.rows.get(7).messageId());
+                assertNull(older.next);
+
+                View search = view(a, HistoryQuery.SEARCH, group, null, "PROJECT ALICE", null);
+                assertEquals(recent.next, search.next);
+                assertEquals(8, view(a, HistoryQuery.SEARCH, group, search.next, "PROJECT ALICE", null).rows.size());
+                assertTrue(view(a, HistoryQuery.SEARCH, group, null, "private-only", null).rows.isEmpty());
+                assertEquals(List.of(secret.messageId()), view(a, HistoryQuery.SEARCH, privateScope, null, "private-only", null)
+                        .rows.stream().map(ChatRecord::messageId).toList());
+                String target = ids.get(5);
+                View context = view(a, HistoryQuery.CONTEXT, group, null, null, target);
+                assertEquals(ids.get(14), context.rows.get(0).messageId());
+                assertEquals(target, context.rows.get(9).messageId());
+                assertEquals(ids.get(0), context.rows.get(context.rows.size() - 1).messageId());
+                c.send(Message.of(MessageType.HISTORY_VIEW_REQUEST).requestId("foreign").historyMode("CONTEXT")
+                        .conversationId(privateScope).messageId(secret.messageId()).build());
+                c.error("FORBIDDEN");
+                a.send(Message.of(MessageType.HISTORY_VIEW_REQUEST).requestId("mismatch").historyMode("CONTEXT")
+                        .conversationId(group).messageId(secret.messageId()).build());
+                a.error("NOT_FOUND");
+                a.send(Message.of(MessageType.HISTORY_DELETE).requestId("hide").conversationId(group).messageId(target).build());
+                a.type(MessageType.HISTORY_DELETED);
+                assertTrue(view(a, HistoryQuery.SEARCH, group, null, "6 " + unicode.substring(0, 10), null)
+                        .rows.stream().noneMatch(row -> row.messageId().equals(target)));
+                a.send(Message.of(MessageType.HISTORY_VIEW_REQUEST).requestId("deleted").historyMode("CONTEXT")
+                        .conversationId(group).messageId(target).build());
+                a.error("NOT_FOUND");
+                assertTrue(view(b, HistoryQuery.CONTEXT, group, null, null, target).rows.stream().anyMatch(row -> row.messageId().equals(target)));
+            }
+        }
+    }
+
     @Test void lateRegistrationAndOfflineLoginCatchUpWithPublicHistoryOnly() throws Exception {
         List<String> originalIds = new ArrayList<>();
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
@@ -85,6 +166,9 @@ class HistoryPersistenceTest {
                 bob.type(MessageType.GROUP_MESSAGE);
                 assertEquals(List.of(legacy.messageId(), shared), records(alice).stream().map(ChatRecord::messageId).toList());
                 assertEquals(List.of(shared), records(bob).stream().map(ChatRecord::messageId).toList());
+                assertEquals(List.of(shared, legacy.messageId()), view(alice, HistoryQuery.MESSAGES, ConversationScope.PUBLIC, null, null, null)
+                        .rows.stream().map(ChatRecord::messageId).toList());
+                assertTrue(view(bob, HistoryQuery.SEARCH, ConversationScope.PUBLIC, null, "旧版", null).rows.isEmpty());
                 alice.send(Message.of(MessageType.HISTORY_DELETE).requestId("one").conversationId(ConversationScope.PUBLIC)
                         .messageId(shared).build()); alice.type(MessageType.HISTORY_DELETED);
                 assertEquals(List.of(legacy), records(alice));
@@ -92,6 +176,7 @@ class HistoryPersistenceTest {
                 alice.send(Message.of(MessageType.HISTORY_DELETE).requestId("clear").conversationId(ConversationScope.PUBLIC).build());
                 alice.type(MessageType.HISTORY_DELETED);
                 assertTrue(records(alice).isEmpty());
+                assertTrue(view(alice, HistoryQuery.MESSAGES, ConversationScope.PUBLIC, null, null, null).rows.isEmpty());
             }
         }
         try (ChatServer restarted = new ChatServer("127.0.0.1", 0)) {

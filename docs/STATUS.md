@@ -27,7 +27,8 @@
 | 个人信息 | 左下角本人头像 →「个人信息」。能改昵称、上传或重置头像、修改密码。改密码需验证当前密码和确认新密码，成功后本次连接继续，下次使用新密码。 |
 | 头像和昵称 | 登录、资料修改和本人历史加载同步展示资料。联系人、私聊标题、气泡和群聊摘要读取当前资料。连续消息组首显示昵称，末尾显示一个头像，滚动到边缘时一起裁切。 |
 | 头像规格 | 原图限 12 MiB 和 2400 万像素。短边至少 512 像素则裁剪为 512×512，否则为 256×256，编码上限 128 KiB。旧 48/144 像素头像仍可用，重新上传原图可提高分辨率。 |
-| 历史和删除 | 登录后加载共享公共历史和本人原有归档，覆盖新版服务端记录的登录前和离线期间公共消息。旧版归档沿用各账号已有的可见范围。逐条删除和清空仅影响当前账号的历史与导出。 |
+| 历史和删除 | 登录显示会话摘要与当前会话最近 20 条，进入其他会话再加载其历史。上滚到顶部或点击按钮加载旧记录，保留阅读位置。公共历史含登录前和离线期间消息，旧版归档沿用原有账号权限，删除只影响本人。 |
+| 搜索定位 | 从当前会话搜索本人可见归档，匹配正文、昵称和用户名。定位显示原消息及前后各最多 9 条，标记原消息并支持返回最近消息。 |
 | 导出 | 当前会话菜单打开另存为，选择 JSON/CSV、文件名和位置。JSON 为合法数组，每条一行。目标文件存在时确认覆盖。Windows 使用原生文件选择器，其他系统使用 Swing 选择器。 |
 | 外观与布局 | 浅色、近黑深色、预设或自选纯色/渐变。拖动色盘或输入 HEX 可预览，外观参数单独保存在本机。聊天小于 760 逻辑像素改单列，启动页小于 660 时改为上下排列并可滚动。 |
 
@@ -48,12 +49,12 @@
 | --- | --- |
 | common/Message、MessageCodec、MessageType、Validation | 帧、消息模型和输入校验 |
 | common/ConversationScope、UserProfile、AvatarData | 会话键、本人资料、头像格式约束 |
-| server/AccountStore、ChatArchive | 账号、改密、展示资料、公共共享归档和本人历史 |
+| server/AccountStore、ChatArchive、ArchiveView | 账号、改密、展示资料、公共共享归档、本人历史、摘要和搜索 |
 | server/MessageRouter、ClientSession、SessionRegistry、ChatServer | 握手与认证、会话权限、路由、心跳、连接清理 |
 | common/TlsTransport、server/PublicAccess、SessionOutput | TLS 握手和端点校验、公网准入、逐连接发送队列 |
 | common/LanDiscovery、server/DiscoveryResponder、client/DiscoveryClient、ServerSelection、RecentServers | UDP 发现帧、后台应答与查找、启动页选择、最近地址保存 |
 | client/ChatClient、ClientSessions、HistoryChannel、HistoryExport | 后台连接、候选账号交接、历史分页和导出 |
-| client/ChatWindow、client/ui/WelcomePanel、ConnectionPanel、AuthenticationPanel | 窗口组装、连接及认证界面 |
+| client/ChatWindow、HistorySearchDialog、client/ui/WelcomePanel、ConnectionPanel、AuthenticationPanel | 窗口组装、历史浏览与定位、连接及认证界面 |
 | client/ContactProfile、AvatarImporter、client/ui/ProfileAvatar、ProfilePanel、PasswordChangePanel | 头像导入、展示资料、本人资料编辑及改密 |
 | client/ui/ConversationStore、ConversationId、ConversationList、MessageTimeline、ResponsiveShell | EDT 展示、会话选择、分组气泡与布局 |
 | client/ui/Appearance*、ColorPicker、ChatTheme、ThemePalette、FileDialogs、WindowsFilePicker | 外观与色盘、主题、系统文件对话框 |
@@ -67,11 +68,12 @@
 
 ## 已有验证与后续核对
 
+- 按需加载历史与搜索定位于 2026-11-17 执行 `build.ps1 -o package`，**122 项通过，0 失败、错误或跳过**。覆盖回环分页、旧归档、搜索权限、窄屏滚动锚点和定位。构建产物为 `target/ltalk-1.0.0.jar`，日志 `.tools/history-view-verified.log`。[测试报告](test-report.md#按需加载历史与搜索定位2026-11-17阶段-30)
 - 公网阶段于 2026-11-17 完整回归 **120 项通过**，约 1:58。本机 100 个 TLS 客户端连续验证约 180 秒，持续阶段 88,100 次群聊投递、无意外断线。已验证慢端关闭、TLS 证书及主机名拒绝、连接及认证限制、备份复制后恢复、打包 JAR 启动。[测试报告](test-report.md)
 - Windows 启动与发现于 2026-11-16 执行 `build.ps1 -o package`，**116 项通过，0 失败、错误或跳过**，约 1:28。验证包括本机网卡 IPv4 广播与回环去重、打包启动器、关闭发现后的 TCP 握手、窄屏深色启动页。日志为 `.tools/lan-discovery-repeat.log`。跨设备与防火墙配置仍待现场验收。
 - 公共历史补齐于 2026-11-16 执行 `build.ps1 -o package`，**109 项通过，0 失败、错误或跳过**，约 1:29。覆盖晚登录、离线期间公共消息、重启、旧归档、个人删除和私聊隔离。日志为 `.tools/public-history-final.log`，已更新 `target/ltalk-1.0.0.jar`。使用本机回环、隔离数据与 Swing 组件验证。
 - 发送反馈和重连于 2026-11-16 执行 `powershell -NoProfile -File .\build.ps1 -o package`，**107 项通过，0 失败、错误或跳过**，约 1:25。Windows、JDK 25.0.4、Maven 3.9.9，以 release 17 编译。验证使用回环 TCP、临时数据与 Swing 组件。构建产物为 `target/ltalk-1.0.0.jar`，本机日志为 `.tools/chat-experience-final.log`。
 - 此前功能提交包括 `74aa291` 改密、`d629d5e` 高清头像、`c4840f3` 资料同步、`984cb5b` 消息组头像裁切。各阶段的结果与历史人工反馈见 [测试报告](test-report.md)。
 - 当前 v6 的多设备资料同步等完整流程、独立 JDK 17 自动化回归、各档 DPI、其他客户端系统和长时间负载仍待验收。早期宿主机＋虚拟机的局域网反馈保持原版本归属。
-- 跨账号私聊归档写入没有事务保证。窗口保留全部已加载历史，缺少容量淘汰。改密、资料保存或删除超时可能已生效，可重新登录或重载历史核对。
+- 跨账号私聊归档写入没有事务保证。窗口保留已展开的历史页面，JSONL 深页和搜索会扫描归档。改密、资料保存或删除超时可能已生效，可重新登录或重载历史核对。
 - 实机可核对点击发送期间断网、重连后核对归档、离线私聊对象重新上线，以及 v6 多设备资料同步、改密后重登与 256/512 头像上传。后续开发选项见 [路线图](ROADMAP.md)。
