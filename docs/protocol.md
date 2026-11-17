@@ -20,9 +20,9 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 | --- | --- | --- | --- |
 | LOGIN | C → S | requestId, userId, password | 成功 LOGIN_OK；HELLO 模式失败保留连接，直接登录失败关闭 |
 | LOGIN_OK | S → 当前 C | requestId, userId, nickname, avatar, createdAt（旧账号可缺省） | 客户端切为 CONNECTED |
-| GROUP_SEND | C → S | requestId, content, 可选 conversationId | 公共聊天室发往全部就绪会话；独立群组校验成员并仅投递给就绪成员。均含发送者回显 |
+| GROUP_SEND | C → S | requestId, content, 可选 conversationId、replyTo | 公共聊天室发往全部就绪会话；独立群组校验成员并仅投递给就绪成员。均含发送者回显 |
 | GROUP_MESSAGE | S → 在线 C | requestId, messageId, conversationId, from, content, serverTime, nickname（可选） | 群聊展示，以服务端事件为唯一正式回显 |
-| PRIVATE_SEND | C → S | requestId, to, content | 必须是好友，或已获许可且目标在线。归档后在线目标先入投递队列，离线好友从其归档收取。最后回显发送者 |
+| PRIVATE_SEND | C → S | requestId, to, content, 可选 replyTo | 必须是好友，或已获许可且目标在线。归档后在线目标先入投递队列，离线好友从其归档收取。最后回显发送者 |
 | PRIVATE_MESSAGE | S → 私聊双方 | requestId, messageId, conversationId, from, to, content, serverTime, nickname（可选） | 仅双方收包，不通过广播 |
 | USER_LIST | S → 在线 C | users: string[], revision: 非负 long | 全量列表，按较新版本覆盖 |
 | SYSTEM | S → 在线 C | content, serverTime | 上下线提示，不作为列表数据来源 |
@@ -229,6 +229,12 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 仅当前群成员可通过带群组会话 ID 的 `GROUP_SEND` 发消息。成员加入时记录当时最近 100 条的起点，退出或解散时关闭授权区间，再次入群增加新的区间。浏览、搜索定位、导出、删除和摘要共同使用这些区间。从未加入的账号无法获取群消息。独立群组使用服务端 UUID，公共聊天室保留 `GROUP:PUBLIC`。
 
 缺少历史权限或操作身份不符返回 `FORBIDDEN`，无私聊许可返回 `PRIVATE_FORBIDDEN`，重复待处理请求返回 `REQUEST_PENDING`，已有关系或成员返回 `ALREADY_EXISTS`，请求失效返回 `NOT_FOUND`。管理员直接退群返回 `ADMIN_REQUIRED`。客户端与服务端需同步升级，旧消息可沿用原数据目录。
+
+## 引用回复（v6 扩展）
+
+`GROUP_SEND` 和 `PRIVATE_SEND` 可携带 `replyTo`，值为原消息的规范 UUID。服务端只接受发送账号在同一会话中仍可查看的记录，编号无效返回 `BAD_MESSAGE`，原消息已删除、跨会话或超出可见范围返回 `NOT_FOUND`。正式消息事件、JSONL 归档和 JSON 导出保留该编号。旧记录省略该字段，CSV 继续使用原七列。
+
+引用仅传递编号。客户端从当前可见消息取预览，按现有 `CONTEXT` 查询定位未加载原文。原消息可见性取决于查看者本人的群组历史区间和删除设置。客户端匹配发送回显时同时核对引用编号。未读定位使用客户端窗口状态。
 
 ## 消息展示昵称（2026-11-15，v4 可选扩展）
 

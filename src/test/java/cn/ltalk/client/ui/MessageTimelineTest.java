@@ -16,6 +16,24 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 class MessageTimelineTest {
+    @Test void contextMenuCopiesExactBodyEvenWithASelection() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            MessageTimeline timeline = new MessageTimeline();
+            AtomicReference<String> copied = new AtomicReference<>();
+            timeline.messageActions(entry -> fail("Copy should not start a reply"), copied::set, id -> {});
+            String body = "  中文🙂\n<html>正文</html>\t";
+            timeline.showEntries(List.of(message("bob", "Bob", body)), "alice", "", true);
+            List<JTextPane> bodies = new ArrayList<>();
+            collect(timeline, bodies);
+            JTextPane source = bodies.get(0);
+            source.select(2, 4);
+            JMenuItem command = java.util.Arrays.stream(source.getComponentPopupMenu().getComponents())
+                    .filter(item -> "copyMessage".equals(item.getName())).map(JMenuItem.class::cast).findFirst().orElseThrow();
+            command.doClick();
+            assertEquals(body, copied.get());
+        });
+    }
+
     @Test void profileUpdateRepaintsOneAvatarAndNicknameForAlreadyDisplayedMessages() throws Exception {
         SwingUtilities.invokeAndWait(() -> {
             MessageTimeline timeline = new MessageTimeline();

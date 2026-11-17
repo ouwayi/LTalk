@@ -97,6 +97,8 @@ final class MessageRouter {
                     String scope = request.conversationId();
                     Set<String> members = scope == null || ConversationScope.PUBLIC.equals(scope) ? null
                             : server.social().members(ConversationScope.groupId(scope), session.userId);
+                    server.archive().requireVisibleReply(session.userId,
+                            scope == null ? ConversationScope.PUBLIC : scope, request.replyTo());
                     var recipients = registry.readySessions().stream().filter(peer -> members == null || members.contains(peer.userId)).toList();
                     Message event = server.archive().record(MessageType.GROUP_MESSAGE, session.userId, server.accounts().nickname(session.userId), request,
                             List.of());
@@ -113,6 +115,9 @@ final class MessageRouter {
                         throw new ProtocolException("USER_OFFLINE", "对方离线，只能给好友发送离线消息");
                     if (!server.social().privateAllowed(session.userId, request.to()))
                         throw new ProtocolException("PRIVATE_FORBIDDEN", "请先取得私聊许可或成为好友");
+                    if (request.replyTo() != null)
+                        server.archive().requireVisibleReply(session.userId,
+                                ConversationScope.privateChat(session.userId, request.to()), request.replyTo());
                     Message event = server.archive().record(MessageType.PRIVATE_MESSAGE, session.userId, server.accounts().nickname(session.userId), request,
                             List.of(session.userId, request.to()));
                     if (target != null && !server.deliver(target, event))

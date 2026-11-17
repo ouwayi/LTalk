@@ -2,6 +2,7 @@ package cn.ltalk.client;
 
 import cn.ltalk.common.ChatRecord;
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import java.io.*;
 import java.nio.file.*;
 import java.time.Instant;
@@ -11,6 +12,7 @@ import java.util.*;
 
 /** Incremental UTF-8 export; a failed export never publishes a partial final file. */
 public final class HistoryExport implements AutoCloseable {
+    private static final Gson JSON = new GsonBuilder().serializeNulls().create();
     private final Path temporary, destination;
     private final BufferedWriter writer;
     private final boolean csv;
@@ -47,7 +49,9 @@ public final class HistoryExport implements AutoCloseable {
             writer.write("\r\n");
         } else {
             if (!first) writer.write(','); writer.write('\n');
-            writer.write(new com.google.gson.GsonBuilder().serializeNulls().create().toJson(record));
+            var json = JSON.toJsonTree(record).getAsJsonObject();
+            if (record.replyTo() == null) json.remove("replyTo");
+            writer.write(JSON.toJson(json));
         }
         first = false;
     }

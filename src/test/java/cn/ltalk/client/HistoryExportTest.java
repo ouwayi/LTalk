@@ -13,11 +13,17 @@ class HistoryExportTest {
     @Test void jsonHasOneRecordPerPhysicalLineAndRemainsAValidArray() throws Exception {
         Path path = directory.resolve("自定义 名称.json");
         try (HistoryExport export = new HistoryExport(path, "json", false)) {
-            export.append(record); export.append(record); assertFalse(Files.exists(path)); assertEquals(path, export.finish());
+            export.append(record);
+            export.append(new ChatRecord("reply", "GROUP:PUBLIC", "alice", null, record.content(),
+                    "GROUP_MESSAGE", record.sentAt(), record.messageId()));
+            assertFalse(Files.exists(path)); assertEquals(path, export.finish());
         }
         var lines = Files.readAllLines(path); assertEquals(4, lines.size()); assertEquals("[", lines.get(0)); assertEquals("]", lines.get(3));
         assertTrue(lines.get(1).endsWith(",")); assertTrue(lines.get(2).contains("\\n"));
-        assertEquals(2, JsonParser.parseString(Files.readString(path)).getAsJsonArray().size());
+        var rows = JsonParser.parseString(Files.readString(path)).getAsJsonArray();
+        assertEquals(2, rows.size());
+        assertFalse(rows.get(0).getAsJsonObject().has("replyTo"));
+        assertEquals(record.messageId(), rows.get(1).getAsJsonObject().get("replyTo").getAsString());
     }
     @Test void replacementRequiresConsentAndFailureNeverTruncatesExistingDestination() throws Exception {
         Path path = directory.resolve("existing.json"); Files.writeString(path, "original");

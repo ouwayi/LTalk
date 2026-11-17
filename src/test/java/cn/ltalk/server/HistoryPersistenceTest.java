@@ -24,6 +24,52 @@ class HistoryPersistenceTest {
         throw new AssertionError("unbounded history");
     }
 
+    @Test void replyReferencesSurviveRestartAndMustPointToAVisibleMessageInTheSameConversation() throws Exception {
+        String originalId, privateId, replyId;
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.dataDirectory(directory);
+            server.start();
+            try (Peer alice = Peer.login(server.port(), "alice"); Peer bob = Peer.login(server.port(), "bob")) {
+                SocialFixtures.permitPrivate(server, "alice", "bob");
+                bob.group("公开的原消息");
+                originalId = bob.type(MessageType.GROUP_MESSAGE).messageId();
+                alice.type(MessageType.GROUP_MESSAGE);
+                bob.privateTo("alice", "仅双方可见的正文");
+                privateId = bob.type(MessageType.PRIVATE_MESSAGE).messageId();
+                alice.type(MessageType.PRIVATE_MESSAGE);
+                alice.send(Message.of(MessageType.GROUP_SEND).requestId("wrong-scope").content("公开回复").replyTo(privateId).build());
+                alice.error("NOT_FOUND");
+                alice.send(Message.of(MessageType.GROUP_SEND).requestId("malformed").content("坏编号").replyTo("invalid").build());
+                alice.error("BAD_MESSAGE");
+                alice.send(Message.of(MessageType.PRIVATE_SEND).requestId("private-reply").to("bob")
+                        .content("私聊回复").replyTo(privateId).build());
+                assertEquals(privateId, alice.type(MessageType.PRIVATE_MESSAGE).replyTo());
+                assertEquals(privateId, bob.type(MessageType.PRIVATE_MESSAGE).replyTo());
+                alice.send(Message.of(MessageType.GROUP_SEND).requestId("public-reply").content("公开回复").replyTo(originalId).build());
+                replyId = alice.type(MessageType.GROUP_MESSAGE).messageId();
+                Message event = bob.type(MessageType.GROUP_MESSAGE);
+                assertEquals(originalId, event.replyTo());
+                assertFalse(MessageCodec.encode(event).contains("公开的原消息"));
+                bob.send(Message.of(MessageType.HISTORY_DELETE).requestId("hide").conversationId(ConversationScope.PUBLIC)
+                        .messageId(originalId).build());
+                bob.type(MessageType.HISTORY_DELETED);
+                bob.send(Message.of(MessageType.GROUP_SEND).requestId("hidden").content("回复已删除记录").replyTo(originalId).build());
+                bob.error("NOT_FOUND");
+            }
+        }
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.dataDirectory(directory);
+            server.start();
+            try (Peer bob = Peer.login(server.port(), "bob")) {
+                List<ChatRecord> history = records(bob);
+                assertEquals(3, history.size());
+                assertTrue(history.stream().noneMatch(row -> row.messageId().equals(originalId)));
+                assertEquals(originalId, history.stream().filter(row -> row.messageId().equals(replyId)).findFirst().orElseThrow().replyTo());
+                assertEquals(privateId, history.stream().filter(row -> row.content().equals("私聊回复")).findFirst().orElseThrow().replyTo());
+            }
+        }
+    }
+
     private record View(List<ChatRecord> rows, String next) { }
 
     private static View view(Peer peer, HistoryQuery mode, String scope, String cursor, String query, String anchor) throws Exception {

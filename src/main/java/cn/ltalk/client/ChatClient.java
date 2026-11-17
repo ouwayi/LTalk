@@ -323,10 +323,13 @@ public final class ChatClient implements AutoCloseable {
         }
     }
 
-    public String sendGroup(String content) throws IOException { return submitChat(null, null, content); }
+    public String sendGroup(String content) throws IOException { return sendGroup(null, content, null); }
     public String sendGroup(String scope, String content) throws IOException {
-        ConversationScope.groupId(scope);
-        return submitChat(null, scope, content);
+        return sendGroup(scope, content, null);
+    }
+    public String sendGroup(String scope, String content, String replyTo) throws IOException {
+        if (scope != null) ConversationScope.groupId(scope);
+        return submitChat(null, scope, content, replyTo);
     }
     private Connection authenticated() throws IOException {
         synchronized (lifecycle) {
@@ -490,13 +493,18 @@ public final class ChatClient implements AutoCloseable {
         }
     }
     public String sendPrivate(String target, String content) throws IOException {
-        if (target == null || !target.matches("[A-Za-z0-9_]{1,20}"))
-            throw new ProtocolException("BAD_MESSAGE", "请选择私聊对象");
-        return submitChat(target, null, content);
+        return sendPrivate(target, content, null);
     }
 
-    private String submitChat(String target, String scope, String content) throws IOException {
+    public String sendPrivate(String target, String content, String replyTo) throws IOException {
+        if (target == null || !target.matches("[A-Za-z0-9_]{1,20}"))
+            throw new ProtocolException("BAD_MESSAGE", "请选择私聊对象");
+        return submitChat(target, null, content, replyTo);
+    }
+
+    private String submitChat(String target, String scope, String content, String replyTo) throws IOException {
         Validation.content(content);
+        if (replyTo != null) ConversationScope.uuid(replyTo);
         synchronized (lifecycle) {
             Connection connection = active;
             if (state != State.CONNECTED || connection == null || connection.closed.get())
@@ -505,7 +513,8 @@ public final class ChatClient implements AutoCloseable {
                 throw new ProtocolException("SELF_PRIVATE_NOT_ALLOWED", "不能给自己发私聊");
             if (connection.chatSends.size() >= MAX_PENDING_CHAT) throw new IOException("待确认消息过多，请稍后发送");
             Message request = Message.of(target == null ? MessageType.GROUP_SEND : MessageType.PRIVATE_SEND)
-                    .requestId(CHAT_REQUEST_PREFIX + UUID.randomUUID()).to(target).conversationId(scope).content(content).build();
+                    .requestId(CHAT_REQUEST_PREFIX + UUID.randomUUID()).to(target).conversationId(scope)
+                    .content(content).replyTo(replyTo).build();
             MessageCodec.encode(request); // Local frame validation does not tear down a healthy connection.
             ChatSend pending = new ChatSend(request);
             connection.chatSends.put(request.requestId(), pending);
@@ -537,6 +546,7 @@ public final class ChatClient implements AutoCloseable {
 
     private static boolean matchesEcho(Connection connection, Message request, Message echo) {
         return echo.messageId() != null && connection.userId.equals(echo.from()) && request.content().equals(echo.content())
+                && Objects.equals(request.replyTo(), echo.replyTo())
                 && (request.to() == null ? echo.type() == MessageType.GROUP_MESSAGE
                 && Objects.equals(Objects.requireNonNullElse(request.conversationId(), ConversationScope.PUBLIC),
                         Objects.requireNonNullElse(echo.conversationId(), ConversationScope.PUBLIC))

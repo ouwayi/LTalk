@@ -43,7 +43,10 @@ class ConversationStoreTest {
         store.receive(event(MessageType.PRIVATE_MESSAGE, "bob", "alice", "仅双方"));
         assertEquals(ConversationId.PUBLIC, store.selectedId()); assertEquals(1, store.entries().size());
         assertEquals(1, store.summaries("bob").stream().filter(s -> s.id().equals(ConversationId.privateWith("bob"))).findFirst().orElseThrow().unread());
-        store.select(ConversationId.privateWith("bob")); assertEquals(0, store.selected().unread());
+        store.select(ConversationId.privateWith("bob"));
+        assertEquals("仅双方", store.unread().first().content());
+        store.markRead(store.unread().last());
+        assertEquals(0, store.selected().unread());
         assertEquals("仅双方", store.entries().get(0).content());
         store.receive(event(MessageType.PRIVATE_MESSAGE, "alice", "bob", "我的回显"));
         assertEquals(2, store.entries().size()); assertEquals(0, store.selected().unread());
@@ -56,7 +59,13 @@ class ConversationStoreTest {
         store.receive(event(MessageType.GROUP_MESSAGE, "bob", null, "未读1"));
         store.receive(event(MessageType.GROUP_MESSAGE, "carol", null, "未读2"));
         assertEquals(2, store.selected().unread()); store.select(ConversationId.PUBLIC); assertEquals(2, store.selected().unread());
-        store.setVisible(true); assertEquals(0, store.selected().unread());
+        store.setVisible(true);
+        var visible = store.unread();
+        assertEquals("未读1", visible.first().content());
+        store.receive(event(MessageType.GROUP_MESSAGE, "bob", null, "阅读旧消息时收到"), false);
+        store.markRead(visible.last());
+        assertEquals(1, store.selected().unread());
+        assertEquals("阅读旧消息时收到", store.unread().first().content());
     }
 
     @Test void draftsHistoryAndOfflineSelectionRemainSeparateAndRequireDeliberateReselection() {

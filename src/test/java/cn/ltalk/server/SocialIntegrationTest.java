@@ -85,9 +85,12 @@ class SocialIntegrationTest {
             groupChat(bob, scope, "before joining");
             bob.error("FORBIDDEN");
             assertHistoryDenied(bob, scope);
+            String earliest = null;
             for (int i = 1; i <= 104; i++) {
                 groupChat(alice, scope, "group-" + i);
-                assertEquals(scope, alice.type(MessageType.GROUP_MESSAGE).conversationId());
+                Message event = alice.type(MessageType.GROUP_MESSAGE);
+                assertEquals(scope, event.conversationId());
+                if (i == 1) earliest = event.messageId();
             }
             bob.assertNo(m -> m.type() == MessageType.GROUP_MESSAGE, 45);
             ok(bob, SocialAction.GROUP_REQUEST, m -> m.conversationId(groupScope));
@@ -101,6 +104,9 @@ class SocialIntegrationTest {
             assertEquals(100, first.size());
             assertEquals("group-5", first.get(0));
             assertEquals("group-104", first.get(99));
+            bob.send(Message.of(MessageType.GROUP_SEND).requestId("old-quote").conversationId(scope)
+                    .content("超出入群范围的引用").replyTo(earliest).build());
+            bob.error("NOT_FOUND");
             bob.send(Message.of(MessageType.HISTORY_VIEW_REQUEST).requestId("newest").historyMode("MESSAGES").conversationId(scope).build());
             assertEquals("group-104", bob.type(MessageType.HISTORY_VIEW_ROW).record().content());
             bob.type(MessageType.HISTORY_VIEW_END);
@@ -122,9 +128,12 @@ class SocialIntegrationTest {
             assertHistoryDenied(dave, scope);
             ok(alice, SocialAction.GROUP_APPROVE, m -> m.messageId(itemId(alice, SocialItem.Kind.JOIN_IN, "dave")));
             ok(bob, SocialAction.GROUP_LEAVE, m -> m.conversationId(groupScope));
-            groupChat(alice, scope, "post-exit");
+            alice.send(Message.of(MessageType.GROUP_SEND).requestId("quote-after-exit").conversationId(scope)
+                    .content("post-exit").replyTo(earliest).build());
             String afterExit = alice.type(MessageType.GROUP_MESSAGE).messageId();
-            assertEquals("post-exit", carol.type(MessageType.GROUP_MESSAGE).content());
+            Message visibleReply = carol.type(MessageType.GROUP_MESSAGE);
+            assertEquals(earliest, visibleReply.replyTo());
+            assertEquals("post-exit", visibleReply.content());
             assertEquals("post-exit", dave.type(MessageType.GROUP_MESSAGE).content());
             bob.assertNo(m -> m.type() == MessageType.GROUP_MESSAGE, 45);
             assertEquals(first, export(bob, scope));

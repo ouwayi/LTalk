@@ -954,6 +954,92 @@ class ChatWindowTest {
         }
     }
 
+    @Test @Timeout(35)
+    void openingNarrowConversationJumpsToFirstUnreadAndQuotedReplyCanLocateUnloadedOriginal() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start();
+            Peer.seed(server);
+            try (Peer bob = Peer.login(server.port(), "bob")) {
+                String port = Integer.toString(server.port());
+                onEdt(() -> ref.set(new ChatWindow("127.0.0.1", port, "alice", appearanceDirectory.resolve("unread.properties"))));
+                ChatWindow window = ref.get();
+                login(window);
+                awaitEdt(() -> button(window, "send").isEnabled() && list(window).getModel().getSize() == 2);
+                String first = "未读消息 1";
+                bob.privateTo("alice", first);
+                String originalId = bob.type(MessageType.PRIVATE_MESSAGE).messageId();
+                for (int i = 2; i <= 30; i++) {
+                    bob.privateTo("alice", "未读消息 " + i);
+                    bob.type(MessageType.PRIVATE_MESSAGE);
+                }
+                awaitEdt(() -> summary(window, "bob").unread() == 30);
+                onEdt(() -> {
+                    window.applyAppearance(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK), false);
+                    window.getContentPane().setSize(420, 680);
+                    layout(window.getContentPane());
+                    selectPeer(window, "bob");
+                    layout(window.getContentPane());
+                });
+                awaitEdt(() -> {
+                    if (summary(window, "bob").unread() != 0 || find(window, "unreadDivider") == null) return false;
+                    MessageTimeline timeline = (MessageTimeline) find(window, "timeline");
+                    int y = viewportY(timeline, first);
+                    return y >= 0 && y < timeline.getViewport().getHeight()
+                            && viewportY(timeline, "未读消息 30") >= timeline.getViewport().getHeight();
+                });
+                bob.privateTo("alice", "阅读期间的新消息");
+                bob.type(MessageType.PRIVATE_MESSAGE);
+                awaitEdt(() -> button(window, "newMessages").isVisible() && summary(window, "bob").unread() == 1);
+                onEdt(() -> {
+                    button(window, "newMessages").doClick();
+                    assertEquals(0, summary(window, "bob").unread());
+                    area(window, "input").setText("已有草稿");
+                    JMenuItem quote = messageAction(window, first, "replyMessage");
+                    assertNotNull(quote);
+                    assertTrue(quote.isEnabled());
+                    quote.doClick();
+                    assertTrue(label(window, "quoteDraftText").getText().contains(first));
+                    assertEquals("已有草稿", area(window, "input").getText());
+                    button(window, "cancelQuote").doClick();
+                    assertFalse(label(window, "quoteDraftText").getParent().isVisible());
+                    quote.doClick();
+                    button(window, "group").doClick();
+                    assertFalse(label(window, "quoteDraftText").getParent().isVisible());
+                    selectPeer(window, "bob");
+                    assertTrue(label(window, "quoteDraftText").getParent().isVisible());
+                    assertEquals("已有草稿", area(window, "input").getText());
+                    render(window, 420, 680, "quote-composer-narrow.png");
+                    button(window, "send").doClick();
+                });
+                Message reply = bob.await(m -> m.type() == MessageType.PRIVATE_MESSAGE && "alice".equals(m.from()));
+                assertEquals(originalId, reply.replyTo());
+                assertEquals("已有草稿", reply.content());
+                awaitEdt(() -> hasSendStatus(window, "已确认"));
+                closeWindow(ref);
+                ref.set(null);
+                awaitEdt(() -> server.onlineCount() == 1);
+                onEdt(() -> ref.set(new ChatWindow("127.0.0.1", port, "alice", appearanceDirectory.resolve("unread.properties"))));
+                ChatWindow reopened = ref.get();
+                login(reopened);
+                awaitEdt(() -> list(reopened).getModel().getSize() == 2);
+                onEdt(() -> selectPeer(reopened, "bob"));
+                awaitEdt(() -> find(reopened, "quoteLink") != null);
+                onEdt(() -> {
+                    assertEquals("查看引用消息", button(reopened, "quoteLink").getText());
+                    assertFalse(history(reopened).lines().anyMatch(line -> line.endsWith(first)));
+                    button(reopened, "quoteLink").doClick();
+                });
+                awaitEdt(() -> find(reopened, "locatedMessage") != null);
+                onEdt(() -> {
+                    assertTrue(history(reopened).lines().anyMatch(line -> line.endsWith(first)));
+                    assertTrue(history(reopened).contains("未读消息 2"));
+                    assertFalse(history(reopened).contains("已有草稿"));
+                });
+            }
+        } finally { closeWindow(ref); }
+    }
+
     private static int viewportY(MessageTimeline timeline, String content) {
         Container column = (Container) timeline.getViewport().getView();
         for (Component row : column.getComponents()) {
@@ -971,10 +1057,13 @@ class ChatWindowTest {
         } return null;
     }
     private static JMenuItem messageDelete(Container root,String content) {
+        return messageAction(root, content, "deleteMessage");
+    }
+    private static JMenuItem messageAction(Container root, String content, String action) {
         for(Component child:root.getComponents()) {
             if(child instanceof JTextPane text && text.getText().equals(content) && text.getComponentPopupMenu()!=null)
-                return (JMenuItem)find(text.getComponentPopupMenu(),"deleteMessage");
-            if(child instanceof Container nested) { JMenuItem item=messageDelete(nested,content); if(item!=null) return item; }
+                return (JMenuItem)find(text.getComponentPopupMenu(),action);
+            if(child instanceof Container nested) { JMenuItem item=messageAction(nested,content,action); if(item!=null) return item; }
         } return null;
     }
     private static void invokeKey(JTextArea editor, int key, int modifiers) {

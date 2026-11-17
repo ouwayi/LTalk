@@ -55,7 +55,7 @@ final class ChatArchive {
                 : ConversationScope.privateChat(sender, request.to());
         String id = UUID.randomUUID().toString();
         ChatRecord record = new ChatRecord(id, conversation, sender,
-                groupMessage ? null : request.to(), request.content(), type.name(), now.toString());
+                groupMessage ? null : request.to(), request.content(), type.name(), now.toString(), request.replyTo());
         byte[] line = (gson.toJson(record) + "\n").getBytes(StandardCharsets.UTF_8);
         if (groupMessage) {
             Path journal = ConversationScope.PUBLIC.equals(conversation) ? publicJournal : groupJournal(ConversationScope.groupId(conversation));
@@ -75,7 +75,20 @@ final class ChatArchive {
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         }
         return Message.of(type).requestId(request.requestId()).from(sender).nickname(nickname).to(record.recipient())
-                .content(record.content()).serverTime(record.sentAt()).messageId(id).conversationId(conversation).build();
+                .content(record.content()).serverTime(record.sentAt()).messageId(id).conversationId(conversation)
+                .replyTo(record.replyTo()).build();
+    }
+
+    void requireVisibleReply(String user, String scope, String replyTo) throws IOException {
+        if (replyTo == null) return;
+        ConversationScope.uuid(replyTo);
+        try (Cursor rows = openNewest(user, scope)) {
+            ChatRecord row;
+            while ((row = rows.next()) != null) {
+                if (replyTo.equals(row.messageId())) return;
+            }
+        }
+        throw new ProtocolException("NOT_FOUND", "引用的原消息在当前会话中不可查看");
     }
     synchronized Cursor open(String user) throws IOException {
         return open(user, null);

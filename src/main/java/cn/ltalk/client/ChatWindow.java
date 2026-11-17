@@ -7,6 +7,7 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.event.*;
 import java.awt.*;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.*;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -39,6 +40,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private final Map<ConversationId, HistoryPosition> historyPositions = new HashMap<>();
     private HistorySearchDialog historySearch;
     private List<ConversationStore.Entry> historyContext;
+    private long locationRevision;
+    private ConversationStore.Entry unreadAnchor, unreadLookup;
     private SocialDialog socialDialog;
     private List<SocialItem> socialItems = List.of();
     private boolean socialLoading, socialDirty, privateRequesting;
@@ -80,9 +83,12 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private final JPanel historyTools = new JPanel(new FlowLayout(FlowLayout.CENTER, 4, 0));
     private final JButton olderHistory = ChatTheme.pill("加载更早消息");
     private final JButton returnLatest = ChatTheme.pill("返回最近消息");
+    private final JButton newMessages = ChatTheme.pill("新消息");
     private final JButton requestPrivate = ChatTheme.pill("申请私聊");
     private final JPanel sidebar = new JPanel(new BorderLayout());
     private final ChatContent chatContent = new ChatContent();
+    private final JPanel quoteDraft = new JPanel(new BorderLayout(8, 0));
+    private final JLabel quoteDraftText = ChatTheme.label("", 12, ChatTheme.MUTED, false);
     private final ResponsiveShell shell;
     private final JScrollPane editorScroll;
     private final ChatTheme.RoundedPanel header;
@@ -116,6 +122,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         headerAvatar.setName("conversationAvatar");
         timeline.setContactProfiles(store::profile);
         timeline.onRecover(this::recoverMessage);
+        timeline.messageActions(this::startReply, this::copyBody, this::locateOriginal);
         send.setName("send"); group.setName("group"); back.setName("back"); menu.setName("menu");
         create.setName("createConversation"); attach.setName("attach"); emoji.setName("emoji"); input.setName("input");
         hint.setName("composerHint");
@@ -137,22 +144,27 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         historyTools.setOpaque(false);
         olderHistory.setName("olderHistory");
         returnLatest.setName("returnLatest");
+        newMessages.setName("newMessages");
         requestPrivate.setName("requestPrivate");
-        JLabel contextLabel = ChatTheme.label("搜索定位", 12, ChatTheme.MUTED, false);
+        JLabel contextLabel = ChatTheme.label("消息定位", 12, ChatTheme.MUTED, false);
         historyTools.add(olderHistory);
         historyTools.add(requestPrivate);
+        historyTools.add(newMessages);
         historyTools.add(contextLabel);
         historyTools.add(returnLatest);
         header.add(historyTools, BorderLayout.SOUTH);
         historyTools.setVisible(false);
         olderHistory.addActionListener(e -> loadConversation(true));
         returnLatest.addActionListener(e -> showLatest());
+        newMessages.addActionListener(e -> locateUnread());
         requestPrivate.addActionListener(e -> requestPrivate());
         timeline.addMouseWheelListener(e -> {
             if (e.getWheelRotation() < 0) SwingUtilities.invokeLater(this::loadAtTop);
+            else if (e.getWheelRotation() > 0) SwingUtilities.invokeLater(this::readIfAtLatest);
         });
         timeline.getVerticalScrollBar().addAdjustmentListener(e -> {
             if (e.getValueIsAdjusting() && e.getValue() == 0) loadAtTop();
+            if (e.getValueIsAdjusting()) readIfAtLatest();
         });
 
         input.setFont(ChatTheme.FONT.deriveFont(15f)); ChatTheme.foreground(input, ThemePalette.Role.TEXT);
@@ -162,6 +174,17 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         editorScroll = new JScrollPane(input); ChatTheme.scroll(editorScroll, true);
         composer = new ChatTheme.RoundedPanel(new BorderLayout(8, 0), 26, Color.WHITE, true);
         composer.setBorder(new EmptyBorder(8, 8, 8, 8)); composer.add(attach, BorderLayout.WEST); composer.add(editorScroll, BorderLayout.CENTER);
+        quoteDraft.setOpaque(false);
+        quoteDraft.setBorder(new EmptyBorder(0, 8, 4, 0));
+        quoteDraftText.setName("quoteDraftText");
+        JButton cancelQuote = ChatTheme.iconButton(LineIcon.Kind.CLOSE, "取消引用");
+        cancelQuote.setName("cancelQuote");
+        cancelQuote.setPreferredSize(new Dimension(32, 32));
+        cancelQuote.addActionListener(e -> { store.replyDraft(null); refreshQuoteDraft(); input.requestFocusInWindow(); });
+        quoteDraft.add(quoteDraftText, BorderLayout.CENTER);
+        quoteDraft.add(cancelQuote, BorderLayout.EAST);
+        quoteDraft.setVisible(false);
+        composer.add(quoteDraft, BorderLayout.NORTH);
         JPanel composeActions = new JPanel(new BorderLayout(4, 0)); composeActions.setOpaque(false);
         composeActions.add(emoji, BorderLayout.WEST); composeActions.add(send, BorderLayout.EAST);
         send.setIcon(new LineIcon(LineIcon.Kind.SEND, Color.WHITE, 23)); send.setPreferredSize(new Dimension(44, 44));
@@ -184,9 +207,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         pages.add(welcomeScroll, "welcome"); pages.add(chatPage, "chat"); setContentPane(pages); showWelcome();
         shell.onLayout(() -> {
             back.setVisible(shell.compact());
-            int before = store.selected().unread();
-            store.setVisible(chatPageVisible() && background.isVisible() && (!isVisible() || isFocused()));
-            if (before != store.selected().unread()) SwingUtilities.invokeLater(this::refreshList);
+            store.setVisible(readingConversation());
         });
 
         connection.connect.addActionListener(e -> connectServer()); connection.disconnect.addActionListener(e -> client.disconnect());
@@ -236,7 +257,10 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             }
         });
         addWindowFocusListener(new WindowAdapter() {
-            @Override public void windowGainedFocus(WindowEvent e) { store.setVisible(chatPageVisible() && (!shell.compact() || shell.chatOpen())); refreshList(); }
+            @Override public void windowGainedFocus(WindowEvent e) {
+                store.setVisible(readingConversation());
+                if (historyContext == null) locateUnread();
+            }
             @Override public void windowLostFocus(WindowEvent e) { store.setVisible(false); }
         });
         connection.state(true, false); authentication.state(false, false);
@@ -323,10 +347,12 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         ConversationId submittedTo = store.selectedId();
         try {
             String content = input.getText();
-            String id = submittedTo.equals(ConversationId.PUBLIC) ? client.sendGroup(content)
-                    : submittedTo.kind() == ConversationId.Kind.GROUP ? client.sendGroup(scope(submittedTo), content)
-                    : client.sendPrivate(submittedTo.key(), content);
-            store.submitted(submittedTo, id, content);
+            String quote = store.replyDraft();
+            String id = submittedTo.kind() == ConversationId.Kind.GROUP
+                    ? client.sendGroup(submittedTo.equals(ConversationId.PUBLIC) ? null : scope(submittedTo), content, quote)
+                    : client.sendPrivate(submittedTo.key(), content, quote);
+            store.submitted(submittedTo, id, content, quote);
+            store.replyDraft(null);
             input.setText(""); input.requestFocusInWindow(); showLatest();
             hint.setText("Enter 发送 · Shift+Enter 换行"); ChatTheme.foreground(hint, ThemePalette.Role.MUTED);
         } catch (IOException ex) { showError(ex.getMessage()); }
@@ -340,20 +366,53 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
                 JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
         if (revision != sessionRevision || !selected.equals(store.selectedId())) return;
         input.setText(entry.content());
+        store.replyDraft(entry.replyTo());
+        refreshQuoteDraft();
         input.requestFocusInWindow();
         if (entry.sendStatus() == ConversationStore.SendStatus.UNCONFIRMED)
             feedback("正文已取回。原消息结果待确认，重新发送可能重复。", true);
     }
 
+    private void startReply(ConversationStore.Entry entry) {
+        if (entry.messageId() == null || shownMessage(entry.messageId()) == null
+                || !store.canSend() || connectionState != ChatClient.State.CONNECTED) return;
+        store.replyDraft(entry.messageId());
+        refreshQuoteDraft();
+        input.requestFocusInWindow();
+    }
+
+    private void copyBody(String text) {
+        try {
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
+            feedback("已复制正文", false);
+        } catch (IllegalStateException | SecurityException ex) {
+            feedback("无法写入剪贴板，请稍后重试", true);
+        }
+    }
+
+    private void refreshQuoteDraft() {
+        String id = store.replyDraft();
+        quoteDraft.setVisible(id != null);
+        if (id != null) {
+            ConversationStore.Entry original = shownMessage(id);
+            if (original == null) original = store.message(id);
+            String label = original == null ? "正在引用一条消息" : MessageTimeline.quoteText(original);
+            quoteDraftText.setText(label);
+            quoteDraftText.setToolTipText(label);
+        }
+        chatContent.revalidate();
+        chatContent.repaint();
+    }
+
     private void selectConversation(ConversationId id) {
-        boolean changed = !id.equals(store.selectedId());
-        if (changed) {
+        boolean entering = !id.equals(store.selectedId()) || !background.isVisible();
+        if (entering) {
             closeHistorySearch();
             clearHistoryContext();
         }
         store.saveDraft(input.getText()); store.select(id); shell.openChat();
         refreshList(); refreshConversation(); input.requestFocusInWindow();
-        if (changed) timeline.scrollToBottom();
+        if (!locateUnread() && entering) timeline.scrollToBottom();
         loadConversation(false);
     }
     private void refreshConversationHeader() {
@@ -386,8 +445,11 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
     private void renderTimeline(boolean keepReadingPosition) {
         timeline.deletion(connectionState == ChatClient.State.CONNECTED && !deletingHistory, this::deleteMessage);
+        timeline.quoting(connectionState == ChatClient.State.CONNECTED && !deletingHistory && store.canSend());
+        timeline.unreadEntry(unreadAnchor);
         timeline.showEntries(historyContext == null ? store.entries() : historyContext, store.self(), "",
                 connectionState == ChatClient.State.CONNECTED, keepReadingPosition);
+        refreshQuoteDraft();
         updateHistoryTools();
     }
     private void refreshList() {
@@ -449,7 +511,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         identity.showProfile(profile);
         setTitle("LTalk · 局域网聊天室" + (profile == null ? "" : " · " + profile.nickname()));
         setStatus(detail, false); refreshList(); refreshConversation();
-        if (loggedIn) { reloadHistory(); reloadSocial(); }
+        if (loggedIn) { reloadHistory(); reloadSocial(); locateUnread(); }
         else if (signedInAddress != null && !client.switching() && state == ChatClient.State.SERVER_CONNECTED && !chatPageVisible())
             authentication.password.requestFocusInWindow();
     }
@@ -505,7 +567,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
                         store.restore(row.record(), row.nickname());
                     }
                     if (id.equals(store.selectedId())) {
-                        refreshHistoryView(cursor != null || historyContext != null);
+                        refreshHistoryView(cursor != null || historyContext != null || unreadAnchor != null);
                         setStatus(cursor == null ? "最近消息已加载" : "已加载 " + page.rows().size() + " 条更早消息", false);
                     } else refreshList();
                 }
@@ -538,10 +600,14 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
                 && store.mayRequestPrivate(selected.key());
         requestPrivate.setVisible(showRequest);
         requestPrivate.setEnabled(showRequest && !privateRequesting);
+        int unread = store.selected().unread();
+        boolean showUnread = unread > 0;
+        newMessages.setText("有 " + unread + " 条新消息");
+        newMessages.setVisible(showUnread);
         for (Component component : historyTools.getComponents()) {
-            if (component != olderHistory && component != requestPrivate) component.setVisible(context);
+            if (component != olderHistory && component != requestPrivate && component != newMessages) component.setVisible(context);
         }
-        historyTools.setVisible(context || showOlder || showRequest);
+        historyTools.setVisible(context || showOlder || showRequest || showUnread);
         chatContent.revalidate();
         chatContent.repaint();
     }
@@ -562,26 +628,113 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
 
     private void showContext(String id, HistoryPage page) {
+        showContext(id, page, null);
+    }
+
+    private void showContext(String id, HistoryPage page, ConversationStore.Entry unread) {
+        clearHistoryContext();
         List<ConversationStore.Entry> rows = new ArrayList<>();
         for (int i = page.rows().size() - 1; i >= 0; i--) {
             HistoryPage.Row row = page.rows().get(i);
             rows.add(ConversationStore.archivedEntry(row.record(), row.nickname()));
         }
         historyContext = List.copyOf(rows);
-        timeline.highlight(id);
+        unreadAnchor = unread;
+        timeline.highlight(unread == null ? id : null);
         renderTimeline(false);
-        timeline.revealHighlighted();
+        if (unread == null) timeline.revealHighlighted(); else timeline.revealUnread();
     }
 
     private void showLatest() {
         clearHistoryContext();
+        ConversationStore.Unread unread = store.unread();
+        if (unread != null) markRead(unread);
         renderTimeline(false);
         loadConversation(false);
     }
 
     private void clearHistoryContext() {
+        locationRevision++;
         historyContext = null;
+        unreadAnchor = null;
+        unreadLookup = null;
         timeline.highlight(null);
+    }
+
+    private ConversationStore.Entry shownMessage(String id) {
+        if (historyContext == null) return store.message(id);
+        for (ConversationStore.Entry entry : historyContext) if (id.equals(entry.messageId())) return entry;
+        return null;
+    }
+
+    private void locateOriginal(String id) {
+        if (shownMessage(id) != null || store.message(id) != null) {
+            if (shownMessage(id) == null) clearHistoryContext();
+            locationRevision++;
+            unreadLookup = null;
+            timeline.highlight(id);
+            renderTimeline(true);
+            timeline.revealHighlighted();
+            return;
+        }
+        requestContext(id, page -> {
+            if (page.error() == null) showContext(id, page);
+            else feedback(page.error(), true);
+        });
+    }
+
+    private boolean locateUnread() {
+        if (!readingConversation()) return false;
+        ConversationStore.Unread unread = store.unread();
+        if (unread == null) return false;
+        ConversationStore.Entry first = unread.first();
+        if (first == unreadLookup) return true;
+        clearHistoryContext();
+        if (first.messageId() == null || store.message(first.messageId()) != null) {
+            unreadAnchor = first;
+            renderTimeline(true);
+            timeline.revealUnread();
+            markRead(unread);
+        } else {
+            unreadLookup = first;
+            requestContext(first.messageId(), page -> {
+                unreadLookup = null;
+                if (page.error() == null) {
+                    showContext(first.messageId(), page, first);
+                    markRead(unread);
+                } else feedback(page.error(), true);
+            });
+        }
+        return true;
+    }
+
+    private void requestContext(String id, Consumer<HistoryPage> completion) {
+        if (connectionState != ChatClient.State.CONNECTED) {
+            completion.accept(HistoryPage.failed("请重新连接后查看原消息"));
+            return;
+        }
+        long revision = ++locationRevision;
+        ConversationId conversation = store.selectedId();
+        try {
+            client.browseHistory(HistoryQuery.CONTEXT, scope(conversation), null, null, id, page -> {
+                if (revision == locationRevision && conversation.equals(store.selectedId()) && readingConversation())
+                    completion.accept(page);
+                else if (revision == locationRevision) unreadLookup = null;
+            });
+        } catch (IOException ex) { completion.accept(HistoryPage.failed(ex.getMessage())); }
+    }
+
+    private void markRead(ConversationStore.Unread unread) {
+        if (store.markRead(unread.last())) {
+            refreshList();
+            updateHistoryTools();
+        }
+    }
+
+    private void readIfAtLatest() {
+        ConversationStore.Unread unread = store.unread();
+        if (unread != null && historyContext == null && unreadLookup == null && readingConversation() && timeline.followingLatest())
+            markRead(unread);
     }
 
     private void closeHistorySearch() {
@@ -665,8 +818,12 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     @Override public void onGroup(Message message) { receiveChat(message); }
     @Override public void onPrivate(Message message) { receiveChat(message); }
     private void receiveChat(Message message) {
-        ConversationId destination = store.receive(message); refreshList();
-        if (destination.equals(store.selectedId()) && historyContext == null) renderTimeline(true);
+        ConversationId destination = store.receive(message, historyContext == null && unreadLookup == null && timeline.followingLatest());
+        refreshList();
+        if (destination.equals(store.selectedId())) {
+            if (historyContext == null) renderTimeline(true);
+            else updateHistoryTools();
+        }
     }
     @Override public void onChatSendError(Message message, boolean uncertain) {
         ConversationId target = store.sendError(message.requestId(), uncertain, message.message());
@@ -704,6 +861,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
 
     private void showWelcome() { ((CardLayout) pages.getLayout()).show(pages, "welcome"); store.setVisible(false); }
     private boolean chatPageVisible() { return shell.getParent().isVisible(); }
+    private boolean readingConversation() { return chatPageVisible() && background.isVisible() && (!isVisible() || isFocused()); }
     private void showChat() {
         if (signedInAddress == null) return;
         serverSelection.cancel();
@@ -712,7 +870,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             updateAuthentication(connectionState, "已返回原账号聊天");
         }
         ((CardLayout) pages.getLayout()).show(pages, "chat");
-        store.setVisible(!shell.compact() || shell.chatOpen()); pages.revalidate(); pages.repaint();
+        store.setVisible(readingConversation()); pages.revalidate(); pages.repaint();
         refreshList(); refreshConversation();
     }
     private void restoreAddress() {
@@ -1104,7 +1262,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             header.setBounds(x, top, width, headerHeight);
             input.setSize(Math.max(100, width - 164), Short.MAX_VALUE);
             int editorHeight = Math.min(108, Math.max(24, input.getPreferredSize().height));
-            int composeHeight = Math.max(60, editorHeight + 18); int composeY = getHeight() - composeHeight - 30;
+            int composeHeight = Math.max(60, editorHeight + 18) + (quoteDraft.isVisible() ? quoteDraft.getPreferredSize().height : 0);
+            int composeY = getHeight() - composeHeight - 30;
             composer.setBounds(x, composeY, width, composeHeight);
             timeline.setBounds(x, top + headerHeight + 6, width, Math.max(50, composeY - top - headerHeight - 14));
             hint.setBounds(x + 8, getHeight() - 27, Math.max(150, width - 100), 18);

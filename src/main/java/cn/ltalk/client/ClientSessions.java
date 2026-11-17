@@ -57,6 +57,8 @@ public final class ClientSessions implements AutoCloseable {
     public String sendGroup(String text) throws IOException { return current.client.sendGroup(text); }
     public String sendGroup(String scope, String text) throws IOException { return current.client.sendGroup(scope, text); }
     public String sendPrivate(String target, String text) throws IOException { return current.client.sendPrivate(target, text); }
+    String sendGroup(String scope, String text, String replyTo) throws IOException { return current.client.sendGroup(scope, text, replyTo); }
+    String sendPrivate(String target, String text, String replyTo) throws IOException { return current.client.sendPrivate(target, text, replyTo); }
     public void exportHistory(Path directory, String format, String scope) throws IOException { current.client.exportHistory(directory, format, scope); }
     public void exportTo(Path path, String format, String scope, boolean replace) throws IOException { current.client.exportTo(path, format, scope, replace); }
     public void updateProfile(String nickname, String avatar) throws IOException { current.client.updateProfile(nickname, avatar); }
