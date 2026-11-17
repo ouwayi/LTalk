@@ -437,8 +437,11 @@ class ChatWindowTest {
                     EmojiPicker picker = window.emojiPicker();
                     Dimension pickerSize = picker.getPreferredSize();
                     renderContainer(picker, pickerSize.width, pickerSize.height, "ui-emoji-picker.png");
-                    ((JButton) find(picker, "emoji-😀")).doClick();
-                    assertEquals("窄屏😀消息", narrowEditor.getText());
+                    JButton smile = (JButton) find(picker, "emoji-😀");
+                    smile.doClick();
+                    narrowEditor.setCaretPosition(narrowEditor.getDocument().getLength());
+                    smile.doClick();
+                    assertEquals("窄屏😀消息😀", narrowEditor.getText());
                     render(window, 420, 760, "ui-emoji-composer.png");
                     try {
                         Rectangle textRow = narrowEditor.modelToView2D(0).getBounds();
@@ -459,7 +462,13 @@ class ChatWindowTest {
                     area(window, "input").setText("\n "); button(window, "send").doClick();
                     assertEquals("\n ", area(window, "input").getText()); assertTrue(label(window, "status").getText().contains("空白"));
                 });
-                assertEquals("窄屏😀消息", carol.await(m -> "窄屏😀消息".equals(m.content())).content());
+                assertEquals("窄屏😀消息😀", carol.await(m -> "窄屏😀消息😀".equals(m.content())).content());
+                carol.group("😀");
+                awaitEdt(() -> summary(window, ConversationId.PUBLIC).preview().equals("carol：😀"));
+                onEdt(() -> {
+                    area(window, "input").setText("正文😀");
+                    render(window, 1200, 780, "ui-emoji-tail.png");
+                });
                 carol.assertNo(m -> m.type() == MessageType.PRIVATE_MESSAGE
                         && ("bob".equals(m.from()) || "bob".equals(m.to())), 100);
             }

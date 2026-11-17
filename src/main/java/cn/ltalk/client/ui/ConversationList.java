@@ -64,7 +64,7 @@ public final class ConversationList extends JList<ConversationStore.Summary> {
             String time = value.time() == null ? "" : DateTimeFormatter.ofPattern("HH:mm").format(value.time().atZone(ZoneId.systemDefault()));
             g.drawString(time, w - 14 - g.getFontMetrics().stringWidth(time), 28);
             g.setFont(ChatTheme.FONT.deriveFont(Font.BOLD, 14f)); g.setColor(selected ? Color.WHITE : palette.text());
-            g.drawString(ellipsis(g.getFontMetrics(), value.title(), w - 132), 74, 32);
+            EmojiLine.draw(this, g, value.title(), 74, 32, w - 132);
             int badgeWidth = 0;
             if (value.unread() > 0) {
                 String unread = value.unread() > 99 ? "99+" : Integer.toString(value.unread());
@@ -74,7 +74,7 @@ public final class ConversationList extends JList<ConversationStore.Summary> {
             }
             g.setFont(ChatTheme.FONT.deriveFont(12f)); g.setColor(secondary);
             String preview = value.preview().isBlank() ? value.online() ? "在线 · 点击开始私聊" : "离线 · 暂无消息" : value.preview();
-            g.drawString(ellipsis(g.getFontMetrics(), preview, w - 90 - badgeWidth - (badgeWidth > 0 ? 6 : 0)), 74, 57);
+            EmojiLine.draw(this, g, preview, 74, 57, w - 90 - badgeWidth - (badgeWidth > 0 ? 6 : 0));
             g.dispose();
         }
     }

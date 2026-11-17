@@ -14,6 +14,27 @@ import java.awt.image.BufferedImage;
 import static org.junit.jupiter.api.Assertions.*;
 
 class EmojiTextTest {
+    @Test void firstPaintUsesColorAtTheEndOfTheDocumentAndAfterEditing() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            var composer = new ComposerInput();
+            var palette = ThemePalette.of(AppearanceSettings.defaults());
+            for (String value : new String[]{"😀", "正文😀", "正文☺️", "上一行\n😀"}) {
+                composer.setText(value);
+                assertTrue(goldPixels(paint(composer), 0, 0, 240, 70) > 70, "Draft: " + value);
+                assertTrue(goldPixels(paint(new MessageText(value, palette)), 0, 0, 240, 70) > 70, "Message: " + value);
+                assertEquals(value, composer.getText());
+            }
+            composer.setText("正文");
+            composer.setCaretPosition(composer.getDocument().getLength());
+            composer.replaceSelection("😀");
+            assertTrue(goldPixels(paint(composer), 0, 0, 240, 70) > 70, "Just appended an emoji");
+            composer.replaceSelection("文");
+            key(composer, DefaultEditorKit.deletePrevCharAction);
+            assertEquals("正文😀", composer.getText());
+            assertTrue(goldPixels(paint(composer), 0, 0, 240, 70) > 70, "Deleted the trailing text");
+        });
+    }
+
     @Test void composerAndBubblePaintColorIconsWhileClipboardKeepsUnicode() throws Exception {
         SwingUtilities.invokeAndWait(() -> {
             String text = "中😀😀❤️文\n第二行";
@@ -61,18 +82,26 @@ class EmojiTextTest {
     }
 
     private static void assertColorIcons(EmojiText view) {
+        assertTrue(goldPixels(paint(view), 0, 0, 100, 30) > 180, "Two adjacent smiles should both paint in color");
+    }
+
+    private static BufferedImage paint(EmojiText view) {
         view.setSize(240, 70);
         var image = new BufferedImage(240, 70, BufferedImage.TYPE_INT_ARGB);
         var graphics = image.createGraphics();
         try { view.paint(graphics); }
         finally { graphics.dispose(); }
+        return image;
+    }
+
+    static int goldPixels(BufferedImage image, int left, int top, int right, int bottom) {
         int gold = 0;
-        for (int y = 0; y < 30; y++) for (int x = 0; x < 100; x++) {
+        for (int y = top; y < bottom; y++) for (int x = left; x < right; x++) {
             var pixel = new Color(image.getRGB(x, y), true);
             if (pixel.getAlpha() > 200 && pixel.getRed() > 220 && pixel.getGreen() > 150 && pixel.getBlue() < 115)
                 gold++;
         }
-        assertTrue(gold > 180, "Two adjacent smiles should both paint in color");
+        return gold;
     }
 
     private static Object clipboardText(Clipboard clipboard) {

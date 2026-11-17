@@ -1,6 +1,7 @@
 package cn.ltalk.client.ui;
 
 import javax.swing.*;
+import javax.swing.event.DocumentEvent;
 import javax.swing.text.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
@@ -36,7 +37,7 @@ class EmojiText extends JTextPane {
 
     private static View viewFor(Element element) {
         return switch (element.getName()) {
-            case AbstractDocument.ParagraphElementName -> new ParagraphView(element);
+            case AbstractDocument.ParagraphElementName -> new EmojiParagraph(element);
             case AbstractDocument.SectionElementName -> new BoxView(element, View.Y_AXIS);
             case StyleConstants.IconElementName -> new IconView(element) {
                 @Override public float getAlignment(int axis) { return axis == Y_AXIS ? .82f : super.getAlignment(axis); }
@@ -45,6 +46,28 @@ class EmojiText extends JTextPane {
                 @Override public float getMinimumSpan(int axis) { return axis == X_AXIS ? 0 : super.getMinimumSpan(axis); }
             };
         };
+    }
+
+    private static final class EmojiParagraph extends ParagraphView {
+        EmojiParagraph(Element element) { super(element); }
+
+        @Override public void changedUpdate(DocumentEvent event, Shape allocation, ViewFactory factory) {
+            super.changedUpdate(event, allocation, factory);
+            // Styling an entire leaf can leave its element intact. Its old LabelView or IconView then
+            // survives the style change unless the logical view is replaced before the next layout.
+            Element paragraph = getElement();
+            int first = paragraph.getElementIndex(event.getOffset());
+            int last = paragraph.getElementIndex(event.getOffset() + event.getLength() - 1);
+            for (int index = first; index <= last; index++) {
+                View old = layoutPool.getView(index);
+                Element leaf = old.getElement();
+                boolean hasIcon = StyleConstants.getIcon(leaf.getAttributes()) != null;
+                if (hasIcon == (old instanceof IconView)) continue;
+                layoutPool.replace(index, 1, new View[]{factory.create(leaf)});
+                layoutChanged(X_AXIS);
+                layoutChanged(Y_AXIS);
+            }
+        }
     }
 
     @Override public String getText() {
