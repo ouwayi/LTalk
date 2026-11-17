@@ -1,0 +1,24 @@
+[Unit]
+Description=LTalk chat server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ltalk
+Group=ltalk
+StateDirectory=ltalk
+StateDirectoryMode=0700
+UMask=0077
+LoadCredential=keystore.p12:/etc/ltalk/server.p12
+LoadCredential=keystore.password:/etc/ltalk/server.password
+ExecStart=/usr/bin/java -Xms128m -Xmx512m -Dltalk.dataDir=/var/lib/ltalk -Dltalk.tls.enabled=true -Dltalk.tls.keyStore=${CREDENTIALS_DIRECTORY}/keystore.p12 -Dltalk.tls.passwordFile=${CREDENTIALS_DIRECTORY}/keystore.password -jar /opt/ltalk/ltalk-1.0.0.jar 9000 0.0.0.0 140
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

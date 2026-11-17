@@ -12,15 +12,16 @@ public final class ConnectionPanel extends ChatTheme.RoundedPanel {
     public final JButton disconnect = ChatTheme.pill("断开连接");
     public final JButton discover = ChatTheme.pill("查找局域网服务器");
     public final JButton recent = ChatTheme.pill("最近服务器");
+    public final JCheckBox tls = new JCheckBox("使用 TLS 加密连接");
     public final JLabel status = ChatTheme.label("尚未连接服务器", 12, ChatTheme.MUTED, false);
     public final JComboBox<ServerChoice> choices = new JComboBox<>();
     private final JPanel choiceRow = new JPanel(new BorderLayout(0, 5));
     private final JLabel choiceLabel = ChatTheme.label("", 12, ChatTheme.MUTED, false);
 
-    public record ServerChoice(String name, String host, int port) {
+    public record ServerChoice(String name, String host, int port, boolean tls) {
         @Override public String toString() {
             String endpoint = (host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host) + ":" + port;
-            return name.isEmpty() ? endpoint : name + " · " + endpoint;
+            return (name.isEmpty() ? endpoint : name + " · " + endpoint) + (tls ? " · TLS" : "");
         }
     }
 
@@ -30,14 +31,18 @@ public final class ConnectionPanel extends ChatTheme.RoundedPanel {
         this.port = ChatTheme.field(port == null ? "9000" : port, "port");
         connect.setName("connectServer"); disconnect.setName("disconnect"); status.setName("serverStatus");
         discover.setName("discoverServers"); recent.setName("recentServers"); choices.setName("serverChoices");
+        tls.setName("useTls"); tls.setOpaque(false);
+        tls.setSelected(Boolean.getBoolean("ltalk.client.tls"));
+        ChatTheme.foreground(tls, ThemePalette.Role.TEXT);
         setBorder(new EmptyBorder(24, 24, 24, 24));
         GridBagConstraints c = new GridBagConstraints(); c.gridx = 0; c.weightx = 1; c.fill = GridBagConstraints.HORIZONTAL;
         addRow(ChatTheme.label("连接设置", 21, ChatTheme.INK, true), c);
         addRow(ChatTheme.label("服务端 IP 或主机名", 12, ChatTheme.MUTED, false), c); addRow(this.host, c);
         addRow(ChatTheme.label("端口", 12, ChatTheme.MUTED, false), c); addRow(this.port, c);
+        addRow(tls, c);
         addRow(connect, c); addRow(disconnect, c); addRow(discover, c); addRow(recent, c);
         ChatTheme.surface(choices); ChatTheme.foreground(choices, ThemePalette.Role.TEXT);
-        choices.setPrototypeDisplayValue(new ServerChoice("局域网服务器", "192.168.0.1", 9000));
+        choices.setPrototypeDisplayValue(new ServerChoice("局域网服务器", "192.168.0.1", 9000, false));
         choices.setRenderer(new DefaultListCellRenderer() {
             @Override public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean selected, boolean focus) {
                 putClientProperty("html.disable", Boolean.TRUE);
@@ -56,6 +61,7 @@ public final class ConnectionPanel extends ChatTheme.RoundedPanel {
     private void addRow(Component component, GridBagConstraints c) { c.gridy++; c.insets = new Insets(7, 0, 7, 0); add(component, c); }
     public void state(boolean disconnected, boolean connecting) {
         host.setEnabled(disconnected); port.setEnabled(disconnected);
+        tls.setEnabled(disconnected);
         connect.setEnabled(disconnected); disconnect.setEnabled(!disconnected);
         discover.setEnabled(disconnected); recent.setEnabled(disconnected);
         choices.setEnabled(disconnected);

@@ -5,6 +5,7 @@ import cn.ltalk.common.*;
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import javax.net.ssl.SSLContext;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -36,6 +37,7 @@ public final class ChatClient implements AutoCloseable {
     private final int connectTimeoutMillis;
     private final int loginTimeoutMillis;
     private final HeartbeatSettings heartbeatSettings;
+    private final SSLContext clientTls;
     private volatile State state = State.DISCONNECTED;
     private Connection active;
     private boolean disposed;
@@ -48,12 +50,18 @@ public final class ChatClient implements AutoCloseable {
 
     public ChatClient(ClientEventListener listener, Executor callbacks, int connectTimeoutMillis, int loginTimeoutMillis,
                       HeartbeatSettings heartbeatSettings) {
+        this(listener, callbacks, connectTimeoutMillis, loginTimeoutMillis, heartbeatSettings, null);
+    }
+
+    public ChatClient(ClientEventListener listener, Executor callbacks, int connectTimeoutMillis, int loginTimeoutMillis,
+                      HeartbeatSettings heartbeatSettings, SSLContext clientTls) {
         if (connectTimeoutMillis < 1 || loginTimeoutMillis < 1) throw new IllegalArgumentException("超时必须为正数");
         this.listener = listener;
         this.callbacks = callbacks;
         this.connectTimeoutMillis = connectTimeoutMillis;
         this.loginTimeoutMillis = loginTimeoutMillis;
         this.heartbeatSettings = java.util.Objects.requireNonNull(heartbeatSettings);
+        this.clientTls = clientTls;
     }
 
     public State state() { return state; }
@@ -63,12 +71,15 @@ public final class ChatClient implements AutoCloseable {
     }
 
     public void connect(String host, int port, String userId, String password) throws IOException {
-        startConnection(host, port, Validation.userId(userId), password);
+        startConnection(host, port, Validation.userId(userId), password, false);
     }
     public void connectServer(String host, int port) throws IOException {
-        startConnection(host, port, null, null);
+        connectServer(host, port, false);
     }
-    private void startConnection(String host, int port, String userId, String password) throws IOException {
+    public void connectServer(String host, int port, boolean tls) throws IOException {
+        startConnection(host, port, null, null, tls);
+    }
+    private void startConnection(String host, int port, String userId, String password, boolean tls) throws IOException {
         if (host == null || host.isBlank()) throw new IllegalArgumentException("请输入服务端 IP 或主机名");
         if (port < 1 || port > 65535) throw new IllegalArgumentException("端口必须为 1～65535");
         synchronized (lifecycle) {
@@ -84,22 +95,30 @@ public final class ChatClient implements AutoCloseable {
             emit(connection, () -> listener.onStateChanged(State.CONNECTING, "正在连接服务器…"));
             connection.deadline = deadlines.schedule(() -> terminate(connection, "连接或登录超时，请检查地址后重新连接"),
                     (long) connectTimeoutMillis + loginTimeoutMillis, TimeUnit.MILLISECONDS);
-            connection.sender.execute(() -> establish(connection, host.strip(), port, password));
+            connection.sender.execute(() -> establish(connection, host.strip(), port, password, tls));
         }
     }
 
-    private void establish(Connection connection, String host, int port, String password) {
+    private void establish(Connection connection, String host, int port, String password, boolean tls) {
         try {
             connection.socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis);
             connection.socket.setTcpNoDelay(true);
             connection.socket.setSoTimeout(loginTimeoutMillis);
+            if (tls) {
+                var secured = TlsTransport.layer(connection.raw, clientTls == null ? TlsTransport.clientContext() : clientTls, host, true);
+                secured.setSoTimeout(loginTimeoutMillis);
+                secured.startHandshake();
+                connection.socket = secured;
+            }
             String id = connection.nextId();
             connection.authRequest = id;
             MessageCodec.write(connection.socket.getOutputStream(), Message.of(connection.gateway ? MessageType.HELLO : MessageType.LOGIN)
                     .requestId(id).userId(connection.userId).password(password).build());
             Thread reader = daemonFactory("ltalk-client-reader-").newThread(() -> receive(connection));
             reader.start();
-        } catch (IOException | RuntimeException ex) { terminate(connection, "连接失败：" + ex.getMessage()); }
+        } catch (IOException | RuntimeException ex) {
+            terminate(connection, (tls ? "TLS 连接失败，请核对证书、主机名和端口：" : "连接失败：") + ex.getMessage());
+        }
     }
 
     private void receive(Connection connection) {
@@ -528,7 +547,7 @@ public final class ChatClient implements AutoCloseable {
 
     private void terminate(Connection connection, String reason) {
         if (!connection.closed.compareAndSet(false, true)) return;
-        try { connection.socket.close(); } catch (IOException ignored) { }
+        try { connection.raw.close(); } catch (IOException ignored) { }
         if (connection.deadline != null) connection.deadline.cancel(false);
         connection.heartbeat.close();
         connection.history.close();
@@ -581,7 +600,8 @@ public final class ChatClient implements AutoCloseable {
         volatile ScheduledFuture<?> profileDeadline;
         PasswordChange passwordChange; // Guarded by lifecycle.
         final Map<String, ChatSend> chatSends = new LinkedHashMap<>();
-        final Socket socket = new Socket();
+        final Socket raw = new Socket();
+        volatile Socket socket = raw;
         final AtomicBoolean closed = new AtomicBoolean();
         final AtomicLong sequence = new AtomicLong();
         final ExecutorService sender = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,

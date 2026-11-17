@@ -166,6 +166,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         connection.connect.addActionListener(e -> connectServer()); connection.disconnect.addActionListener(e -> client.disconnect());
         connection.host.getDocument().addDocumentListener(changed(serverSelection::editedAddress));
         connection.port.getDocument().addDocumentListener(changed(serverSelection::editedAddress));
+        connection.tls.addItemListener(e -> serverSelection.editedAddress());
         reconnect.addActionListener(e -> reconnect());
         authentication.submit.addActionListener(e -> authenticate());
         authentication.password.addActionListener(e -> { if (authentication.submit.isEnabled()) authenticate(); });
@@ -252,7 +253,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
 
     private void connectServer() {
         serverSelection.cancel();
-        try { client.connectServer(connection.host.getText(), Integer.parseInt(connection.port.getText().strip())); }
+        try { client.connectServer(connection.host.getText(), Integer.parseInt(connection.port.getText().strip()), connection.tls.isSelected()); }
         catch (IOException | IllegalArgumentException | IllegalStateException ex) {
             String detail = ex instanceof NumberFormatException ? "端口必须是 1～65535 的整数" : ex.getMessage();
             showError(detail); connection.feedback(detail);
@@ -273,7 +274,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         try {
             connection.host.setText(signedInAddress.host());
             connection.port.setText(Integer.toString(signedInAddress.port()));
-            client.connectServer(signedInAddress.host(), signedInAddress.port());
+            connection.tls.setSelected(signedInAddress.tls());
+            client.connectServer(signedInAddress.host(), signedInAddress.port(), signedInAddress.tls());
         } catch (IOException | IllegalArgumentException | IllegalStateException ex) {
             authentication.feedback(ex.getMessage(), true);
         }
@@ -534,7 +536,11 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
     private void restoreAddress() {
         ClientSessions.Address address = client.address();
-        if (address != null) { connection.host.setText(address.host()); connection.port.setText(Integer.toString(address.port())); }
+        if (address != null) {
+            connection.host.setText(address.host());
+            connection.port.setText(Integer.toString(address.port()));
+            connection.tls.setSelected(address.tls());
+        }
     }
     private void toggleConnection() { showWelcome(); }
     @Override public void onRegistered(String userId) {

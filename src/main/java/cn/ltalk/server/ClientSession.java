@@ -3,6 +3,7 @@ package cn.ltalk.server;
 import cn.ltalk.common.*;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.Socket;
 import java.util.HashMap;
 import java.util.Map;
@@ -14,15 +15,11 @@ final class ClientSession implements Runnable {
     private static final Logger LOG = Logger.getLogger(ClientSession.class.getName());
     private final ChatServer server;
     private final Socket socket;
-    private final Object writeLock = new Object();
+    private final SessionOutput output = new SessionOutput();
     private final Map<String, Long> sentProfiles = new HashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final ExecutorService heartbeatWriter = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
-            new ArrayBlockingQueue<>(8), task -> {
-                Thread thread = new Thread(task, "ltalk-heartbeat-write");
-                thread.setDaemon(true);
-                return thread;
-            }, new ThreadPoolExecutor.AbortPolicy());
+    private final AtomicBoolean evicted = new AtomicBoolean();
+    boolean unauthenticated = true; // Guarded by ChatServer's admission monitor.
     final Heartbeat heartbeat;
     volatile String userId;
     volatile boolean ready;
@@ -34,31 +31,31 @@ final class ClientSession implements Runnable {
     ClientSession(ChatServer server, Socket socket, HeartbeatSettings settings) {
         this.server = server;
         this.socket = socket;
-        heartbeat = new Heartbeat(settings, this::submitHeartbeat, () -> close("心跳超时"));
+        heartbeat = new Heartbeat(settings, message -> server.deliver(this, message), () -> close("心跳超时"));
     }
 
-    private void submitHeartbeat(Message message) {
-        if (closed.get()) return;
-        try { heartbeatWriter.execute(() -> server.deliver(this, message)); }
-        catch (RejectedExecutionException ex) { close("心跳发送队列已满或关闭"); }
-    }
-
-    void awaitHeartbeatTermination() throws InterruptedException {
+    void awaitTermination() throws InterruptedException {
         heartbeat.awaitTermination(2, TimeUnit.SECONDS);
-        heartbeatWriter.awaitTermination(2, TimeUnit.SECONDS);
+        output.awaitTermination();
     }
-    boolean isClosed() { return closed.get(); }
+    boolean isClosed() { return closed.get() || evicted.get(); }
+    InetAddress remoteAddress() { return socket.getInetAddress(); }
 
-    void send(Message message) throws IOException {
-        synchronized (writeLock) {
-            if (closed.get()) throw new IOException("连接已关闭");
-            boolean display = message.type() == MessageType.DISPLAY_PROFILE;
-            // Login, history and live updates can all offer a profile to this socket concurrently.
-            if (display && message.revision() <= sentProfiles.getOrDefault(message.userId(), -1L)) return;
-            MessageCodec.write(socket.getOutputStream(), message);
-            if (display) sentProfiles.put(message.userId(), message.revision());
+    boolean send(Message message, byte[] frame, CompletableFuture<Void> written) {
+        if (isClosed()) return false;
+        if (message.type() != MessageType.DISPLAY_PROFILE) return output.offer(frame, written);
+        synchronized (sentProfiles) {
+            if (message.revision() <= sentProfiles.getOrDefault(message.userId(), -1L)) {
+                if (written != null) written.complete(null);
+                return true;
+            }
+            if (!output.offer(frame, written)) return false;
+            sentProfiles.put(message.userId(), message.revision());
+            return true;
         }
     }
+
+    boolean evict() { return !closed.get() && evicted.compareAndSet(false, true); }
 
     void loginTimedOut() {
         // Absolute deadline, including clients that keep trickling bytes without finishing LOGIN.
@@ -68,15 +65,18 @@ final class ClientSession implements Runnable {
     @Override public void run() {
         String reason = "客户端关闭连接";
         try {
-            MessageCodec.FrameReader reader = new MessageCodec.FrameReader(socket.getInputStream());
-            while (!closed.get()) {
+            Socket transport = server.transport(socket);
+            output.start(transport.getOutputStream(), ex -> close("写入失败：" + ex.getMessage()));
+            MessageCodec.FrameReader reader = new MessageCodec.FrameReader(transport.getInputStream());
+            while (!isClosed()) {
                 Message request;
                 try {
                     request = reader.read();
                 } catch (ProtocolException ex) {
                     LOG.info(() -> "协议错误 user=" + userId + " code=" + ex.code());
-                    server.deliver(this, Message.error(ex.requestId(), ex.code(), ex.getMessage()));
-                    if (ex.code().equals("FRAME_TOO_LARGE")) { reason = ex.code(); break; }
+                    Message error = Message.error(ex.requestId(), ex.code(), ex.getMessage());
+                    if (ex.code().equals("FRAME_TOO_LARGE")) { server.deliverAndWait(this, error); reason = ex.code(); break; }
+                    server.deliver(this, error);
                     continue;
                 }
                 if (request == null) break;
@@ -95,9 +95,9 @@ final class ClientSession implements Runnable {
         ScheduledFuture<?> deadline = loginDeadline;
         if (deadline != null) deadline.cancel(false);
         // Closing the socket does not wait for a writer, and unblocks pending read/write calls.
+        output.close();
         try { socket.close(); } catch (IOException ignored) { }
         heartbeat.close();
-        heartbeatWriter.shutdownNow();
         closeExport();
         closeHistory();
         server.sessionClosed(this, reason);

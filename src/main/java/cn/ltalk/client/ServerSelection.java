@@ -39,7 +39,7 @@ final class ServerSelection {
         panel.recent.addActionListener(e -> showRecent());
         panel.choices.addActionListener(e -> {
             if (available.getAsBoolean() && panel.choices.getSelectedItem() instanceof ConnectionPanel.ServerChoice choice) {
-                fill(choice.host(), choice.port());
+                fill(choice.host(), choice.port(), choice.tls());
                 panel.feedback("已选服务器，可点击连接");
             }
         });
@@ -47,6 +47,10 @@ final class ServerSelection {
 
     void startDiscovery() {
         if (!available.getAsBoolean() || scan != null) return;
+        if (panel.tls.isSelected()) {
+            panel.feedback("TLS 模式请填写服务器地址，或选择最近服务器");
+            return;
+        }
         revision++;
         panel.clearChoices();
         panel.scanning(true);
@@ -76,7 +80,7 @@ final class ServerSelection {
             panel.feedback("未找到局域网服务器，可手动连接");
         } else if (candidates.size() == 1) {
             ClientSessions.Address address = candidates.get(0).address();
-            fill(address.host(), address.port());
+            fill(address.host(), address.port(), address.tls());
             connect.run();
         } else {
             panel.showChoices("发现的局域网服务器", candidates.stream()
@@ -127,12 +131,13 @@ final class ServerSelection {
         });
     }
 
-    private void fill(String host, int port) {
+    private void fill(String host, int port, boolean tls) {
         panel.host.setText(host);
         panel.port.setText(Integer.toString(port));
+        panel.tls.setSelected(tls);
     }
 
     private static ConnectionPanel.ServerChoice choice(String name, ClientSessions.Address address) {
-        return new ConnectionPanel.ServerChoice(name, address.host(), address.port());
+        return new ConnectionPanel.ServerChoice(name, address.host(), address.port(), address.tls());
     }
 }

@@ -76,10 +76,12 @@ public final class MessageCodec {
     }
 
     public static void write(OutputStream output, Message message) throws IOException {
-        byte[] bytes = encode(message).getBytes(StandardCharsets.UTF_8);
-        output.write(bytes);
-        output.write('\n');
+        output.write(frame(message));
         output.flush();
+    }
+
+    public static byte[] frame(Message message) throws ProtocolException {
+        return (encode(message) + "\n").getBytes(StandardCharsets.UTF_8);
     }
 
     public static final class FrameReader {

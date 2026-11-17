@@ -33,22 +33,25 @@ public final class AccountStore {
             }
         }
     }
-    public synchronized String register(String id, String nickname, String password, boolean generated) throws IOException {
+    public String register(String id, String nickname, String password, boolean generated) throws IOException {
         if (nickname == null || nickname.isBlank()) throw new ProtocolException("MISSING_FIELD", "请填写昵称");
         if (nickname.strip().length() > 40) throw new ProtocolException("INVALID_NICKNAME", "昵称最多 40 字符");
         validatePassword(password);
-        if (generated) {
-            do { id = "u_" + HexFormat.of().formatHex(random.generateSeed(8)); } while (accounts.containsKey(id));
-        } else {
+        if (!generated) {
             if (id == null || id.isBlank()) throw new ProtocolException("MISSING_FIELD", "请填写用户名");
             id = Validation.userId(id);
+            if (lookup(id) != null) throw new ProtocolException("USER_EXISTS", "用户名已注册");
         }
-        if (accounts.containsKey(id)) throw new ProtocolException("USER_EXISTS", "用户名已注册");
         byte[] salt = new byte[16]; random.nextBytes(salt);
-        Account a = new Account(id, nickname.strip(), Base64.getEncoder().encodeToString(salt),
-                Base64.getEncoder().encodeToString(hash(password, salt)), "", java.time.Instant.now().toString(), 0);
-        save(a);
-        return id;
+        var base64 = Base64.getEncoder();
+        String digest = base64.encodeToString(hash(password, salt));
+        synchronized (this) {
+            if (generated) {
+                do { id = "u_" + HexFormat.of().formatHex(random.generateSeed(8)); } while (accounts.containsKey(id));
+            } else if (accounts.containsKey(id)) throw new ProtocolException("USER_EXISTS", "用户名已注册");
+            save(new Account(id, nickname.strip(), base64.encodeToString(salt), digest, "", java.time.Instant.now().toString(), 0));
+            return id;
+        }
     }
     private void save(Account a) throws IOException {
         Path temporary = Files.createTempFile(directory, ".account-", ".tmp");
@@ -71,10 +74,10 @@ public final class AccountStore {
         Account account = accounts.get(id);
         return account == null ? null : new DisplayProfile(account.nickname(), Objects.toString(account.avatar(), ""), account.profileRevision());
     }
-    synchronized void changePassword(String id, String current, String next) throws IOException {
+    void changePassword(String id, String current, String next) throws IOException {
         validatePassword(current);
         validatePassword(next);
-        Account account = accounts.get(id);
+        Account account = lookup(id);
         if (account == null) throw new ProtocolException("NOT_AUTHENTICATED", "账号不存在");
         byte[] previousSalt = Base64.getDecoder().decode(account.salt());
         if (!MessageDigest.isEqual(hash(current, previousSalt), Base64.getDecoder().decode(account.hash()))) {
@@ -83,8 +86,13 @@ public final class AccountStore {
         byte[] salt = new byte[16];
         random.nextBytes(salt);
         var base64 = Base64.getEncoder();
-        save(new Account(id, account.nickname(), base64.encodeToString(salt), base64.encodeToString(hash(next, salt)),
-                account.avatar(), account.createdAt(), account.profileRevision()));
+        String digest = base64.encodeToString(hash(next, salt));
+        synchronized (this) {
+            Account latest = accounts.get(id);
+            if (!sameCredentials(account, latest)) throw new ProtocolException("WRONG_PASSWORD", "当前密码不正确");
+            save(new Account(id, latest.nickname(), base64.encodeToString(salt), digest,
+                    latest.avatar(), latest.createdAt(), latest.profileRevision()));
+        }
     }
     public synchronized UserProfile updateProfile(String id, String nickname, String avatar) throws IOException {
         if (nickname == null || nickname.isBlank()) throw new ProtocolException("MISSING_FIELD", "请填写昵称");
@@ -96,17 +104,21 @@ public final class AccountStore {
         save(new Account(id, nickname.strip(), a.salt(), a.hash(), avatar, a.createdAt(), a.profileRevision() + 1));
         return profile(id);
     }
-    public synchronized String authenticate(String id, String password) throws IOException {
+    public String authenticate(String id, String password) throws IOException {
         if (id == null || id.isBlank() || password == null || password.isEmpty())
             throw new ProtocolException("MISSING_FIELD", "请填写用户名和密码");
         id = Validation.userId(id);
         validatePassword(password);
-        Account a = accounts.get(id);
+        Account a = lookup(id);
         byte[] salt = a == null ? new byte[16] : Base64.getDecoder().decode(a.salt());
         byte[] actual = hash(password, salt);
-        if (a == null || !MessageDigest.isEqual(actual, Base64.getDecoder().decode(a.hash())))
+        if (a == null || !MessageDigest.isEqual(actual, Base64.getDecoder().decode(a.hash())) || !sameCredentials(a, lookup(id)))
             throw new ProtocolException("LOGIN_FAILED", "用户名或密码错误");
         return id;
+    }
+    private synchronized Account lookup(String id) { return accounts.get(id); }
+    private static boolean sameCredentials(Account first, Account second) {
+        return second != null && first.salt().equals(second.salt()) && first.hash().equals(second.hash());
     }
     static String fileKey(String user) { return HexFormat.of().formatHex(user.getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
     public static void validatePassword(String password) throws ProtocolException {

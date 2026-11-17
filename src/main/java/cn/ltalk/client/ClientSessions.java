@@ -13,7 +13,9 @@ public final class ClientSessions implements AutoCloseable {
         default void onSwitchRegistered(String userId) { }
         default void onSessionReplaced() { }
     }
-    public record Address(String host, int port) { }
+    public record Address(String host, int port, boolean tls) {
+        public Address(String host, int port) { this(host, port, false); }
+    }
     private final Listener listener;
     private Slot current, pending;
     private boolean closed;
@@ -25,13 +27,16 @@ public final class ClientSessions implements AutoCloseable {
     private Slot authentication() { return pending == null ? current : pending; }
     public ChatClient.State authenticationState() { return authentication().client.state(); }
     public void connectServer(String host, int port) throws IOException {
-        Slot slot = authentication(); slot.client.connectServer(host, port); slot.address = new Address(host.strip(), port);
+        connectServer(host, port, false);
+    }
+    public void connectServer(String host, int port, boolean tls) throws IOException {
+        Slot slot = authentication(); slot.client.connectServer(host, port, tls); slot.address = new Address(host.strip(), port, tls);
     }
     public void beginSwitch() throws IOException {
         if (closed || state() != ChatClient.State.CONNECTED) throw new IOException("请先登录当前账号");
         if (pending != null) throw new IOException("已有账号切换正在进行");
         pending = new Slot();
-        try { connectServer(current.address.host(), current.address.port()); }
+        try { connectServer(current.address.host(), current.address.port(), current.address.tls()); }
         catch (IOException | RuntimeException ex) { cancelSwitch(); throw ex; }
     }
     public void cancelSwitch() {

@@ -25,7 +25,8 @@ final class RecentServers {
                 int port;
                 try { port = Integer.parseInt(properties.getProperty("port." + i, "")); }
                 catch (NumberFormatException ex) { continue; }
-                if (validHost(host) && LanDiscovery.validPort(port)) addresses.add(new ClientSessions.Address(host, port));
+                if (validHost(host) && LanDiscovery.validPort(port)) addresses.add(new ClientSessions.Address(host, port,
+                        Boolean.parseBoolean(properties.getProperty("tls." + i, "false"))));
             }
             return List.copyOf(addresses);
         } catch (IOException | IllegalArgumentException ex) {
@@ -51,6 +52,7 @@ final class RecentServers {
             for (int i = 0; i < updated.size(); i++) {
                 properties.setProperty("host." + i, updated.get(i).host());
                 properties.setProperty("port." + i, Integer.toString(updated.get(i).port()));
+                properties.setProperty("tls." + i, Boolean.toString(updated.get(i).tls()));
             }
             Path temporary = Files.createTempFile(file.getParent(), "recent-servers-", ".tmp");
             try {

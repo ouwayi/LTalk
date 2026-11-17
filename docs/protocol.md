@@ -6,7 +6,7 @@ TCP 长连接，**UTF-8 编码，每行一个 JSON 对象，以 LF (`0x0A`) 结�
 
 普通帧上限为 **16 KiB**（不含 LF）。`LOGIN_OK`、`PROFILE_UPDATE`、`PROFILE_OK`、`DISPLAY_PROFILE` 可使用 **176 KiB** 上限。超过 16 KiB 时必须把字面 `"type"` 作为 JSON 首字段，类型名不得使用转义，编码器按此顺序输出。读取时先检查类型前缀，再校验解码后的类型与长度。非法 UTF-8、非法 JSON、未知类型或字段类型错误返回 `BAD_MESSAGE`，可继续下一帧。超长帧返回 `FRAME_TOO_LARGE` 后关闭连接。末尾无 LF 的残帧遇到 EOF 直接关闭。未定义额外字段被忽略。
 
-新客户端先发 HELLO，收到 HELLO_OK 后进入仅服务器已连接状态；双方启动心跳，允许等待用户填写登录/注册信息，仍不具有任何业务权限。服务端接受后 10 秒绝对期限要求完成 HELLO 或直接 LOGIN；HELLO 成功取消该期限，由双向心跳检测静默失联。未认证连接仍占总名额（默认 20），不进入在线列表。重复 HELLO 拒绝。
+新客户端先发 HELLO，收到 HELLO_OK 后进入仅服务器已连接状态。双方启动心跳并等待登录或注册。服务端接受连接后 10 秒内须完成初始握手。TLS 模式的初始期限包含 TLS 握手，HELLO 成功后另有默认 60 秒完成认证。未认证连接仍占总名额，TLS 模式还设有独立上限。重复 HELLO 被拒绝。
 
 HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICATED。错密码/注册失败保留这条连接以便重试。保留旧直接 REGISTER/LOGIN 入口及其 10 秒期限，未 HELLO 的直接 LOGIN 失败仍关闭连接。重复 LOGIN 不切换当前身份。客户端连接超时默认 3 秒、握手总期限 8 秒，单次注册/登录响应期限 5 秒；超过期限关闭连接，防止迟到认证结果建立意外身份。
 
@@ -22,7 +22,7 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 | LOGIN_OK | S → 当前 C | requestId, userId, nickname, avatar, createdAt（旧账号可缺省） | 客户端切为 CONNECTED |
 | GROUP_SEND | C → S | requestId, content | 当前全部就绪会话收到 GROUP_MESSAGE，包括发送者 |
 | GROUP_MESSAGE | S → 在线 C | requestId, messageId, conversationId, from, content, serverTime, nickname（可选） | 群聊展示，以服务端事件为唯一正式回显 |
-| PRIVATE_SEND | C → S | requestId, to, content | 校验目标在线并归档后，先写目标，成功后回显发送者；出错向发送者返回相关 ERROR |
+| PRIVATE_SEND | C → S | requestId, to, content | 校验目标在线并归档后，先加入目标发送队列，入队成功后回显发送者 |
 | PRIVATE_MESSAGE | S → 私聊双方 | requestId, messageId, conversationId, from, to, content, serverTime, nickname（可选） | 仅双方收包，不通过广播 |
 | USER_LIST | S → 在线 C | users: string[], revision: 非负 long | 全量列表，按较新版本覆盖 |
 | SYSTEM | S → 在线 C | content, serverTime | 上下线提示，不作为列表数据来源 |
@@ -38,6 +38,12 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 桌面客户端用唯一请求编号关联待确认的发送。收到来自当前账号、会话和正文均匹配的实时回显后，将本地气泡替换为服务端事件。等待期限默认从入队起 5 秒，尚未开始写入的消息在超时或断开时取消发送。已开始写入后未收到回显、出现 `STORAGE_ERROR` 或 `DELIVERY_UNCONFIRMED` 时保留待确认状态。迟到的匹配回显仍可确认该消息。历史记录无发送请求编号，客户端仅按服务端消息 ID 合并正式记录。请求编号没有去重保证。
 
 `revision` 在单个服务端进程内递增。就绪成员变化、版本增加、快照生成在同一注册表短锁内完成，所有网络发送都在该锁外。并发快照发送可能乱序，因此客户端忽略小于或等于已见版本的快照；重新连接将版本重置为 -1。列表按名称排序，包含自己。
+
+## TLS 与公网准入
+
+TLS 模式对监听端口统一启用 TLS 1.2/1.3，服务端从 PKCS12 加载私钥与证书链。客户端在发送 HELLO 或凭据前验证证书信任链与输入的主机名。握手失败即关闭连接，不尝试明文回退。TLS 完成后仍使用原有 v6 LF 分帧和请求类型。TLS 模式关闭 UDP 发现。
+
+服务端在接受连接时限制总连接、未认证数量及同 IP 接入次数，达到上限的连接直接关闭。登录、注册和改密受每分钟频率限制与密码散列并发限制。属性和启动示例见 [部署手册](deployment.md)。
 
 ## IPv4 局域网发现
 
@@ -79,7 +85,9 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 | CONTENT_TOO_LONG | 正文超过 2000 char | 保留连接 |
 | FRAME_TOO_LARGE | 帧超过其类型允许的上限 | 返回错误并关闭 |
 | USER_OFFLINE | 归档前发现目标不在就绪表中 | 拒绝本次发送，保留发送者连接 |
-| DELIVERY_UNCONFIRMED | 已写归档，但向目标 Socket 写入失败 | 保留发送者连接，提示核对归档 |
+| DELIVERY_UNCONFIRMED | 已写归档，但目标连接在消息进入其发送队列前失效 | 保留发送者连接，提示核对归档 |
+| RATE_LIMITED | 认证请求超过频率限制 | HELLO 模式可稍后重试 |
+| SERVER_BUSY | 密码散列并发达到上限，等候超时 | HELLO 模式可稍后重试 |
 | SELF_PRIVATE_NOT_ALLOWED | 私聊目标为自己 | 保留连接 |
 | WRONG_PASSWORD | 修改密码时当前密码不匹配 | 保留连接，可重新填写 |
 
@@ -110,7 +118,7 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 {"type":"LOGOUT"}
 ```
 
-服务端回显是客户端的正式消息来源。私聊回显在目标连接写入成功后发送，群聊写入按就绪连接逐个进行。断线时投递结果可能不确定。重新登录会分页恢复本人授权归档，未确认发送需要用户自行处理。
+服务端回显是客户端的正式消息来源。群聊分发到当前就绪连接的独立 FIFO，私聊回显表示归档完成并进入对端发送队列。对端掉线或队列超限后，实时投递可能中断。本人授权归档可在重连后按原协议恢复。旧实时事件和同一连接的删除回执按入队顺序发送。
 
 ## 注册、身份与导出扩展（2026-10-29）
 
@@ -133,7 +141,7 @@ record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC �
 
 游标为原认证连接私有的随机标识，开始时固定文件末尾，新消息不进入该快照。导出和历史查询各有一个独立快照，同类新请求替换旧游标，完成或连接结束时关闭。客户端消费一页后再请求下一页。导出为 JSON UTF-8 数组（保留 null recipient），或带七列表头和双引号转义的 CSV。客户端负责本地文件路径，发布失败会清理临时文件。
 
-TCP 尚无 TLS。历史与导出共享当前账号的可见范围和删除状态。
+历史与导出共享当前账号的可见范围和删除状态。
 
 ## 按会话导出（2026-10-30）
 

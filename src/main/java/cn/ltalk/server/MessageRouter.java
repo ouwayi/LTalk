@@ -26,7 +26,7 @@ final class MessageRouter {
                 Validation.requestId(request.requestId());
                 if (session.greeted || session.userId != null) throw new ProtocolException("BAD_MESSAGE", "不能重复建立连接");
                 session.greeted = true;
-                if (session.loginDeadline != null) session.loginDeadline.cancel(false);
+                server.greeted(session);
                 server.deliver(session, Message.of(MessageType.HELLO_OK).requestId(request.requestId()).build());
                 session.heartbeat.start();
                 return;
@@ -39,7 +39,8 @@ final class MessageRouter {
                 Validation.requestId(request.requestId());
                 if (request.usernameMode() != null && !List.of("MANUAL", "RANDOM").contains(request.usernameMode()))
                     throw new ProtocolException("BAD_MESSAGE", "用户名来源须为 MANUAL 或 RANDOM");
-                String id = server.accounts().register(request.userId(), request.nickname(), request.password(), "RANDOM".equals(request.usernameMode()));
+                String id = server.authenticate(session, request, () -> server.accounts().register(
+                        request.userId(), request.nickname(), request.password(), "RANDOM".equals(request.usernameMode())));
                 server.deliver(session, Message.of(MessageType.REGISTER_OK).requestId(request.requestId()).userId(id).build());
                 return;
             }
@@ -79,7 +80,10 @@ final class MessageRouter {
                     if (request.userId() != null && !session.userId.equals(request.userId())) {
                         throw new ProtocolException("FORBIDDEN", "只能修改本人的密码");
                     }
-                    server.accounts().changePassword(session.userId, request.password(), request.newPassword());
+                    server.authenticate(session, request, () -> {
+                        server.accounts().changePassword(session.userId, request.password(), request.newPassword());
+                        return null;
+                    });
                     server.deliver(session, Message.of(MessageType.PASSWORD_CHANGED).requestId(request.requestId()).build());
                 }
                 case GROUP_SEND -> {
@@ -87,7 +91,7 @@ final class MessageRouter {
                     var recipients = registry.readySessions();
                     Message event = server.archive().record(MessageType.GROUP_MESSAGE, session.userId, server.accounts().nickname(session.userId), request,
                             List.of());
-                    for (ClientSession recipient : recipients) server.deliver(recipient, event);
+                    server.broadcast(event, recipients);
                 }
                 case PRIVATE_SEND -> {
                     validateChat(request);
@@ -107,11 +111,14 @@ final class MessageRouter {
                 default -> throw new ProtocolException("BAD_MESSAGE", "此消息类型不能由客户端发送");
             }
         } catch (ProtocolException ex) {
-            LOG.info(() -> "请求失败 user=" + session.userId + " type=" + request.type() + " code=" + ex.code());
+            LOG.fine(() -> "请求失败 type=" + request.type() + " code=" + ex.code());
             String requestId = request.requestId();
             if (requestId != null && (requestId.isBlank() || requestId.length() > 64)) requestId = null;
-            server.deliver(session, Message.error(requestId, ex.code(), ex.getMessage()));
-            if (request.type() == MessageType.LOGIN && session.userId == null && !session.greeted) session.close("登录失败：" + ex.code());
+            Message error = Message.error(requestId, ex.code(), ex.getMessage());
+            if (request.type() == MessageType.LOGIN && session.userId == null && !session.greeted) {
+                server.deliverAndWait(session, error);
+                session.close("登录失败：" + ex.code());
+            } else server.deliver(session, error);
         } catch (IOException ex) {
             if (request.type() == MessageType.EXPORT_REQUEST) session.closeExport();
             if (request.type() == MessageType.HISTORY_REQUEST) session.closeHistory();
@@ -122,18 +129,29 @@ final class MessageRouter {
 
     private void login(ClientSession session, Message request) throws IOException {
         Validation.requestId(request.requestId());
-        String userId = server.accounts().authenticate(request.userId(), request.password());
+        String userId = server.authenticate(session, request,
+                () -> server.accounts().authenticate(request.userId(), request.password()));
         if (!registry.reserve(userId, session))
             throw new ProtocolException("USER_EXISTS", "用户标识已在线，请换一个名称");
         // Reserved sessions are invisible to routing until LOGIN_OK has been flushed.
-        if (!server.deliver(session, profileMessage(MessageType.LOGIN_OK, request.requestId(), server.accounts().profile(userId)))) return;
+        if (!server.deliverAndWait(session, profileMessage(MessageType.LOGIN_OK, request.requestId(), server.accounts().profile(userId)))) {
+            session.close("登录响应发送失败");
+            return;
+        }
         Message list = registry.activate(session);
         if (list == null) return;
+        server.authenticated(session);
         LOG.info(() -> "登录成功 user=" + userId);
         if (session.loginDeadline != null) session.loginDeadline.cancel(false);
         session.heartbeat.start();
         server.broadcast(list);
-        for (ClientSession online : registry.readySessions()) sendDisplayProfile(session, online.userId);
+        for (ClientSession online : registry.readySessions()) {
+            Message profile = displayMessage(online.userId);
+            if (profile != null && !server.deliverAndWait(session, profile)) {
+                session.close("初始资料发送失败");
+                return;
+            }
+        }
         Message display = displayMessage(userId);
         if (display != null) server.broadcast(display);
         server.system(userId + " 上线了");
