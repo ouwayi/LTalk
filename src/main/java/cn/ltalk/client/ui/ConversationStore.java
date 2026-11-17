@@ -6,6 +6,7 @@ import cn.ltalk.common.MessageType;
 import cn.ltalk.common.ChatRecord;
 import cn.ltalk.common.ConversationScope;
 import cn.ltalk.common.SocialItem;
+import cn.ltalk.common.Attachment;
 
 import java.time.Instant;
 import java.util.*;
@@ -15,13 +16,13 @@ public final class ConversationStore {
     public enum EntryKind { MESSAGE, OUTGOING, SYSTEM, ERROR }
     public enum SendStatus { SENDING, CONFIRMED, FAILED, UNCONFIRMED }
     public record Entry(EntryKind kind, String from, String to, String content, Instant time, String messageId,
-                        String nickname, SendStatus sendStatus, String sendDetail, String replyTo) {
+                        String nickname, SendStatus sendStatus, String sendDetail, String replyTo, Attachment attachment) {
         public Entry(EntryKind kind, String from, String to, String content, Instant time) { this(kind, from, to, content, time, null); }
         public Entry(EntryKind kind, String from, String to, String content, Instant time, String messageId) {
             this(kind, from, to, content, time, messageId, null);
         }
         public Entry(EntryKind kind, String from, String to, String content, Instant time, String messageId, String nickname) {
-            this(kind, from, to, content, time, messageId, nickname, null, null, null);
+            this(kind, from, to, content, time, messageId, nickname, null, null, null, null);
         }
         public String displayName() {
             return ContactProfile.displayName(from, nickname);
@@ -269,7 +270,7 @@ public final class ConversationStore {
     }
     public void submitted(ConversationId id, String requestId, String content, String replyTo) {
         String to = id.kind() == ConversationId.Kind.PRIVATE ? id.key() : null;
-        Entry entry = new Entry(EntryKind.OUTGOING, self, to, content, Instant.now(), null, null, SendStatus.SENDING, null, replyTo);
+        Entry entry = new Entry(EntryKind.OUTGOING, self, to, content, Instant.now(), null, null, SendStatus.SENDING, null, replyTo, null);
         outgoing.put(requestId, new Outgoing(id, entry));
         conversations.get(id).entries.add(entry);
     }
@@ -280,7 +281,7 @@ public final class ConversationStore {
         ConversationId id = pending.id;
         List<Entry> entries = conversations.get(id).entries;
         Entry replacement = new Entry(EntryKind.OUTGOING, entry.from(), entry.to(), entry.content(), entry.time(),
-                null, null, uncertain ? SendStatus.UNCONFIRMED : SendStatus.FAILED, detail, entry.replyTo());
+                null, null, uncertain ? SendStatus.UNCONFIRMED : SendStatus.FAILED, detail, entry.replyTo(), null);
         entries.set(entries.indexOf(entry), replacement);
         outgoing.put(requestId, new Outgoing(id, replacement));
         return id;
@@ -298,7 +299,7 @@ public final class ConversationStore {
     public ConversationId restore(ChatRecord record, String nickname) {
         return receive(Message.of(MessageType.valueOf(record.messageType())).messageId(record.messageId()).from(record.sender())
                 .conversationId(record.conversationId()).to(record.recipient()).content(record.content())
-                .serverTime(record.sentAt()).nickname(nickname).replyTo(record.replyTo()).build(), true, true);
+                .serverTime(record.sentAt()).nickname(nickname).replyTo(record.replyTo()).attachment(record.attachment()).build(), true, true);
     }
     public void summarize(ChatRecord record, String nickname) {
         Conversation conversation = "GROUP_MESSAGE".equals(record.messageType()) ? groupConversation(record.conversationId())
@@ -307,7 +308,7 @@ public final class ConversationStore {
     }
     public static Entry archivedEntry(ChatRecord record, String nickname) {
         return new Entry(EntryKind.MESSAGE, record.sender(), record.recipient(), record.content(),
-                parseTime(record.sentAt()), record.messageId(), nickname, null, null, record.replyTo());
+                parseTime(record.sentAt()), record.messageId(), nickname, null, null, record.replyTo(), record.attachment());
     }
     private ConversationId receive(Message message, boolean historical, boolean followingLatest) {
         boolean group = message.type() == MessageType.GROUP_MESSAGE;
@@ -330,7 +331,7 @@ public final class ConversationStore {
         boolean firstLive = !historical && (message.messageId() == null || liveIds.add(message.messageId()));
         Instant time = parseTime(message.serverTime());
         Entry entry = new Entry(EntryKind.MESSAGE, message.from(), message.to(), message.content(), time, message.messageId(), message.nickname(),
-                confirmedSends.contains(message.messageId()) ? SendStatus.CONFIRMED : null, null, message.replyTo());
+                confirmedSends.contains(message.messageId()) ? SendStatus.CONFIRMED : null, null, message.replyTo(), message.attachment());
         if (firstLive && !self.equals(message.from()) && !(visible && selected.equals(conversation.id) && followingLatest))
             conversation.unread.add(entry);
         if (message.messageId() != null && !messageIds.add(message.messageId())) return conversation.id;

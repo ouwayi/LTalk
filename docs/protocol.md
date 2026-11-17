@@ -2,7 +2,7 @@
 
 ## 帧与状态
 
-TCP 长连接，**UTF-8 编码，每行一个 JSON 对象，以 LF (`0x0A`) 结尾**。可接受 CRLF（CR 计入帧字节数，JSON 解析时视为空白）。JSON 字符串中的换行由 Gson 转义。一连接串行写帧并 flush。v6 需要双方使用同一版本，连接过程没有版本协商。
+聊天使用 TCP 长连接，**UTF-8 编码，每行一个 JSON 对象，以 LF (`0x0A`) 结尾**。可接受 CRLF（CR 计入帧字节数，JSON 解析时视为空白）。JSON 字符串中的换行由 Gson 转义。一连接串行写帧并 flush。v6 需要双方使用同一版本，连接过程没有版本协商。独立文件连接在控制帧之间按声明长度传输原始字节。
 
 普通帧上限为 **16 KiB**（不含 LF）。`LOGIN_OK`、`PROFILE_UPDATE`、`PROFILE_OK`、`DISPLAY_PROFILE` 可使用 **176 KiB** 上限。超过 16 KiB 时必须把字面 `"type"` 作为 JSON 首字段，类型名不得使用转义，编码器按此顺序输出。读取时先检查类型前缀，再校验解码后的类型与长度。非法 UTF-8、非法 JSON、未知类型或字段类型错误返回 `BAD_MESSAGE`，可继续下一帧。超长帧返回 `FRAME_TOO_LARGE` 后关闭连接。末尾无 LF 的残帧遇到 EOF 直接关闭。未定义额外字段被忽略。
 
@@ -21,9 +21,9 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 | LOGIN | C → S | requestId, userId, password | 成功 LOGIN_OK；HELLO 模式失败保留连接，直接登录失败关闭 |
 | LOGIN_OK | S → 当前 C | requestId, userId, nickname, avatar, createdAt（旧账号可缺省） | 客户端切为 CONNECTED |
 | GROUP_SEND | C → S | requestId, content, 可选 conversationId、replyTo | 公共聊天室发往全部就绪会话；独立群组校验成员并仅投递给就绪成员。均含发送者回显 |
-| GROUP_MESSAGE | S → 在线 C | requestId, messageId, conversationId, from, content, serverTime, 可选 nickname、replyTo | 群聊展示，以服务端事件为唯一正式回显 |
+| GROUP_MESSAGE | S → 在线 C | messageId, conversationId, from, content, serverTime, 可选 requestId、nickname、replyTo、attachment | 群聊展示，以服务端事件为唯一正式回显 |
 | PRIVATE_SEND | C → S | requestId, to, content, 可选 replyTo | 必须是好友，或已获许可且目标在线。归档后在线目标先入投递队列，离线好友从其归档收取。最后回显发送者 |
-| PRIVATE_MESSAGE | S → 私聊双方的就绪连接 | requestId, messageId, conversationId, from, to, content, serverTime, 可选 nickname、replyTo | 仅双方接收，离线好友通过历史读取 |
+| PRIVATE_MESSAGE | S → 私聊双方的就绪连接 | messageId, conversationId, from, to, content, serverTime, 可选 requestId、nickname、replyTo、attachment | 仅双方接收，离线好友通过历史读取 |
 | USER_LIST | S → 在线 C | users: string[], revision: 非负 long | 全量列表，按较新版本覆盖 |
 | SYSTEM | S → 在线 C | content, serverTime | 上下线提示，不作为列表数据来源 |
 | ERROR | S → 当前 C | code, message, requestId（可选） | 本次请求失败；能识别合法 requestId 时附回 |
@@ -231,6 +231,36 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 仅当前群成员可通过带群组会话 ID 的 `GROUP_SEND` 发消息。成员加入时记录当时最近 100 条的起点，退出或解散时关闭授权区间，再次入群增加新的区间。浏览、搜索定位、导出、删除和摘要共同使用这些区间。从未加入的账号无法获取群消息。独立群组使用服务端 UUID，公共聊天室保留 `GROUP:PUBLIC`。
 
 缺少历史权限或操作身份不符返回 `FORBIDDEN`，无私聊许可返回 `PRIVATE_FORBIDDEN`，重复待处理请求返回 `REQUEST_PENDING`，已有关系或成员返回 `ALREADY_EXISTS`，请求失效返回 `NOT_FOUND`。管理员直接退群返回 `ADMIN_REQUIRED`。客户端与服务端需同步升级，旧消息可沿用原数据目录。
+
+## 图片和文件传输（v6 扩展）
+
+Emoji 使用普通文字的 `content`。图片和附件沿用 `GROUP_MESSAGE`、`PRIVATE_MESSAGE` 和历史记录格式。消息的 `content` 为文件名，`messageId` 也是附件的标识。新增可选对象 `attachment`，含 `kind`（`IMAGE` 或 `FILE`）、`name` 和非负整数 `size`（字节）。图片的实时消息和历史行另含 `thumbnail`，为 Base64 JPEG，边长最多 160 像素，编码前的 JPEG 最多 6000 字节。JSON 导出保留元数据，CSV 沿用七列。
+
+| 类型 | 连接 | 方向和字段 |
+| --- | --- | --- |
+| ATTACH_UPLOAD | 已登录的聊天连接 | C → S。必填 `requestId` 和无缩略图的 `attachment`。群聊用 `conversationId`（省略为公共聊天室），私聊用 `to`。 |
+| ATTACH_DOWNLOAD | 已登录的聊天连接 | C → S。必填 `requestId`、`conversationId` 和 `messageId`。 |
+| ATTACH_TICKET | 聊天连接 | S → C。含匹配的 `requestId` 和在 `cursor` 中的一次性票据。 |
+| ATTACH_CANCEL | 聊天连接 | C → S。带原请求的 `requestId`。取消该请求的票据或关闭正在使用它的传输连接。 |
+| ATTACH_OPEN | 独立传输连接首帧 | C → S。用 `cursor` 提交票据。 |
+| ATTACH_READY | 独立传输连接 | S → C。`attachment` 给出已核验的传输信息。 |
+| ATTACH_COMPLETE | 独立传输连接 | 原始字节之后的完成帧。上传先由客户端发送，服务端已归档及路由后再确认并返回 `messageId`。下载由服务端在末尾发送。 |
+
+客户端连接同一地址和端口。TLS 模式在两条连接上都验证证书与主机名。票据绑定到签发它的认证会话，20 秒内可领取一次。每个登录会话同时持有至多一个票据或传输。传输连接仍占总连接名额，全服务端最多同时传输 8 个，领取后最长 120 秒，单次读取最多等 15 秒。聊天连接保留原有心跳。
+
+收到 `ATTACH_READY` 后，发送端紧接着传输恰好 `size` 个原始字节，随后恢复 LF 分隔的 JSON。上传方提交完成帧后，服务端验证图片并再次检查会话发送权限，保存原文件后按既有聊天规则归档与路由。下载方通过开始下载时本人的可见归档授权访问相应附件。退群、解散和本人删除沿用历史的权限规则。取消、断线或失败时清理未完成的文件。提交上传完成帧后连接断开时，客户端提示核对聊天记录。
+
+图片入口接受 PNG、JPEG、GIF 和 BMP，最大 12 MiB、2400 万像素。普通附件不限类型，最大 50 MiB，可为空文件。服务端以消息 UUID 保存原文件。文件名供展示与建议保存名使用，长度不超过 160 个 Unicode 码点，并清理路径分隔符、控制字符和 Windows 保留名称。
+
+| 错误码 | 条件 |
+| --- | --- |
+| BAD_ATTACHMENT | 元数据无效或缺少上传完成帧 |
+| ATTACHMENT_TOO_LARGE | 超过图片或附件大小限制 |
+| INVALID_IMAGE | 图片扩展名、格式、解码或像素数无效 |
+| ATTACHMENT_BUSY | 当前会话已有传输或全局传输达到上限 |
+| ATTACHMENT_QUOTA | 服务端附件配额不足 |
+| ATTACHMENT_NOT_FOUND | 当前记录不可下载或附件文件缺失 |
+| FORBIDDEN | 票据无效、已使用或过期，或会话历史无权访问 |
 
 ## 引用回复（v6 扩展）
 

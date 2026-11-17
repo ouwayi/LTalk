@@ -424,10 +424,18 @@ class ChatWindowTest {
                     render(window, 1200, 780, "ui-desktop.png");
                     render(window, 420, 760, "ui-narrow-chat.png");
                     assertTrue(find(window, "back").isVisible()); assertFalse(find(window, "sidebar").isVisible());
-                    button(window, "attach").doClick(); assertTrue(label(window, "status").getText().contains("尚未接入"));
-                    assertTrue(label(window, "composerHint").getText().contains("尚未接入"));
-                    button(window, "emoji").doClick(); assertTrue(label(window, "status").getText().contains("表情"));
-                    assertTrue(label(window, "composerHint").getText().contains("表情"), "Narrow chat must show feedback outside the hidden sidebar");
+                    for (String name : List.of("attach", "sendImage", "emoji")) {
+                        assertTrue(button(window, name).isVisible(), name);
+                        assertTrue(button(window, name).isEnabled(), name);
+                        assertTrue(button(window, name).getWidth() > 0, name);
+                    }
+                    JTextArea narrowEditor = area(window, "input");
+                    assertTrue(narrowEditor.getWidth() > 80);
+                    narrowEditor.setText("窄屏消息");
+                    narrowEditor.setCaretPosition(2);
+                    ((JButton) find(window.emojiPicker(), "emoji-😀")).doClick();
+                    assertEquals("窄屏😀消息", narrowEditor.getText());
+                    invokeKey(narrowEditor, java.awt.event.KeyEvent.VK_ENTER, 0);
                     button(window, "back").doClick(); layout(window.getContentPane());
                     assertTrue(find(window, "sidebar").isVisible()); assertFalse(find(window, "chatPane").isVisible());
                     render(window, 420, 760, "ui-narrow-list.png");
@@ -436,6 +444,7 @@ class ChatWindowTest {
                     area(window, "input").setText("\n "); button(window, "send").doClick();
                     assertEquals("\n ", area(window, "input").getText()); assertTrue(label(window, "status").getText().contains("空白"));
                 });
+                assertEquals("窄屏😀消息", carol.await(m -> "窄屏😀消息".equals(m.content())).content());
                 carol.assertNo(m -> m.type() == MessageType.PRIVATE_MESSAGE
                         && ("bob".equals(m.from()) || "bob".equals(m.to())), 100);
             }

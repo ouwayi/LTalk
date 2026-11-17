@@ -14,12 +14,12 @@ final class WindowsFilePicker {
 
     // All COM pointers stay on this STA thread and are released before CoUninitialize.
     static Path choose(Pointer owner, FileDialogs.Kind kind) throws IOException {
-        return show(owner, kind, null).path();
+        return show(owner, kind, null, false).path();
     }
-    static FileDialogs.SaveChoice save(Pointer owner, String name) throws IOException {
-        return show(owner, null, name);
+    static FileDialogs.SaveChoice save(Pointer owner, String name, boolean export) throws IOException {
+        return show(owner, null, name, export);
     }
-    private static FileDialogs.SaveChoice show(Pointer owner, FileDialogs.Kind kind, String name) throws IOException {
+    private static FileDialogs.SaveChoice show(Pointer owner, FileDialogs.Kind kind, String name, boolean export) throws IOException {
         boolean save = name != null;
         Ole32 ole = Ole32.INSTANCE;
         check(ole.CoInitializeEx(null, 2).intValue(), "初始化文件对话框");
@@ -34,19 +34,21 @@ final class WindowsFilePicker {
             int flags = options.getValue() | 0x8 | 0x40 | 0x800; // NOCHANGEDIR, FORCEFILESYSTEM, PATHMUSTEXIST
             if (kind == FileDialogs.Kind.DIRECTORY) flags |= 0x20; // PICKFOLDERS
             else if (!save) flags |= 0x1000; // FILEMUSTEXIST
-            if (save) flags = (flags | 0x4) & ~0x2; // Strict types; replacement is confirmed for the final normalized path on EDT.
+            if (save) flags &= ~0x2; // Replacement is confirmed for the final path on EDT.
+            if (export) flags |= 0x4; // Strict export types.
             check(call(dialog, 9, flags), "设置文件选项");
-            check(call(dialog, 17, new WString(save ? "导出聊天记录" : kind == FileDialogs.Kind.IMAGE ? "选择头像图片" : "选择聊天记录导出目录")), "设置标题");
-            if (kind == FileDialogs.Kind.IMAGE || save) {
-                filter = new FilterSpec(); FilterSpec[] filters = (FilterSpec[]) filter.toArray(save ? 2 : 1);
-                filters[0].name = new WString(save ? "JSON 聊天记录 (*.json)" : "图片 (PNG / JPEG / GIF / BMP)");
-                filters[0].pattern = new WString(save ? "*.json" : "*.png;*.jpg;*.jpeg;*.gif;*.bmp"); filters[0].write();
-                if (save) { filters[1].name = new WString("CSV 聊天记录 (*.csv)"); filters[1].pattern = new WString("*.csv"); filters[1].write(); }
+            check(call(dialog, 17, new WString(save ? export ? "导出聊天记录" : "保存附件" : kind.title)), "设置标题");
+            if (export || (!save && kind.images())) {
+                filter = new FilterSpec(); FilterSpec[] filters = (FilterSpec[]) filter.toArray(export ? 2 : 1);
+                filters[0].name = new WString(export ? "JSON 聊天记录 (*.json)" : "图片 (PNG / JPEG / GIF / BMP)");
+                filters[0].pattern = new WString(export ? "*.json" : "*.png;*.jpg;*.jpeg;*.gif;*.bmp"); filters[0].write();
+                if (export) { filters[1].name = new WString("CSV 聊天记录 (*.csv)"); filters[1].pattern = new WString("*.csv"); filters[1].write(); }
                 check(call(dialog, 4, filters.length, filter.getPointer()), "设置文件类型");
-                if (save) { check(call(dialog, 15, new WString(name)), "设置文件名"); check(call(dialog, 22, new WString("json")), "设置扩展名"); }
                 // Keep both the structures and their native strings alive throughout Show.
                 filter.retained = filters;
             }
+            if (save) check(call(dialog, 15, new WString(name)), "设置文件名");
+            if (export) check(call(dialog, 22, new WString("json")), "设置扩展名");
             int shown = call(dialog, 3, owner);
             if (shown == CANCELLED) return new FileDialogs.SaveChoice(null, null, false);
             check(shown, "打开文件对话框");
@@ -54,8 +56,9 @@ final class WindowsFilePicker {
             PointerByReference displayName = new PointerByReference();
             check(call(item, 5, 0x80058000, displayName), "读取所选路径"); // SIGDN_FILESYSPATH
             path = displayName.getValue();
-            IntByReference type = new IntByReference(1); if (save) check(call(dialog, 6, type), "读取保存类型");
-            return new FileDialogs.SaveChoice(Path.of(path.getWideString(0)), type.getValue() == 2 ? "csv" : "json", false);
+            IntByReference type = new IntByReference(1); if (export) check(call(dialog, 6, type), "读取保存类型");
+            String format = export ? type.getValue() == 2 ? "csv" : "json" : null;
+            return new FileDialogs.SaveChoice(Path.of(path.getWideString(0)), format, false);
         } finally {
             java.lang.ref.Reference.reachabilityFence(filter);
             if (path != null) ole.CoTaskMemFree(path);

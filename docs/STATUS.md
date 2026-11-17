@@ -2,7 +2,7 @@
 
 更新于 **2026-11-17（Asia/Shanghai）**。工作目录为 `D:\Agent\AllProjects\LTalk`，核对时分支为 `master`，未配置远端。含可选 TLS 公网模式，使用 **Java 17 目标字节码、Swing、Maven、TCP 协议 v6 和 UDP 发现 v1**。接续时先检查实际 Git 状态和提交，再按用户的新需求继续。
 
-最近功能提交为 `d62a428`（未读定位、引用回复与复制），前两项为 `5ba1538`（好友、私聊许可与独立群组）和 `5585290`（历史按需加载与搜索定位）。交接文档可以有后续提交。最近完整功能回归为 **128 项通过**，运行命令为 `powershell -NoProfile -File .\build.ps1 -o package`，打包产物为 `target/ltalk-1.0.0.jar`。
+最近功能为 Emoji、图片和文件传输，接续 `d62a428`（未读定位、引用回复与复制）与文档提交 `40ef3c7`。前两项功能提交为 `5ba1538`（好友、私聊许可与独立群组）和 `5585290`（历史按需加载与搜索定位）。完整回归和打包使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。
 
 ## 从哪里接手
 
@@ -14,7 +14,7 @@
 
 新对话可以直接发送：
 
-> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 AGENTS.md 阅读 docs/STATUS.md、README.md 和 docs/DEVLOG.md、docs/ROADMAP.md 的相关部分，核对 Git 状态。最近功能基线是 `d62a428`。请按我接下来指定的功能继续。
+> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 AGENTS.md 阅读 docs/STATUS.md、README.md 和 docs/DEVLOG.md、docs/ROADMAP.md 的相关部分，核对 Git 状态。最近功能是 Emoji、图片和文件传输。请按我接下来指定的功能继续。
 
 ## 当前功能
 
@@ -34,15 +34,16 @@
 | 搜索定位 | 从当前会话搜索本人可见归档，匹配正文、昵称和用户名。定位显示原消息及前后各最多 9 条，标记原消息并支持返回最近消息。 |
 | 未读定位 | 打开会话自动跳到本窗口收到的第一条未读，显示未读分隔。阅读旧消息期间可点击「有 N 条新消息」定位。历史加载不累加实时未读。 |
 | 引用回复和复制 | 右键可引用回复或复制完整正文。引用草稿可单独取消，发送后点击引用可定位本人有权查看的原文。 |
-| 导出 | 当前会话菜单打开另存为，选择 JSON/CSV、文件名和位置。JSON 为合法数组，每条一行，含已有的引用编号。CSV 保留原七列。目标文件存在时确认覆盖。Windows 使用原生文件选择器，其他系统使用 Swing 选择器。 |
+| Emoji、图片和附件 | 表情按钮把 Unicode Emoji 插入草稿。图片按钮接受 PNG、JPEG、GIF 和 BMP，最多 12 MiB 和 2400 万像素，气泡有缩略图、原图预览和保存。附件入口可选择任意类型文件（包括图片），最多 50 MiB。传输可取消，下载沿用本人历史权限。 |
+| 导出 | 当前会话菜单打开另存为，选择 JSON/CSV、文件名和位置。JSON 每条一行，含已有的引用编号或附件元数据。CSV 保留原七列。目标文件存在时确认覆盖。Windows 使用原生文件选择器，其他系统使用 Swing 选择器。 |
 | 外观与布局 | 浅色、近黑深色、预设或自选纯色/渐变。拖动色盘或输入 HEX 可预览，外观参数单独保存在本机。聊天小于 760 逻辑像素改单列，启动页小于 660 时改为上下排列并可滚动。 |
 
-附件与表情面板入口为占位。会话静音和桌面提醒按用户此前的决定暂缓。后续功能由用户指定，见 [路线图](ROADMAP.md)。
+会话静音和桌面提醒按用户此前的决定暂缓。后续功能由用户指定，见 [路线图](ROADMAP.md)。
 
 ## 关键约定
 
 - 上下文边界以 `AGENTS.md` 为准。保持 Java 17 兼容。连接、收发、密码计算、用户图片文件处理和导出在后台，Swing 和会话展示状态在 EDT。
-- 服务端和客户端一起升级到协议 v6。TCP 使用 UTF-8/LF JSON，普通帧 16 KiB，四种头像相关帧 176 KiB，正文最长 2000 个 UTF-16 单元。密码为 6～128 个 UTF-16 单元，保留空白。协议没有版本协商。
+- 服务端和客户端使用同版 JAR。聊天 TCP 使用协议 v6 UTF-8/LF JSON，普通帧 16 KiB，四种头像相关帧 176 KiB，正文最长 2000 个 UTF-16 单元。图片和普通文件通过独立连接传输原始字节。密码为 6～128 个 UTF-16 单元，保留空白。协议没有版本协商。
 - 默认监听 `0.0.0.0:9000`。局域网模式最多 20 个连接，TLS 模式默认最多 140 个总连接、24 个未认证连接。初始期限 10 秒，TLS 模式 HELLO 后认证期限默认 60 秒。默认心跳间隔 10 秒、响应期限 20 秒。
 - 登录态绑定 TCP。账号保存随机盐与 PBKDF2-HMAC-SHA256 散列，服务端持有数据目录锁。资料与改密先原子写文件再发布结果，历史和导出按认证账号隔离。
 - 背景保持可选纯色或渐变，浅深色与窄屏均可用。外观只写 `${user.home}/.ltalk/appearance.properties`，项目采用自身的中性描述。
@@ -57,6 +58,7 @@
 | server/AccountStore、ChatArchive、ArchiveView | 账号、改密、展示资料、公共共享归档、本人历史、摘要和搜索 |
 | server/SocialStore、common/SocialAction、SocialItem | 好友、私聊许可、请求和群成员的原子保存及协议模型 |
 | server/MessageRouter、ClientSession、SessionRegistry、ChatServer | 握手与认证、会话权限、路由、心跳、连接清理 |
+| server/AttachmentStore、client/AttachmentChannel、common/Attachment、ChatImage | 一次性传输票据、原文件存储、上传下载、缩略图与图片限制 |
 | common/TlsTransport、server/PublicAccess、SessionOutput | TLS 握手和端点校验、公网准入、逐连接发送队列 |
 | common/LanDiscovery、server/DiscoveryResponder、client/DiscoveryClient、ServerSelection、RecentServers | UDP 发现帧、后台应答与查找、启动页选择、最近地址保存 |
 | client/ChatClient、ClientSessions、HistoryChannel、HistoryExport | 后台连接、候选账号交接、历史分页和导出 |
@@ -69,12 +71,13 @@
 
 ## 云端测试交接
 
-- 用户已用阶段 28 的版本在 Oracle Cloud 的 Ubuntu 24.04 实例完成 Tailscale 私网和公网 TLS 基本验收。Windows 宿主机和虚拟机均可连接、登录及收发消息。阶段 30～32 的历史分页、社交与群组、未读和引用以本机测试为依据，云端待复测。[测试报告](test-report.md#oracle-cloud-私网与公网验收)
+- 用户已用阶段 28 的版本在 Oracle Cloud 的 Ubuntu 24.04 实例完成 Tailscale 私网和公网 TLS 基本验收。Windows 宿主机和虚拟机均可连接、登录及收发消息。阶段 30～34 的历史分页、社交与群组、未读、引用和附件以本机测试为依据，云端待复测。[测试报告](test-report.md#oracle-cloud-私网与公网验收)
 - 公网服务由 `ltalk.service` 管理，使用 `/opt/ltalk/ltalk-1.0.0.jar`、`/var/lib/ltalk` 和 `/etc/ltalk/server.p12`。用户计划停掉服务并保留云端 `ltalk-public-test` 的 TCP 9000 测试入站规则。复测先核对进程状态、来源 IP、Ubuntu 临时防火墙规则和证书有效期。更换版本时让服务端和测试客户端使用同版 JAR。[部署手册](deployment.md#更新-jar-与复测)
 - 不同物理设备和独立接入网络、长期证书续签、实际云规格的百人容量仍待验收。当前反馈足以接续新功能开发。
 
 ## 已有验证与后续核对
 
+- Emoji、图片与附件于 2026-11-17 执行 `build.ps1 -o package`，**135 项通过，0 失败、错误或跳过**。覆盖窄屏 Emoji 收发、分开的图片和附件入口、图片校验、文件原字节、TLS 传输、取消、重启、退群和删除权限。日志 `.tools/attachments-final.log`。新增原生文件对话框的实际点选及多设备传输待现场复测。[测试报告](test-report.md)
 - 未读定位和引用回复于 2026-11-17 执行 `build.ps1 -o package`，**128 项通过，0 失败、错误或跳过**。覆盖窄屏首条未读定位、复制完整正文、引用草稿、旧历史定位、重启与权限隔离。日志 `.tools/unread-reply-verified.log`。[测试报告](test-report.md)
 - 好友、陌生人私聊与群组于 2026-11-17 执行 `build.ps1 -o package`，**125 项通过，0 失败、错误或跳过**，约 2:04。覆盖离线申请与留言、群实时隔离、入群 100 条、退群历史、管理员移交、解散与重启。验证使用本机回环和 Swing，日志 `.tools/social-verified.log`。[测试报告](test-report.md)
 - 按需加载历史与搜索定位于 2026-11-17 执行 `build.ps1 -o package`，**122 项通过，0 失败、错误或跳过**。覆盖回环分页、旧归档、搜索权限、窄屏滚动锚点和定位。构建产物为 `target/ltalk-1.0.0.jar`，日志 `.tools/history-view-verified.log`。[测试报告](test-report.md#按需加载历史与搜索定位2026-11-17阶段-30)
@@ -84,5 +87,5 @@
 - 发送反馈和重连于 2026-11-16 执行 `powershell -NoProfile -File .\build.ps1 -o package`，**107 项通过，0 失败、错误或跳过**，约 1:25。Windows、JDK 25.0.4、Maven 3.9.9，以 release 17 编译。验证使用回环 TCP、临时数据与 Swing 组件。构建产物为 `target/ltalk-1.0.0.jar`，本机日志为 `.tools/chat-experience-final.log`。
 - 此前功能提交包括 `74aa291` 改密、`d629d5e` 高清头像、`c4840f3` 资料同步、`984cb5b` 消息组头像裁切。各阶段的结果与历史人工反馈见 [测试报告](test-report.md)。
 - 当前 v6 的多设备资料同步等完整流程、独立 JDK 17 自动化回归、各档 DPI、其他客户端系统和长时间负载仍待验收。早期宿主机＋虚拟机的局域网反馈保持原版本归属。
-- 跨账号私聊归档写入没有事务保证。JSONL 深页和搜索会扫描归档，社交数据每次修改原子替换 `social.json`。备份须包含该文件及群组日志。改密、资料、历史删除或社交操作超时可能已生效，可刷新或重登核对。
+- 跨账号私聊归档写入没有事务保证。JSONL 深页和搜索会扫描归档，社交数据每次修改原子替换 `social.json`。完整备份还须包含群组日志与 `attachments/`。附件随历史保留，默认 1 GiB，总配额可配置。改密、资料、历史删除、社交操作或上传确认超时可能已生效，可刷新或重登核对。
 - 云部署或多设备复测时同步更新两端 JAR，重点核对登录后首批公共消息出现的时间、离线好友留言、群组历史权限，以及首条未读和引用跳转。通过授权测试账号验证，操作顺序见 [部署手册](deployment.md#更新-jar-与复测)。

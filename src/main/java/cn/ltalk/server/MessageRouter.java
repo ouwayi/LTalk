@@ -94,35 +94,16 @@ final class MessageRouter {
                 }
                 case GROUP_SEND -> {
                     validateChat(request);
-                    String scope = request.conversationId();
-                    Set<String> members = scope == null || ConversationScope.PUBLIC.equals(scope) ? null
-                            : server.social().members(ConversationScope.groupId(scope), session.userId);
-                    server.archive().requireVisibleReply(session.userId,
-                            scope == null ? ConversationScope.PUBLIC : scope, request.replyTo());
-                    var recipients = registry.readySessions().stream().filter(peer -> members == null || members.contains(peer.userId)).toList();
-                    Message event = server.archive().record(MessageType.GROUP_MESSAGE, session.userId, server.accounts().nickname(session.userId), request,
-                            List.of());
-                    server.broadcast(event, recipients);
+                    publishChat(session, request, routeChat(session, request));
                 }
                 case PRIVATE_SEND -> {
                     validateChat(request);
-                    if (request.to() == null || !request.to().matches("[A-Za-z0-9_]{1,20}"))
-                        throw new ProtocolException("BAD_MESSAGE", "私聊需要合法的 to 用户标识");
-                    if (request.to().equals(session.userId))
-                        throw new ProtocolException("SELF_PRIVATE_NOT_ALLOWED", "不能给自己发私聊");
-                    ClientSession target = registry.findReady(request.to());
-                    if (target == null && !server.social().friends(session.userId, request.to()))
-                        throw new ProtocolException("USER_OFFLINE", "对方离线，只能给好友发送离线消息");
-                    if (!server.social().privateAllowed(session.userId, request.to()))
-                        throw new ProtocolException("PRIVATE_FORBIDDEN", "请先取得私聊许可或成为好友");
-                    if (request.replyTo() != null)
-                        server.archive().requireVisibleReply(session.userId,
-                                ConversationScope.privateChat(session.userId, request.to()), request.replyTo());
-                    Message event = server.archive().record(MessageType.PRIVATE_MESSAGE, session.userId, server.accounts().nickname(session.userId), request,
-                            List.of(session.userId, request.to()));
-                    if (target != null && !server.deliver(target, event))
-                        throw new ProtocolException("DELIVERY_UNCONFIRMED", "私聊写入中断，消息可能已归档，请核对记录");
-                    server.deliver(session, event);
+                    publishChat(session, request, routeChat(session, request));
+                }
+                case ATTACH_UPLOAD, ATTACH_DOWNLOAD -> server.attachments().prepare(session, request);
+                case ATTACH_CANCEL -> {
+                    Validation.requestId(request.requestId());
+                    server.attachments().cancel(session, request.requestId());
                 }
                 default -> throw new ProtocolException("BAD_MESSAGE", "此消息类型不能由客户端发送");
             }
@@ -140,6 +121,65 @@ final class MessageRouter {
             if (request.type() == MessageType.HISTORY_REQUEST) session.closeHistory();
             server.deliver(session, Message.error(request.requestId(), request.type() == MessageType.EXPORT_REQUEST ? "EXPORT_FAILED" : "STORAGE_ERROR",
                     "服务端文件操作失败，请稍后重试"));
+        }
+    }
+
+    private record ChatRoute(List<ClientSession> group, ClientSession target) { }
+
+    private ChatRoute routeChat(ClientSession session, Message request) throws IOException {
+        if (request.type() == MessageType.GROUP_SEND) {
+            String scope = request.conversationId() == null ? ConversationScope.PUBLIC : request.conversationId();
+            Set<String> members = ConversationScope.PUBLIC.equals(scope) ? null
+                    : server.social().members(ConversationScope.groupId(scope), session.userId);
+            server.archive().requireVisibleReply(session.userId, scope, request.replyTo());
+            return new ChatRoute(registry.readySessions().stream()
+                    .filter(peer -> members == null || members.contains(peer.userId)).toList(), null);
+        }
+        if (request.to() == null || !request.to().matches("[A-Za-z0-9_]{1,20}"))
+            throw new ProtocolException("BAD_MESSAGE", "私聊需要合法的 to 用户标识");
+        if (request.to().equals(session.userId))
+            throw new ProtocolException("SELF_PRIVATE_NOT_ALLOWED", "不能给自己发私聊");
+        ClientSession target = registry.findReady(request.to());
+        if (target == null && !server.social().friends(session.userId, request.to()))
+            throw new ProtocolException("USER_OFFLINE", "对方离线，只能给好友发送离线消息");
+        if (!server.social().privateAllowed(session.userId, request.to()))
+            throw new ProtocolException("PRIVATE_FORBIDDEN", "请先取得私聊许可或成为好友");
+        if (request.replyTo() != null)
+            server.archive().requireVisibleReply(session.userId, ConversationScope.privateChat(session.userId, request.to()), request.replyTo());
+        return new ChatRoute(null, target);
+    }
+
+    void checkAttachmentUpload(ClientSession session, Message request) throws IOException {
+        synchronized (mutationOrder) { routeChat(session, request); }
+    }
+
+    @FunctionalInterface interface StoreAttachment { void commit() throws IOException; }
+
+    void publishAttachment(ClientSession owner, ClientSession transfer, Message request, StoreAttachment storage) throws IOException {
+        synchronized (mutationOrder) {
+            if (!owner.ready || owner.isClosed() || transfer.isClosed())
+                throw new ProtocolException("NOT_AUTHENTICATED", "传输或登录已结束");
+            ChatRoute route = routeChat(owner, request);
+            storage.commit();
+            try { publishChat(owner, request, route); }
+            catch (ProtocolException ex) { throw ex; }
+            catch (IOException ex) {
+                throw new ProtocolException("DELIVERY_UNCONFIRMED", "附件可能已归档，请核对聊天记录");
+            }
+        }
+    }
+
+    private void publishChat(ClientSession session, Message request, ChatRoute route) throws IOException {
+        String nickname = server.accounts().nickname(session.userId);
+        if (route.group() != null) {
+            Message event = server.archive().record(MessageType.GROUP_MESSAGE, session.userId, nickname, request, List.of());
+            server.broadcast(event, route.group());
+        } else {
+            Message event = server.archive().record(MessageType.PRIVATE_MESSAGE, session.userId, nickname, request,
+                    List.of(session.userId, request.to()));
+            if (route.target() != null && !server.deliver(route.target(), event))
+                throw new ProtocolException("DELIVERY_UNCONFIRMED", "私聊写入中断，消息可能已归档，请核对记录");
+            server.deliver(session, event);
         }
     }
 
@@ -300,6 +340,7 @@ final class MessageRouter {
     private static void validateChat(Message request) throws ProtocolException {
         Validation.requestId(request.requestId());
         Validation.content(request.content());
+        if (request.attachment() != null) throw new ProtocolException("BAD_MESSAGE", "附件需要独立上传");
     }
     private static Message profileMessage(MessageType type, String requestId, UserProfile profile) {
         return Message.of(type).requestId(requestId).userId(profile.userId()).nickname(profile.nickname())

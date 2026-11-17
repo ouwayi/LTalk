@@ -65,6 +65,16 @@ public final class MessageCodec {
                         || !revision.toString().matches("[0-9]+")) throw new IllegalArgumentException();
                 if (revision.getAsBigDecimal().longValueExact() < 0) throw new IllegalArgumentException();
             }
+            if (object.has("attachment")) {
+                JsonObject attachment = object.getAsJsonObject("attachment");
+                JsonElement size = attachment.get("size");
+                if (!isString(attachment.get("kind")) || !isString(attachment.get("name"))
+                        || size == null || !size.isJsonPrimitive() || !size.getAsJsonPrimitive().isNumber()
+                        || !size.toString().matches("[0-9]+") || size.getAsBigDecimal().longValueExact() < 0
+                        || (attachment.has("thumbnail") && !isString(attachment.get("thumbnail"))))
+                    throw new IllegalArgumentException();
+                Attachment.Kind.valueOf(attachment.get("kind").getAsString());
+            }
             return GSON.fromJson(object, Message.class);
         } catch (RuntimeException ex) {
             throw new ProtocolException("BAD_MESSAGE", "无效 JSON、未知类型或字段类型错误", requestId);
@@ -86,7 +96,9 @@ public final class MessageCodec {
 
     public static final class FrameReader {
         private final InputStream input;
-        public FrameReader(InputStream input) { this.input = new BufferedInputStream(input); }
+        public FrameReader(InputStream input) {
+            this.input = input instanceof BufferedInputStream ? input : new BufferedInputStream(input);
+        }
 
         /** null means clean EOF; an unterminated partial frame is a connection error. */
         public String readFrame() throws IOException {

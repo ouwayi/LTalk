@@ -95,6 +95,8 @@ public final class ChatClient implements AutoCloseable {
             state = State.CONNECTING;
             connection.social = new SocialChannel(message -> submitControl(connection, message), event -> emit(connection, event),
                     deadlines, loginTimeoutMillis);
+            connection.attachments = new AttachmentChannel(message -> submitControl(connection, message), event -> emit(connection, event),
+                    connection::nextId, deadlines, host.strip(), port, connectTimeoutMillis, tls, clientTls);
             emit(connection, () -> listener.onStateChanged(State.CONNECTING, "正在连接服务器…"));
             connection.deadline = deadlines.schedule(() -> terminate(connection, "连接或登录超时，请检查地址后重新连接"),
                     (long) connectTimeoutMillis + loginTimeoutMillis, TimeUnit.MILLISECONDS);
@@ -232,6 +234,7 @@ public final class ChatClient implements AutoCloseable {
     }
 
     private void dispatch(Connection connection, Message message) throws IOException {
+        if (connection.attachments.receive(message)) return;
         if (connection.social.receive(message)) return;
         if (connection.history.receive(message)) return;
         synchronized (connection) {
@@ -338,6 +341,7 @@ public final class ChatClient implements AutoCloseable {
         }
     }
     public void loadHistory() throws IOException { authenticated().history.load(); }
+    AttachmentChannel attachments() throws IOException { return authenticated().attachments; }
     void social(SocialAction action, Consumer<Message.Builder> fields, Consumer<SocialChannel.Result> completion) throws IOException {
         authenticated().social.request(action, fields, completion);
     }
@@ -580,6 +584,7 @@ public final class ChatClient implements AutoCloseable {
         connection.heartbeat.close();
         connection.history.close();
         connection.social.close();
+        connection.attachments.close();
         connection.registrationPassword = null;
         if (connection.profileDeadline != null) connection.profileDeadline.cancel(false);
         connection.profileRequest = null;
@@ -639,6 +644,7 @@ public final class ChatClient implements AutoCloseable {
         Heartbeat heartbeat;
         HistoryChannel history;
         SocialChannel social;
+        AttachmentChannel attachments;
         final AtomicBoolean exporting = new AtomicBoolean();
         volatile HistoryExport export;
         volatile String exportRequest;

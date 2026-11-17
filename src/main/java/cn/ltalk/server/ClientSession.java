@@ -2,6 +2,7 @@ package cn.ltalk.server;
 
 import cn.ltalk.common.*;
 
+import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.Socket;
@@ -66,13 +67,16 @@ final class ClientSession implements Runnable {
         String reason = "客户端关闭连接";
         try {
             Socket transport = server.transport(socket);
+            var input = new BufferedInputStream(transport.getInputStream());
+            MessageCodec.FrameReader reader = new MessageCodec.FrameReader(input);
             output.start(transport.getOutputStream(), ex -> close("写入失败：" + ex.getMessage()));
-            MessageCodec.FrameReader reader = new MessageCodec.FrameReader(transport.getInputStream());
+            boolean first = true;
             while (!isClosed()) {
                 Message request;
                 try {
                     request = reader.read();
                 } catch (ProtocolException ex) {
+                    first = false;
                     LOG.info(() -> "协议错误 user=" + userId + " code=" + ex.code());
                     Message error = Message.error(ex.requestId(), ex.code(), ex.getMessage());
                     if (ex.code().equals("FRAME_TOO_LARGE")) { server.deliverAndWait(this, error); reason = ex.code(); break; }
@@ -80,6 +84,11 @@ final class ClientSession implements Runnable {
                     continue;
                 }
                 if (request == null) break;
+                if (first && request.type() == MessageType.ATTACH_OPEN) {
+                    server.attachments().transfer(this, transport, input, reader, request);
+                    break;
+                }
+                first = false;
                 LOG.fine(() -> "request user=" + userId + " type=" + request.type());
                 server.router().handle(this, request);
             }
@@ -88,6 +97,17 @@ final class ClientSession implements Runnable {
         } finally {
             close(reason);
         }
+    }
+
+    void beginTransfer() throws IOException {
+        ScheduledFuture<?> initial = loginDeadline;
+        loginDeadline = server.transferDeadline(this);
+        if (initial != null) initial.cancel(false);
+        if (isClosed()) {
+            loginDeadline.cancel(false);
+            throw new IOException("传输连接已关闭");
+        }
+        server.authenticated(this);
     }
 
     void close(String reason) {

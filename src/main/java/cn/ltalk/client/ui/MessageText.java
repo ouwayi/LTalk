@@ -4,7 +4,7 @@ import javax.swing.*;
 import javax.swing.text.*;
 import java.awt.*;
 
-/** Styled glyph fallback, but always a plain text document: no HTML, URLs, scripts or attachments. */
+/** Plain text document with styled glyph fallback for emoji. */
 final class MessageText extends JTextPane {
     private final Font normal = ChatTheme.FONT.deriveFont(15f);
     private final Font emoji = new Font("Segoe UI Emoji", Font.PLAIN, 15);

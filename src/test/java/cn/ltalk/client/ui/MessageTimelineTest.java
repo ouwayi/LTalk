@@ -1,6 +1,9 @@
 package cn.ltalk.client.ui;
 
 import cn.ltalk.client.ContactProfile;
+import cn.ltalk.common.Attachment;
+import cn.ltalk.common.ChatRecord;
+import cn.ltalk.common.ConversationScope;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import javax.swing.*;
@@ -16,6 +19,39 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 class MessageTimelineTest {
+    @Test void emojiSelectionRemainsTextAndArchivedImagesExposeDistinctActionsInNarrowDarkLayout() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            var palette = ThemePalette.of(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK));
+            JTextArea input = new JTextArea("文稿");
+            input.setCaretPosition(1);
+            var picker = new EmojiPicker(palette, input::replaceSelection);
+            findButton(picker, "emoji-😀").doClick();
+            assertEquals("文😀稿", input.getText());
+
+            String name = "测试图片.png";
+            var item = new ChatRecord("image", ConversationScope.PUBLIC, "bob", null, name, "GROUP_MESSAGE",
+                    Instant.now().toString(), null, new Attachment(Attachment.Kind.IMAGE, name, 10, null));
+            var timeline = new MessageTimeline();
+            ChatTheme.apply(timeline, palette);
+            timeline.setSize(260, 360);
+            var actions = new ArrayList<String>();
+            timeline.attachmentActions((entry, preview) -> actions.add(entry.content() + (preview ? "预览" : "保存")));
+            var rows = List.of(ConversationStore.archivedEntry(item, "Bob"));
+            timeline.showEntries(rows, "alice", "", true);
+            layout(timeline);
+            layout(timeline);
+            JButton preview = findButton(timeline, "previewImage");
+            JButton save = findButton(timeline, "saveAttachment");
+            assertTrue(preview.getWidth() >= 100);
+            assertTrue(save.getWidth() > 0);
+            preview.doClick();
+            save.doClick();
+            assertEquals(List.of(name + "预览", name + "保存"), actions);
+            timeline.showEntries(rows, "alice", "", false);
+            assertFalse(preview.isEnabled());
+            assertFalse(save.isEnabled());
+        });
+    }
     @Test void contextMenuCopiesExactBodyEvenWithASelection() throws Exception {
         SwingUtilities.invokeAndWait(() -> {
             MessageTimeline timeline = new MessageTimeline();
@@ -234,6 +270,16 @@ class MessageTimelineTest {
     }
     private static void layout(Container container) {
         container.doLayout(); for (Component c : container.getComponents()) if (c instanceof Container nested) layout(nested);
+    }
+    private static JButton findButton(Container container, String name) {
+        for (Component component : container.getComponents()) {
+            if (component instanceof JButton button && name.equals(component.getName())) return button;
+            if (component instanceof Container child) {
+                JButton found = findButton(child, name);
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
     private static void collect(Container container, List<JTextPane> result) {
         for (Component c : container.getComponents()) {

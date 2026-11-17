@@ -69,6 +69,7 @@ public final class ClientSessions implements AutoCloseable {
         });
     }
     public void loadHistory() throws IOException { current.client.loadHistory(); }
+    AttachmentChannel attachments() throws IOException { return current.client.attachments(); }
     void social(SocialAction action, Consumer<Message.Builder> fields, Consumer<SocialChannel.Result> completion) throws IOException {
         Slot slot = current;
         slot.client.social(action, fields, result -> {

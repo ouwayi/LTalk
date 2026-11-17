@@ -34,6 +34,9 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private JDialog passwordDialog;
     private boolean closed;
     private boolean choosingExport;
+    private boolean choosingAttachment;
+    private JDialog transferDialog;
+    private AttachmentChannel.Handle transfer;
     private long sessionRevision;
     private boolean deletingHistory;
     private long historyRevision;
@@ -74,8 +77,9 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private final JButton create = ChatTheme.iconButton(LineIcon.Kind.COMPOSE, "好友与群组");
     private final JButton chatSearch = ChatTheme.iconButton(LineIcon.Kind.SEARCH, "搜索当前会话消息");
     private final JButton more = ChatTheme.iconButton(LineIcon.Kind.MORE, "会话更多操作");
-    private final JButton attach = ChatTheme.iconButton(LineIcon.Kind.ATTACH, "附件 · 暂未接入");
-    private final JButton emoji = ChatTheme.iconButton(LineIcon.Kind.EMOJI, "表情面板 · 暂未接入");
+    private final JButton attach = ChatTheme.iconButton(LineIcon.Kind.ATTACH, "发送附件");
+    private final JButton image = ChatTheme.iconButton(LineIcon.Kind.IMAGE, "发送图片");
+    private final JButton emoji = ChatTheme.iconButton(LineIcon.Kind.EMOJI, "选择 Emoji");
     private final DefaultListModel<ConversationStore.Summary> listModel = new DefaultListModel<>();
     private final ConversationList conversations = new ConversationList(listModel);
     private final MessageTimeline timeline = new MessageTimeline();
@@ -123,8 +127,10 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         timeline.setContactProfiles(store::profile);
         timeline.onRecover(this::recoverMessage);
         timeline.messageActions(this::startReply, this::copyBody, this::locateOriginal);
+        timeline.attachmentActions(this::receiveAttachment);
         send.setName("send"); group.setName("group"); back.setName("back"); menu.setName("menu");
         create.setName("createConversation"); attach.setName("attach"); emoji.setName("emoji"); input.setName("input");
+        image.setName("sendImage");
         hint.setName("composerHint");
         chatSearch.setName("chatSearch"); more.setName("chatMore");
         buildSidebar();
@@ -173,7 +179,10 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         input.setToolTipText("输入消息；Enter 发送，Shift+Enter 换行");
         editorScroll = new JScrollPane(input); ChatTheme.scroll(editorScroll, true);
         composer = new ChatTheme.RoundedPanel(new BorderLayout(8, 0), 26, Color.WHITE, true);
-        composer.setBorder(new EmptyBorder(8, 8, 8, 8)); composer.add(attach, BorderLayout.WEST); composer.add(editorScroll, BorderLayout.CENTER);
+        JPanel media = new JPanel(new GridLayout(1, 2, 0, 0));
+        media.setOpaque(false);
+        media.add(attach); media.add(image);
+        composer.setBorder(new EmptyBorder(8, 8, 8, 8)); composer.add(media, BorderLayout.WEST); composer.add(editorScroll, BorderLayout.CENTER);
         quoteDraft.setOpaque(false);
         quoteDraft.setBorder(new EmptyBorder(0, 8, 4, 0));
         quoteDraftText.setName("quoteDraftText");
@@ -223,8 +232,9 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         back.addActionListener(e -> { shell.openList(); refreshList(); });
         menu.addActionListener(e -> showMenu()); create.addActionListener(e -> showNewConversation()); more.addActionListener(e -> showChatMenu());
         chatSearch.addActionListener(e -> openHistorySearch());
-        attach.addActionListener(e -> showPendingTool("图片与文件附件"));
-        emoji.addActionListener(e -> showPendingTool("表情选择面板"));
+        attach.addActionListener(e -> chooseAttachment(Attachment.Kind.FILE));
+        image.addActionListener(e -> chooseAttachment(Attachment.Kind.IMAGE));
+        emoji.addActionListener(e -> showEmojiPicker());
         conversations.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting() && !refreshingList && conversations.getSelectedValue() != null)
                 selectConversation(conversations.getSelectedValue().id());
@@ -253,7 +263,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         addWindowListener(new WindowAdapter() {
             @Override public void windowClosing(WindowEvent e) {
                 closed = true; serverSelection.cancel(); closeHistorySearch(); closeSocialDialog();
-                store.saveDraft(input.getText()); closeProfile(); client.close(); dispose();
+                store.saveDraft(input.getText()); closeProfile(); closeTransfer(); client.close(); dispose();
             }
         });
         addWindowFocusListener(new WindowAdapter() {
@@ -358,6 +368,146 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         } catch (IOException ex) { showError(ex.getMessage()); }
     }
 
+    private void showEmojiPicker() {
+        EmojiPicker picker = emojiPicker();
+        picker.show(emoji, emoji.getWidth() - picker.getPreferredSize().width, -picker.getPreferredSize().height);
+    }
+
+    EmojiPicker emojiPicker() {
+        long revision = sessionRevision;
+        ConversationId selected = store.selectedId();
+        return new EmojiPicker(ThemePalette.of(appearance), value -> {
+            if (revision != sessionRevision || !selected.equals(store.selectedId())) return;
+            input.replaceSelection(value);
+            input.requestFocusInWindow();
+        });
+    }
+
+    private void chooseAttachment(Attachment.Kind kind) {
+        if (!send.isEnabled() || !canStartAttachment()) return;
+        long revision = sessionRevision;
+        ConversationId selected = store.selectedId();
+        choosingAttachment = true;
+        FileDialogs.Kind picker = kind == Attachment.Kind.IMAGE ? FileDialogs.Kind.CHAT_IMAGE : FileDialogs.Kind.FILE;
+        new FileDialogs().choose(this, picker, path -> {
+            choosingAttachment = false;
+            if (path == null || !attachmentSession(revision)) return;
+            String groupScope = selected.kind() == ConversationId.Kind.GROUP
+                    ? selected.equals(ConversationId.PUBLIC) ? ConversationScope.PUBLIC : ConversationScope.group(selected.key())
+                    : null;
+            String target = selected.kind() == ConversationId.Kind.PRIVATE ? selected.key() : null;
+            startTransfer(kind == Attachment.Kind.IMAGE ? "发送图片" : "发送附件",
+                    AttachmentChannel.Request.upload(groupScope, target, path, kind));
+        }, detail -> {
+            choosingAttachment = false;
+            if (attachmentSession(revision)) feedback(detail, true);
+        });
+    }
+
+    private void receiveAttachment(ConversationStore.Entry entry, boolean preview) {
+        if (!attachmentSession(sessionRevision) || shownMessage(entry.messageId()) == null || !canStartAttachment()) return;
+        String selectedScope;
+        try { selectedScope = scope(store.selectedId()); }
+        catch (IOException ex) { feedback(ex.getMessage(), true); return; }
+        Attachment attachment = entry.attachment();
+        if (preview) {
+            startTransfer("加载原图", AttachmentChannel.Request.download(selectedScope, entry.messageId(), attachment, null, false));
+            return;
+        }
+        long revision = sessionRevision;
+        choosingAttachment = true;
+        new FileDialogs().saveAttachment(this, Attachment.safeName(attachment.name()), choice -> {
+            choosingAttachment = false;
+            if (choice == null || !attachmentSession(revision)) return;
+            startTransfer("保存附件", AttachmentChannel.Request.download(selectedScope, entry.messageId(), attachment,
+                    choice.path(), choice.replace()));
+        }, detail -> {
+            choosingAttachment = false;
+            if (attachmentSession(revision)) feedback(detail, true);
+        });
+    }
+
+    private boolean canStartAttachment() {
+        if (transfer != null || choosingAttachment) {
+            feedback("请先完成当前文件操作", false);
+            return false;
+        }
+        return true;
+    }
+
+    private boolean attachmentSession(long revision) {
+        return !closed && revision == sessionRevision && connectionState == ChatClient.State.CONNECTED;
+    }
+
+    private void startTransfer(String title, AttachmentChannel.Request request) {
+        long revision = sessionRevision;
+        JDialog dialog = new JDialog(this, title, Dialog.ModalityType.MODELESS);
+        dialog.setName("attachmentTransfer");
+        JPanel panel = new JPanel(new BorderLayout(8, 8));
+        panel.setBorder(new EmptyBorder(12, 12, 12, 12));
+        ChatTheme.surface(panel);
+        JProgressBar progress = new JProgressBar(0, 100);
+        progress.setPreferredSize(new Dimension(235, 23));
+        progress.setStringPainted(true);
+        progress.setString("正在准备…");
+        progress.setIndeterminate(true);
+        JButton cancel = ChatTheme.pill("取消");
+        Runnable stop = () -> {
+            cancel.setEnabled(false);
+            progress.setString("正在取消…");
+            if (transferDialog == dialog && transfer != null) transfer.cancel();
+        };
+        cancel.addActionListener(e -> stop.run());
+        dialog.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
+        dialog.addWindowListener(new WindowAdapter() {
+            @Override public void windowClosing(WindowEvent e) { stop.run(); }
+        });
+        dialog.getRootPane().registerKeyboardAction(e -> stop.run(), KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0),
+                JComponent.WHEN_IN_FOCUSED_WINDOW);
+        panel.add(progress, BorderLayout.CENTER);
+        panel.add(cancel, BorderLayout.EAST);
+        ChatTheme.apply(panel, ThemePalette.of(appearance));
+        dialog.setContentPane(panel);
+        try {
+            transfer = client.attachments().start(request, percent -> {
+                if (transferDialog != dialog || !cancel.isEnabled()) return;
+                progress.setIndeterminate(false);
+                progress.setValue(percent);
+                progress.setString(percent == 100 ? "正在完成…" : percent + "%");
+            }, result -> {
+                if (transferDialog != dialog) return;
+                transferDialog = null;
+                transfer = null;
+                dialog.dispose();
+                if (!attachmentSession(revision)) return;
+                feedback(result.detail(), result.error());
+                if (result.image() != null) showOriginalImage(request.attachment().name(), result.image());
+            });
+            transferDialog = dialog;
+            dialog.pack();
+            dialog.setLocationRelativeTo(this);
+            dialog.setVisible(true);
+        } catch (IOException ex) {
+            dialog.dispose();
+            feedback(ex.getMessage(), true);
+        }
+    }
+
+    private void closeTransfer() {
+        if (transfer != null) transfer.cancel();
+        if (transferDialog != null) transferDialog.dispose();
+        transfer = null;
+        transferDialog = null;
+    }
+
+    private void showOriginalImage(String filename, java.awt.image.BufferedImage original) {
+        JScrollPane view = new JScrollPane(new JLabel(new ImageIcon(original)));
+        view.setPreferredSize(new Dimension(Math.min(680, original.getWidth() + 18), Math.min(480, original.getHeight() + 18)));
+        ChatTheme.scroll(view, false);
+        ChatTheme.apply(view, ThemePalette.of(appearance));
+        JOptionPane.showMessageDialog(this, view, filename, JOptionPane.PLAIN_MESSAGE);
+    }
+
     private void recoverMessage(ConversationStore.Entry entry) {
         ConversationId selected = store.selectedId();
         long revision = sessionRevision;
@@ -435,6 +585,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         restoringDraft = true;
         try { input.setText(store.draft()); } finally { restoringDraft = false; }
         send.setEnabled(connectionState == ChatClient.State.CONNECTED && store.canSend());
+        attach.setEnabled(send.isEnabled());
+        image.setEnabled(send.isEnabled());
         chatSearch.setEnabled(connectionState == ChatClient.State.CONNECTED && !deletingHistory);
         input.setToolTipText(connectionState != ChatClient.State.CONNECTED ? "重新登录后可以继续发送"
                 : store.canSend() ? "消息 · Enter 发送，Shift+Enter 换行" : store.targetLabel());
@@ -481,6 +633,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         } else {
             if (state == ChatClient.State.DISCONNECTED) {
                 sessionRevision++;
+                closeTransfer();
                 store.disconnected();
                 closeProfile();
                 deletingHistory = false; resetHistoryViews(); stopSocial();
@@ -802,6 +955,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     @Override public void onSwitchRegistered(String userId) { onRegistered(userId); }
     @Override public void onSessionReplaced() {
         deletingHistory = false; resetHistoryViews(); stopSocial();
+        closeTransfer();
         sessionRevision++; closeProfile(); store.useIdentity(""); input.setText(""); search.setText("");
     }
     @Override public void onProfile(UserProfile value) {
@@ -907,6 +1061,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         } catch (IOException | RuntimeException ex) { showError(ex.getMessage()); }
     }
     private void logout() {
+        closeTransfer();
         client.cancelSwitch();
         client.disconnect(); connectionState = ChatClient.State.DISCONNECTED; signedInAddress = null;
         closeProfile(); profile = null; identity.showProfile(null);
@@ -1241,8 +1396,6 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             catch (IOException ex) { feedback("外观已应用，但本地保存失败：" + ex.getMessage(), true); }
         }
     }
-    /** Integration point for later attachment/emoji/friend features; does not send fake wire requests. */
-    private void showPendingTool(String feature) { feedback(feature + "尚未接入；当前支持纯文本消息", false); }
     private static Action action(Runnable callback) { return new AbstractAction() { @Override public void actionPerformed(ActionEvent e) { callback.run(); } }; }
     private static DocumentListener changed(Runnable task) {
         return new DocumentListener() {

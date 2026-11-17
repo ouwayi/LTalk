@@ -9,6 +9,22 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 class FileDialogsTest {
+    @Test void imagePickerRejectsNonImagesAndAttachmentPickerAcceptsBoth() throws Exception {
+        for (Path candidate : new Path[]{Path.of("report.pdf"), Path.of("photo.PNG")}) {
+            for (var kind : new FileDialogs.Kind[]{FileDialogs.Kind.CHAT_IMAGE, FileDialogs.Kind.FILE}) {
+                var selection = new CompletableFuture<Object>();
+                FileDialogs dialogs = new FileDialogs((owner, actual) -> {
+                    assertEquals(kind, actual);
+                    return candidate;
+                });
+                SwingUtilities.invokeAndWait(() -> dialogs.choose(null, kind, selection::complete, selection::complete));
+                Object result = selection.get(4, TimeUnit.SECONDS);
+                if (kind == FileDialogs.Kind.CHAT_IMAGE && candidate.toString().endsWith("pdf"))
+                    assertTrue(result instanceof String text && text.contains("请选择"));
+                else assertEquals(candidate, result);
+            }
+        }
+    }
     @Test void selectedTypeDeterminesExtensionWithoutLosingCustomNames() {
         assertEquals(Path.of("中文 名称.csv"), FileDialogs.exportPath(Path.of("中文 名称.json"), "csv"));
         assertEquals(Path.of("中文 名称.json"), FileDialogs.exportPath(Path.of("中文 名称"), "json"));

@@ -6,7 +6,7 @@ import java.awt.geom.*;
 
 /** Small vector icons stay sharp at desktop display scaling, without remote or font assets. */
 public record LineIcon(Kind kind, Color color, int size) implements Icon {
-    public enum Kind { MENU, COMPOSE, SEARCH, MORE, SEND, ATTACH, EMOJI, BACK, COPY, CLOSE, USERS, LOGOUT, CHECK, SETTINGS, PALETTE, SUN, MOON }
+    public enum Kind { MENU, COMPOSE, SEARCH, MORE, SEND, ATTACH, IMAGE, EMOJI, BACK, COPY, CLOSE, USERS, LOGOUT, CHECK, SETTINGS, PALETTE, SUN, MOON }
     @Override public int getIconWidth() { return size; }
     @Override public int getIconHeight() { return size; }
     @Override public void paintIcon(Component component, Graphics graphics, int x, int y) {
@@ -32,6 +32,11 @@ public record LineIcon(Kind kind, Color color, int size) implements Icon {
                 p.lineTo(5, 6); p.curveTo(5, 0, 14, 0, 14, 6); p.lineTo(14, 16); p.curveTo(14, 20, 9, 20, 9, 16); p.lineTo(9, 6); g.draw(p);
             }
             case EMOJI -> { g.drawOval(2, 2, 20, 20); g.fillOval(7, 7, 2, 2); g.fillOval(15, 7, 2, 2); g.drawArc(6, 8, 12, 10, 200, 140); }
+            case IMAGE -> {
+                g.drawRoundRect(2, 3, 20, 18, 4, 4);
+                g.drawOval(6, 7, 4, 4);
+                g.drawPolyline(new int[]{3, 9, 13, 17, 21}, new int[]{17, 12, 16, 11, 16}, 5);
+            }
             case BACK -> { line(g, 20, 12, 4, 12); line(g, 4, 12, 11, 5); line(g, 4, 12, 11, 19); }
             case COPY -> {
                 g.drawRoundRect(8, 7, 12, 14, 3, 3);

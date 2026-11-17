@@ -28,12 +28,14 @@ public final class ChatServer implements AutoCloseable {
     private AccountStore accounts;
     private ChatArchive archive;
     private SocialStore social;
+    private AttachmentStore attachments;
     private java.nio.file.Path dataDirectory;
     private java.nio.channels.FileChannel dataLockChannel;
     private java.nio.channels.FileLock dataLock;
     public AccountStore accounts() { return accounts; }
     ChatArchive archive() { return archive; }
     SocialStore social() { return social; }
+    AttachmentStore attachments() { return attachments; }
     public synchronized void dataDirectory(java.nio.file.Path path) {
         if (listener != null) throw new IllegalStateException("启动后不能更改数据目录");
         dataDirectory = path;
@@ -110,6 +112,7 @@ public final class ChatServer implements AutoCloseable {
             archive = new ChatArchive(dataDirectory.resolve("history"));
             social = new SocialStore(dataDirectory.resolve("social.json"), archive);
             archive.social(social);
+            attachments = new AttachmentStore(this, dataDirectory.resolve("attachments"));
         } catch (IOException | RuntimeException ex) {
             dataLockChannel.close(); throw new IOException("无法打开服务端数据目录", ex);
         }
@@ -146,6 +149,10 @@ public final class ChatServer implements AutoCloseable {
         SSLSocket tls = TlsTransport.layer(raw, publicAccess.tls(), raw.getInetAddress().getHostAddress(), false);
         tls.startHandshake();
         return tls;
+    }
+
+    ScheduledFuture<?> transferDeadline(ClientSession session) {
+        return deadlines.schedule(() -> session.close("文件传输超时"), Attachment.TRANSFER_SECONDS, TimeUnit.SECONDS);
     }
 
     void greeted(ClientSession session) {
@@ -263,6 +270,7 @@ public final class ChatServer implements AutoCloseable {
     }
 
     void sessionClosed(ClientSession session, String reason) {
+        attachments.cancel(session, null);
         Message list = registry.remove(session);
         synchronized (this) {
             if (sessions.remove(session)) {

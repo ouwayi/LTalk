@@ -53,9 +53,10 @@ final class ChatArchive {
         boolean groupMessage = type == MessageType.GROUP_MESSAGE;
         String conversation = groupMessage ? Objects.requireNonNullElse(request.conversationId(), ConversationScope.PUBLIC)
                 : ConversationScope.privateChat(sender, request.to());
-        String id = UUID.randomUUID().toString();
+        String id = request.attachment() == null ? UUID.randomUUID().toString() : request.messageId();
         ChatRecord record = new ChatRecord(id, conversation, sender,
-                groupMessage ? null : request.to(), request.content(), type.name(), now.toString(), request.replyTo());
+                groupMessage ? null : request.to(), request.content(), type.name(), now.toString(), request.replyTo(),
+                request.attachment());
         byte[] line = (gson.toJson(record) + "\n").getBytes(StandardCharsets.UTF_8);
         if (groupMessage) {
             Path journal = ConversationScope.PUBLIC.equals(conversation) ? publicJournal : groupJournal(ConversationScope.groupId(conversation));
@@ -76,19 +77,24 @@ final class ChatArchive {
         }
         return Message.of(type).requestId(request.requestId()).from(sender).nickname(nickname).to(record.recipient())
                 .content(record.content()).serverTime(record.sentAt()).messageId(id).conversationId(conversation)
-                .replyTo(record.replyTo()).build();
+                .replyTo(record.replyTo()).attachment(record.attachment()).build();
     }
 
     void requireVisibleReply(String user, String scope, String replyTo) throws IOException {
         if (replyTo == null) return;
-        ConversationScope.uuid(replyTo);
+        if (visibleRecord(user, scope, replyTo) == null)
+            throw new ProtocolException("NOT_FOUND", "引用的原消息在当前会话中不可查看");
+    }
+
+    ChatRecord visibleRecord(String user, String scope, String id) throws IOException {
+        ConversationScope.uuid(id);
         try (Cursor rows = openNewest(user, scope)) {
             ChatRecord row;
             while ((row = rows.next()) != null) {
-                if (replyTo.equals(row.messageId())) return;
+                if (id.equals(row.messageId())) return row;
             }
         }
-        throw new ProtocolException("NOT_FOUND", "引用的原消息在当前会话中不可查看");
+        return null;
     }
     synchronized Cursor open(String user) throws IOException {
         return open(user, null);

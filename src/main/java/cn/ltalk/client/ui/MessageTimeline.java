@@ -1,6 +1,8 @@
 package cn.ltalk.client.ui;
 
 import cn.ltalk.client.ContactProfile;
+import cn.ltalk.common.Attachment;
+import cn.ltalk.common.ChatImage;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.text.DefaultCaret;
@@ -14,6 +16,7 @@ import java.util.IdentityHashMap;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /** Selectable, plain-text bubbles. Layout measures against viewport width, including narrow windows. */
@@ -35,6 +38,7 @@ public final class MessageTimeline extends JScrollPane {
     private Consumer<ConversationStore.Entry> onRecover = entry -> { };
     private Consumer<ConversationStore.Entry> onReply = entry -> { };
     private Consumer<String> onCopy = text -> { }, onLocate = id -> { };
+    private BiConsumer<ConversationStore.Entry, Boolean> onAttachment = (entry, preview) -> { };
     private boolean deletionEnabled, replyEnabled;
     public void deletion(boolean enabled, Consumer<ConversationStore.Entry> action) { deletionEnabled = enabled; onDelete = action; }
     public void onRecover(Consumer<ConversationStore.Entry> action) { onRecover = action; }
@@ -44,6 +48,7 @@ public final class MessageTimeline extends JScrollPane {
         onLocate = locate;
     }
     public void quoting(boolean enabled) { replyEnabled = enabled; }
+    public void attachmentActions(BiConsumer<ConversationStore.Entry, Boolean> action) { onAttachment = action; }
 
     public MessageTimeline() {
         super(); setName("timeline"); setViewportView(column); ChatTheme.scroll(this, true);
@@ -85,7 +90,7 @@ public final class MessageTimeline extends JScrollPane {
         column.removeAll(); column.avatarGroups.clear(); unreadDivider = null; renderGeneration++;
         String needle = query.strip().toLowerCase(Locale.ROOT);
         StringBuilder plain = new StringBuilder();
-        renderEntries(entries, self, needle, palette, previous, plain);
+        renderEntries(entries, self, needle, palette, previous, plain, connected);
         if (column.getComponentCount() == 0) {
             column.add(new EmptyState(needle.isEmpty() ? "从一句问候开始" : "没有找到消息",
                     needle.isEmpty() ? connected ? "发送消息，与伙伴保持联系" : "连接到聊天室，开始你的第一次对话" : "试试其他关键词", palette));
@@ -106,7 +111,7 @@ public final class MessageTimeline extends JScrollPane {
     }
 
     private void renderEntries(List<ConversationStore.Entry> entries, String self, String needle, ThemePalette palette,
-                               Map<ConversationStore.Entry, Component> previous, StringBuilder plain) {
+                               Map<ConversationStore.Entry, Component> previous, StringBuilder plain, boolean connected) {
         ZoneId zone = ZoneId.systemDefault();
         LocalDate today = LocalDate.now(zone), previousDate = null, shownDate = null;
         ConversationStore.Entry prior = null;
@@ -145,12 +150,15 @@ public final class MessageTimeline extends JScrollPane {
                 boolean own = entry.from().equals(self);
                 BubbleRow bubble = row == null ? new BubbleRow(entry, own, palette,
                         () -> onDelete.accept(entry), () -> onRecover.accept(entry), () -> onReply.accept(entry),
-                        () -> onCopy.accept(entry.content()), () -> onLocate.accept(entry.replyTo())) : (BubbleRow) row;
+                        () -> onCopy.accept(entry.content()), () -> onLocate.accept(entry.replyTo()),
+                        () -> onAttachment.accept(entry, true), () -> onAttachment.accept(entry, false)) : (BubbleRow) row;
                 bubble.setDisplayName(displayName);
                 bubble.located(highlightedId != null && highlightedId.equals(entry.messageId()));
                 bubble.startsRun(!shownInRun);
                 bubble.delete.setEnabled(deletionEnabled && entry.messageId() != null);
                 bubble.reply.setEnabled(replyEnabled && entry.messageId() != null);
+                if (bubble.download != null) bubble.download.setEnabled(connected);
+                if (bubble.preview != null) bubble.preview.setEnabled(connected);
                 if (entry.replyTo() != null) bubble.quoteLabel(quoteText(originals.get(entry.replyTo())));
                 if (!own) {
                     if (avatar == null) {
@@ -334,14 +342,14 @@ public final class MessageTimeline extends JScrollPane {
         private final JPanel bodyStack;
         private final JLabel sender;
         private final JMenuItem delete, reply;
-        private final JButton quote;
+        private final JButton quote, preview, download;
         private final JPanel footer = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
         private Dimension measured;
         private int measuredWidth = -1;
         private boolean startsRun = true;
         private boolean located;
         BubbleRow(ConversationStore.Entry entry, boolean own, ThemePalette palette, Runnable onDelete, Runnable onRecover,
-                  Runnable onReply, Runnable onCopy, Runnable onLocate) {
+                  Runnable onReply, Runnable onCopy, Runnable onLocate, Runnable onPreview, Runnable onDownload) {
             super(null); this.own = own; setOpaque(false);
             bubble = new ChatTheme.RoundedPanel(new BorderLayout(0, 3), 20, own ? palette.outgoing() : palette.surface(), true);
             bubble.setBorder(new EmptyBorder(9, 13, 7, 13));
@@ -352,24 +360,40 @@ public final class MessageTimeline extends JScrollPane {
             actions.addSeparator();
             delete = actions.action("deleteMessage", "删除这条记录（仅本人）", LineIcon.Kind.CLOSE, onDelete);
             body.setComponentPopupMenu(actions); bubble.setComponentPopupMenu(actions); setComponentPopupMenu(actions);
-            if (entry.replyTo() != null) {
+            Attachment attachment = entry.attachment();
+            boolean image = attachment != null && attachment.kind() == Attachment.Kind.IMAGE;
+            if (entry.replyTo() != null || image) {
                 bodyStack = new JPanel(new BorderLayout(0, 4));
                 bodyStack.setOpaque(false);
                 bodyStack.setInheritsPopupMenu(true);
                 bodyStack.add(body, BorderLayout.CENTER);
-                quote = ChatTheme.pill("");
-                quote.setName("quoteLink");
-                quote.putClientProperty("html.disable", true);
-                quote.setHorizontalAlignment(SwingConstants.LEADING);
-                quote.setBorder(new EmptyBorder(4, 8, 4, 8));
-                quote.addActionListener(e -> onLocate.run());
-                quote.setComponentPopupMenu(actions);
-                ChatTheme.apply(quote, palette);
-                bodyStack.add(quote, BorderLayout.NORTH);
+                if (entry.replyTo() != null) {
+                    quote = ChatTheme.pill("");
+                    quote.setName("quoteLink");
+                    quote.putClientProperty("html.disable", true);
+                    quote.setHorizontalAlignment(SwingConstants.LEADING);
+                    quote.setBorder(new EmptyBorder(4, 8, 4, 8));
+                    quote.addActionListener(e -> onLocate.run());
+                    quote.setComponentPopupMenu(actions);
+                    ChatTheme.apply(quote, palette);
+                    bodyStack.add(quote, BorderLayout.NORTH);
+                } else quote = null;
+                if (image) {
+                    preview = ChatTheme.pill("查看原图");
+                    preview.setName("previewImage");
+                    preview.setPreferredSize(new Dimension(118, 110));
+                    preview.setToolTipText("查看原图");
+                    preview.addActionListener(e -> onPreview.run());
+                    preview.setComponentPopupMenu(actions);
+                    ChatTheme.apply(preview, palette);
+                    bodyStack.add(preview, BorderLayout.SOUTH);
+                    loadThumbnail(preview, attachment.thumbnail());
+                } else preview = null;
                 bubble.add(bodyStack, BorderLayout.CENTER);
             } else {
                 bodyStack = null;
                 quote = null;
+                preview = null;
                 bubble.add(body, BorderLayout.CENTER);
             }
             sender = ChatTheme.label("", 12, avatarColor(entry.from(), palette.dark()), true);
@@ -391,6 +415,15 @@ public final class MessageTimeline extends JScrollPane {
             footer.setInheritsPopupMenu(true);
             stamp.setInheritsPopupMenu(true);
             footer.add(stamp);
+            if (attachment != null) {
+                download = ChatTheme.pill("保存");
+                download.setName("saveAttachment");
+                download.setBorder(new EmptyBorder(2, 5, 2, 5));
+                download.setToolTipText("保存文件 · " + attachment.size() + " 字节");
+                download.addActionListener(e -> onDownload.run());
+                ChatTheme.apply(download, palette);
+                footer.add(download);
+            } else download = null;
             if (status == ConversationStore.SendStatus.FAILED || status == ConversationStore.SendStatus.UNCONFIRMED) {
                 JButton recover = ChatTheme.pill("取回正文");
                 recover.setName("recoverMessage");
@@ -402,6 +435,22 @@ public final class MessageTimeline extends JScrollPane {
                 footer.add(recover);
             }
             bubble.add(footer, BorderLayout.SOUTH); add(bubble);
+        }
+        private static void loadThumbnail(JButton button, String thumbnail) {
+            if (thumbnail == null) return;
+            new SwingWorker<ImageIcon, Void>() {
+                @Override protected ImageIcon doInBackground() throws Exception {
+                    return new ImageIcon(ChatImage.decodeThumbnail(thumbnail));
+                }
+                @Override protected void done() {
+                    try {
+                        button.setIcon(get());
+                        button.setText("");
+                        button.getAccessibleContext().setAccessibleName("查看原图");
+                    } catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
+                    catch (java.util.concurrent.ExecutionException ignored) { /* Keep the original-image action. */ }
+                }
+            }.execute();
         }
         void quoteLabel(String label) {
             if (label.equals(quote.getText())) return;
@@ -433,6 +482,7 @@ public final class MessageTimeline extends JScrollPane {
             int maximum = Math.max(120, Math.min(560, availableWidth - 86));
             int natural = Math.max(100, body.naturalWidth() + 34);
             if (quote != null) natural = Math.max(natural, quote.getPreferredSize().width + 26);
+            if (preview != null) natural = Math.max(natural, preview.getPreferredSize().width + 26);
             natural = Math.max(natural, footer.getPreferredSize().width + 26);
             boolean showSender = !own && startsRun;
             if (showSender) natural = Math.max(natural, sender.getPreferredSize().width + 26);
@@ -440,6 +490,7 @@ public final class MessageTimeline extends JScrollPane {
             body.setSize(Math.max(70, width - 26), Short.MAX_VALUE);
             int height = body.getPreferredSize().height + footer.getPreferredSize().height + 22
                     + (showSender ? sender.getPreferredSize().height + 3 : 0) + (quote != null ? quote.getPreferredSize().height + 4 : 0);
+            if (preview != null) height += preview.getPreferredSize().height + 4;
             measuredWidth = availableWidth; measured = new Dimension(width, Math.max(52, height)); return measured;
         }
         @Override public void doLayout() {
