@@ -29,6 +29,7 @@ class ConversationStoreTest {
     }
     private ConversationStore store() {
         ConversationStore store = new ConversationStore(); store.useIdentity("alice");
+        store.updateSocial(List.of(SocialItem.user(SocialItem.Kind.PRIVATE_ALLOWED, "bob", "bob")));
         store.updateUsers(List.of("alice", "bob", "carol")); return store;
     }
     private Message event(MessageType type, String from, String to, String content) {

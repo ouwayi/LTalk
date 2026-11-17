@@ -3,6 +3,7 @@ package cn.ltalk.server;
 import cn.ltalk.common.*;
 
 import java.io.IOException;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -17,7 +18,8 @@ final class MessageRouter {
     MessageRouter(ChatServer server, SessionRegistry registry) { this.server = server; this.registry = registry; }
 
     void handle(ClientSession session, Message request) {
-        if (request.type() == MessageType.GROUP_SEND || request.type() == MessageType.PRIVATE_SEND || request.type() == MessageType.HISTORY_DELETE) {
+        if (request.type() == MessageType.GROUP_SEND || request.type() == MessageType.PRIVATE_SEND
+                || request.type() == MessageType.HISTORY_DELETE || request.type() == MessageType.SOCIAL_REQUEST) {
             // A deleted record's earlier live delivery must not overtake the deletion acknowledgement.
             synchronized (mutationOrder) { handleRequest(session, request); }
         } else handleRequest(session, request);
@@ -59,6 +61,7 @@ final class MessageRouter {
                 case EXPORT_REQUEST -> export(session, request);
                 case HISTORY_REQUEST -> history(session, request);
                 case HISTORY_VIEW_REQUEST -> historyView(session, request);
+                case SOCIAL_REQUEST -> social(session, request);
                 case HISTORY_DELETE -> {
                     Validation.requestId(request.requestId()); ownArchive(session, request);
                     server.archive().delete(session.userId, request.conversationId(), request.messageId());
@@ -91,7 +94,10 @@ final class MessageRouter {
                 }
                 case GROUP_SEND -> {
                     validateChat(request);
-                    var recipients = registry.readySessions();
+                    String scope = request.conversationId();
+                    Set<String> members = scope == null || ConversationScope.PUBLIC.equals(scope) ? null
+                            : server.social().members(ConversationScope.groupId(scope), session.userId);
+                    var recipients = registry.readySessions().stream().filter(peer -> members == null || members.contains(peer.userId)).toList();
                     Message event = server.archive().record(MessageType.GROUP_MESSAGE, session.userId, server.accounts().nickname(session.userId), request,
                             List.of());
                     server.broadcast(event, recipients);
@@ -103,11 +109,13 @@ final class MessageRouter {
                     if (request.to().equals(session.userId))
                         throw new ProtocolException("SELF_PRIVATE_NOT_ALLOWED", "不能给自己发私聊");
                     ClientSession target = registry.findReady(request.to());
-                    if (target == null)
-                        throw new ProtocolException("USER_OFFLINE", "目标用户不在线，请重新选择");
+                    if (target == null && !server.social().friends(session.userId, request.to()))
+                        throw new ProtocolException("USER_OFFLINE", "对方离线，只能给好友发送离线消息");
+                    if (!server.social().privateAllowed(session.userId, request.to()))
+                        throw new ProtocolException("PRIVATE_FORBIDDEN", "请先取得私聊许可或成为好友");
                     Message event = server.archive().record(MessageType.PRIVATE_MESSAGE, session.userId, server.accounts().nickname(session.userId), request,
-                            List.of(session.userId, target.userId));
-                    if (!server.deliver(target, event))
+                            List.of(session.userId, request.to()));
+                    if (target != null && !server.deliver(target, event))
                         throw new ProtocolException("DELIVERY_UNCONFIRMED", "私聊写入中断，消息可能已归档，请核对记录");
                     server.deliver(session, event);
                 }
@@ -184,6 +192,55 @@ final class MessageRouter {
     private static void ownArchive(ClientSession session, Message request) throws ProtocolException {
         if (request.userId() != null && !request.userId().equals(session.userId))
             throw new ProtocolException("FORBIDDEN", "只能操作本人聊天记录");
+    }
+
+    private void social(ClientSession session, Message request) throws IOException {
+        Validation.requestId(request.requestId());
+        if (request.userId() != null && !session.userId.equals(request.userId()))
+            throw new ProtocolException("FORBIDDEN", "只能操作当前账号");
+        SocialAction action;
+        try { action = SocialAction.valueOf(request.socialAction()); }
+        catch (IllegalArgumentException | NullPointerException ex) {
+            throw new ProtocolException("BAD_MESSAGE", "无效的社交操作");
+        }
+        List<SocialItem> rows;
+        switch (action) {
+            case STATE -> rows = server.social().items(session.userId, server.accounts());
+            case FIND_GROUP -> rows = server.social().directory(request.content(), session.userId);
+            case FIND_USER -> {
+                String user = SocialStore.existingUser(server.accounts(), request.to());
+                rows = List.of(SocialItem.user(SocialItem.Kind.USER, user, server.accounts().nickname(user)));
+            }
+            default -> {
+                Set<String> affected = server.social().change(session.userId, action, request, server.accounts(),
+                        user -> registry.findReady(user) != null);
+                server.deliver(session, Message.of(MessageType.SOCIAL_END).requestId(request.requestId()).build());
+                String notice = switch (action) {
+                    case FRIEND_ACCEPT -> "好友申请已获接受";
+                    case FRIEND_REJECT -> "好友申请已被拒绝";
+                    case PRIVATE_ACCEPT -> "私聊请求已获接受";
+                    case PRIVATE_REJECT -> "私聊请求已被拒绝";
+                    default -> null;
+                };
+                for (String user : affected) {
+                    ClientSession peer = registry.findReady(user);
+                    if (peer != null) server.deliver(peer, Message.of(MessageType.SOCIAL_CHANGED)
+                            .message(peer == session ? null : notice).build());
+                }
+                return;
+            }
+        }
+        String cursor = request.cursor();
+        if (cursor != null && cursor.length() > 80) throw new ProtocolException("BAD_MESSAGE", "无效查询游标");
+        List<SocialItem> page = rows.stream().filter(row -> cursor == null || row.key().compareTo(cursor) > 0)
+                .sorted(Comparator.comparing(SocialItem::key)).limit(SocialAction.PAGE_SIZE + 1L).toList();
+        int count = Math.min(SocialAction.PAGE_SIZE, page.size());
+        for (int i = 0; i < count; i++) {
+            if (!server.deliver(session, Message.of(MessageType.SOCIAL_ROW).requestId(request.requestId()).socialItem(page.get(i)).build()))
+                return;
+        }
+        server.deliver(session, Message.of(MessageType.SOCIAL_END).requestId(request.requestId())
+                .cursor(page.size() > count ? page.get(count - 1).key() : null).build());
     }
     private void history(ClientSession session, Message request) throws IOException {
         Validation.requestId(request.requestId()); ownArchive(session, request);

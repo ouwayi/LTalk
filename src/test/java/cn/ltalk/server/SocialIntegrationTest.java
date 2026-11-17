@@ -1,0 +1,223 @@
+package cn.ltalk.server;
+
+import cn.ltalk.common.*;
+import cn.ltalk.support.Peer;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.function.Consumer;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+@Timeout(40)
+class SocialIntegrationTest {
+    @TempDir Path data;
+
+    @Test void offlineFriendRequestAndMessagesPersistAndStrangerConsentIsSeparate() throws Exception {
+        try (ChatServer server = start(); Peer alice = Peer.login(server.port(), "alice")) {
+            server.accounts().register("bob", "Bob", "test123!", false);
+            assertEquals("Bob", ok(alice, SocialAction.FIND_USER, m -> m.to("bob")).get(0).title());
+            assertEquals("USER_OFFLINE", call(alice, SocialAction.PRIVATE_REQUEST, m -> m.to("bob")).error);
+            ok(alice, SocialAction.FRIEND_REQUEST, m -> m.to("bob"));
+            assertEquals("REQUEST_PENDING", call(alice, SocialAction.FRIEND_REQUEST, m -> m.to("bob")).error);
+        }
+        try (ChatServer server = start(); Peer alice = Peer.login(server.port(), "alice")) {
+            try (Peer bob = Peer.login(server.port(), "bob"); Peer carol = Peer.login(server.port(), "carol")) {
+                alice.privateTo("bob", "no permission yet");
+                alice.error("PRIVATE_FORBIDDEN");
+                SocialItem incoming = item(bob, SocialItem.Kind.FRIEND_IN, "alice");
+                assertEquals("FORBIDDEN", call(carol, SocialAction.FRIEND_ACCEPT, b -> b.messageId(incoming.id())).error);
+                ok(bob, SocialAction.FRIEND_REJECT, m -> m.messageId(incoming.id()));
+                assertTrue(ok(alice, SocialAction.STATE, b -> {}).stream().noneMatch(row -> row.kind() == SocialItem.Kind.FRIEND_OUT));
+                ok(alice, SocialAction.PRIVATE_REQUEST, m -> m.to("bob"));
+                assertEquals("REQUEST_PENDING", call(bob, SocialAction.PRIVATE_REQUEST, m -> m.to("alice")).error);
+                SocialItem consent = item(bob, SocialItem.Kind.PRIVATE_IN, "alice");
+                ok(bob, SocialAction.PRIVATE_REJECT, m -> m.messageId(consent.id()));
+                alice.privateTo("bob", "still no permission");
+                alice.error("PRIVATE_FORBIDDEN");
+                ok(alice, SocialAction.PRIVATE_REQUEST, m -> m.to("bob"));
+                ok(bob, SocialAction.PRIVATE_ACCEPT, m -> m.messageId(itemId(bob, SocialItem.Kind.PRIVATE_IN, "alice")));
+                assertNotNull(item(alice, SocialItem.Kind.PRIVATE_ALLOWED, "bob"));
+                assertTrue(ok(alice, SocialAction.STATE, b -> {}).stream().noneMatch(row -> row.kind() == SocialItem.Kind.FRIEND));
+                alice.privateTo("bob", "approved online message");
+                alice.type(MessageType.PRIVATE_MESSAGE);
+                assertEquals("approved online message", bob.type(MessageType.PRIVATE_MESSAGE).content());
+                ok(alice, SocialAction.FRIEND_REQUEST, m -> m.to("bob"));
+                ok(bob, SocialAction.FRIEND_ACCEPT, m -> m.messageId(itemId(bob, SocialItem.Kind.FRIEND_IN, "alice")));
+            }
+            alice.users(1);
+            alice.privateTo("bob", "saved while offline");
+            assertEquals("saved while offline", alice.type(MessageType.PRIVATE_MESSAGE).content());
+        }
+        try (ChatServer server = start(); Peer bob = Peer.login(server.port(), "bob")) {
+            assertNotNull(item(bob, SocialItem.Kind.FRIEND, "alice"));
+            String scope = ConversationScope.privateChat("alice", "bob");
+            assertEquals(List.of("approved online message", "saved while offline"), export(bob, scope));
+            ok(bob, SocialAction.FRIEND_REMOVE, m -> m.to("alice"));
+            bob.privateTo("alice", "offline stranger again");
+            bob.error("USER_OFFLINE");
+            assertEquals(List.of("approved online message", "saved while offline"), export(bob, scope));
+            try (Peer alice = Peer.login(server.port(), "alice")) {
+                ok(bob, SocialAction.PRIVATE_BLOCK, m -> m.to("alice"));
+                alice.privateTo("bob", "blocked");
+                alice.error("PRIVATE_FORBIDDEN");
+                assertEquals("PRIVATE_FORBIDDEN", call(alice, SocialAction.PRIVATE_REQUEST, m -> m.to("bob")).error);
+                ok(bob, SocialAction.PRIVATE_UNBLOCK, m -> m.to("alice"));
+                ok(alice, SocialAction.PRIVATE_REQUEST, m -> m.to("bob"));
+                assertNotNull(item(bob, SocialItem.Kind.PRIVATE_IN, "alice"));
+            }
+        }
+    }
+
+    @Test void groupsEnforceReviewInvitationRolesAndHistoryWindowsAcrossRestart() throws Exception {
+        String scope;
+        try (ChatServer server = start(); Peer alice = Peer.login(server.port(), "alice"); Peer bob = Peer.login(server.port(), "bob");
+             Peer carol = Peer.login(server.port(), "carol"); Peer dave = Peer.login(server.port(), "dave")) {
+            ok(alice, SocialAction.GROUP_CREATE, b -> b.nickname("设计组").content("REVIEW"));
+            SocialItem group = ok(bob, SocialAction.FIND_GROUP, b -> b.content("设计")).get(0);
+            assertFalse(group.member());
+            scope = ConversationScope.group(group.group());
+            String groupScope = scope;
+            groupChat(bob, scope, "before joining");
+            bob.error("FORBIDDEN");
+            assertHistoryDenied(bob, scope);
+            for (int i = 1; i <= 104; i++) {
+                groupChat(alice, scope, "group-" + i);
+                assertEquals(scope, alice.type(MessageType.GROUP_MESSAGE).conversationId());
+            }
+            bob.assertNo(m -> m.type() == MessageType.GROUP_MESSAGE, 45);
+            ok(bob, SocialAction.GROUP_REQUEST, m -> m.conversationId(groupScope));
+            String pending = item(alice, SocialItem.Kind.JOIN_IN, "bob").id();
+            assertEquals("FORBIDDEN", call(carol, SocialAction.GROUP_APPROVE, m -> m.messageId(pending)).error);
+            ok(alice, SocialAction.GROUP_REJECT, m -> m.messageId(pending));
+            assertHistoryDenied(bob, scope);
+            ok(bob, SocialAction.GROUP_REQUEST, m -> m.conversationId(groupScope));
+            ok(alice, SocialAction.GROUP_APPROVE, m -> m.messageId(itemId(alice, SocialItem.Kind.JOIN_IN, "bob")));
+            List<String> first = export(bob, scope);
+            assertEquals(100, first.size());
+            assertEquals("group-5", first.get(0));
+            assertEquals("group-104", first.get(99));
+            bob.send(Message.of(MessageType.HISTORY_VIEW_REQUEST).requestId("newest").historyMode("MESSAGES").conversationId(scope).build());
+            assertEquals("group-104", bob.type(MessageType.HISTORY_VIEW_ROW).record().content());
+            bob.type(MessageType.HISTORY_VIEW_END);
+
+            befriend(alice, carol, "alice", "carol");
+            ok(alice, SocialAction.GROUP_INVITE, m -> m.conversationId(groupScope).to("carol"));
+            String adminInvite = item(carol, SocialItem.Kind.INVITE_IN, "alice").id();
+            assertHistoryDenied(carol, scope);
+            ok(carol, SocialAction.INVITE_REJECT, m -> m.messageId(adminInvite));
+            assertHistoryDenied(carol, scope);
+            ok(alice, SocialAction.GROUP_INVITE, m -> m.conversationId(groupScope).to("carol"));
+            ok(carol, SocialAction.INVITE_ACCEPT, m -> m.messageId(itemId(carol, SocialItem.Kind.INVITE_IN, "alice")));
+            assertEquals(first, export(carol, scope));
+
+            befriend(bob, dave, "bob", "dave");
+            assertEquals("FORBIDDEN", call(bob, SocialAction.GROUP_INVITE, m -> m.conversationId(groupScope).to("carol")).error);
+            ok(bob, SocialAction.GROUP_INVITE, m -> m.conversationId(groupScope).to("dave"));
+            ok(dave, SocialAction.INVITE_ACCEPT, m -> m.messageId(itemId(dave, SocialItem.Kind.INVITE_IN, "bob")));
+            assertHistoryDenied(dave, scope);
+            ok(alice, SocialAction.GROUP_APPROVE, m -> m.messageId(itemId(alice, SocialItem.Kind.JOIN_IN, "dave")));
+            ok(bob, SocialAction.GROUP_LEAVE, m -> m.conversationId(groupScope));
+            groupChat(alice, scope, "post-exit");
+            String afterExit = alice.type(MessageType.GROUP_MESSAGE).messageId();
+            assertEquals("post-exit", carol.type(MessageType.GROUP_MESSAGE).content());
+            assertEquals("post-exit", dave.type(MessageType.GROUP_MESSAGE).content());
+            bob.assertNo(m -> m.type() == MessageType.GROUP_MESSAGE, 45);
+            assertEquals(first, export(bob, scope));
+            bob.send(Message.of(MessageType.HISTORY_VIEW_REQUEST).requestId("locate").historyMode("CONTEXT")
+                    .conversationId(scope).messageId(afterExit).build());
+            bob.error("NOT_FOUND");
+            assertEquals("ADMIN_REQUIRED", call(alice, SocialAction.GROUP_LEAVE, m -> m.conversationId(groupScope)).error);
+            ok(alice, SocialAction.GROUP_TRANSFER, m -> m.conversationId(groupScope).to("carol"));
+            ok(alice, SocialAction.GROUP_LEAVE, m -> m.conversationId(groupScope));
+            ok(carol, SocialAction.GROUP_REVIEW, m -> m.conversationId(groupScope).content("OPEN"));
+            ok(bob, SocialAction.GROUP_REQUEST, m -> m.conversationId(groupScope));
+            assertEquals("post-exit", export(bob, scope).get(100));
+            ok(carol, SocialAction.GROUP_DISBAND, m -> m.conversationId(groupScope));
+            assertTrue(ok(bob, SocialAction.FIND_GROUP, m -> m.content("设计")).isEmpty());
+            groupChat(bob, scope, "after disband");
+            bob.error("NOT_FOUND");
+        }
+        try (ChatServer server = start(); Peer bob = Peer.login(server.port(), "bob")) {
+            SocialItem group = ok(bob, SocialAction.STATE, b -> {}).stream().filter(row -> row.kind() == SocialItem.Kind.GROUP).findFirst().orElseThrow();
+            assertFalse(group.member());
+            assertNull(group.admin());
+            assertEquals(101, export(bob, scope).size());
+            bob.send(Message.of(MessageType.HISTORY_DELETE).requestId("clear").conversationId(scope).build());
+            bob.type(MessageType.HISTORY_DELETED);
+            assertTrue(export(bob, scope).isEmpty());
+        }
+    }
+
+    private ChatServer start() throws IOException {
+        ChatServer server = new ChatServer("127.0.0.1", 0);
+        server.dataDirectory(data);
+        server.start();
+        return server;
+    }
+
+    private static void befriend(Peer first, Peer second, String sender, String receiver) throws IOException {
+        ok(first, SocialAction.FRIEND_REQUEST, m -> m.to(receiver));
+        ok(second, SocialAction.FRIEND_ACCEPT, m -> m.messageId(itemId(second, SocialItem.Kind.FRIEND_IN, sender)));
+    }
+
+    private static String itemId(Peer peer, SocialItem.Kind kind, String other) {
+        try { return item(peer, kind, other).id(); } catch (IOException ex) { throw new AssertionError(ex); }
+    }
+
+    private static SocialItem item(Peer peer, SocialItem.Kind kind, String other) throws IOException {
+        return ok(peer, SocialAction.STATE, b -> {}).stream()
+                .filter(row -> row.kind() == kind && other.equals(row.user())).findFirst().orElseThrow();
+    }
+
+    private record Reply(List<SocialItem> rows, String error) { }
+
+    private static List<SocialItem> ok(Peer peer, SocialAction action, Consumer<Message.Builder> fields) throws IOException {
+        Reply reply = call(peer, action, fields);
+        assertNull(reply.error);
+        return reply.rows;
+    }
+
+    private static Reply call(Peer peer, SocialAction action, Consumer<Message.Builder> fields) throws IOException {
+        String id = UUID.randomUUID().toString();
+        Message.Builder request = Message.of(MessageType.SOCIAL_REQUEST).requestId(id).socialAction(action.name());
+        fields.accept(request);
+        peer.send(request.build());
+        List<SocialItem> result = new ArrayList<>();
+        while (true) {
+            Message frame = peer.await(message -> id.equals(message.requestId()));
+            if (frame.type() == MessageType.SOCIAL_END) return new Reply(result, null);
+            if (frame.type() == MessageType.ERROR) return new Reply(result, frame.code());
+            assertEquals(MessageType.SOCIAL_ROW, frame.type());
+            result.add(frame.socialItem());
+        }
+    }
+
+    private static List<String> export(Peer peer, String scope) throws IOException {
+        List<String> rows = new ArrayList<>();
+        String cursor = null;
+        while (true) {
+            peer.send(Message.of(MessageType.EXPORT_REQUEST).requestId("group-export").conversationId(scope).cursor(cursor).build());
+            Message response = peer.await(message -> "group-export".equals(message.requestId()));
+            if (response.type() == MessageType.EXPORT_END) return rows;
+            assertEquals(MessageType.EXPORT_PAGE, response.type());
+            rows.add(response.record().content());
+            cursor = response.cursor();
+        }
+    }
+
+    private static void groupChat(Peer peer, String scope, String text) throws IOException {
+        peer.send(Message.of(MessageType.GROUP_SEND).requestId("group-chat").conversationId(scope).content(text).build());
+    }
+
+    private static void assertHistoryDenied(Peer peer, String scope) throws IOException {
+        peer.send(Message.of(MessageType.HISTORY_VIEW_REQUEST).requestId("test").conversationId(scope).historyMode("MESSAGES").build());
+        peer.error("FORBIDDEN");
+        peer.send(Message.of(MessageType.EXPORT_REQUEST).requestId("export-denied").conversationId(scope).build());
+        peer.error("FORBIDDEN");
+    }
+}

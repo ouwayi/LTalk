@@ -46,10 +46,17 @@ final class ArchiveView {
     private Page summaries(String user, String after) throws IOException {
         // Keep only one row per conversation and bound the page even for a large contact list.
         TreeMap<String, ChatRecord> rows = new TreeMap<>();
-        if (after == null) {
+        if (after == null || ConversationScope.PUBLIC.compareTo(after) > 0) {
             try (ChatArchive.Cursor recent = archive.openNewest(user, ConversationScope.PUBLIC)) {
                 ChatRecord latest = recent.next();
                 if (latest != null) rows.put(ConversationScope.PUBLIC, latest);
+            }
+        }
+        for (String scope : archive.groupScopes(user)) {
+            if (after != null && scope.compareTo(after) <= 0) continue;
+            try (ChatArchive.Cursor input = archive.openNewest(user, scope)) {
+                ChatRecord newest = input.next();
+                if (newest != null) addSummary(rows, newest);
             }
         }
         try (ChatArchive.Cursor personal = archive.openPersonalNewest(user)) {
@@ -57,13 +64,17 @@ final class ArchiveView {
             while ((row = personal.next()) != null) {
                 String scope = row.conversationId();
                 if (ConversationScope.PUBLIC.equals(scope) || (after != null && scope.compareTo(after) <= 0)) continue;
-                rows.putIfAbsent(scope, row);
-                if (rows.size() > HistoryQuery.PAGE_SIZE + 1) rows.pollLastEntry();
+                addSummary(rows, row);
             }
         }
         boolean more = rows.size() > HistoryQuery.PAGE_SIZE;
         if (more) rows.pollLastEntry();
         return new Page(List.copyOf(rows.values()), more ? rows.lastKey() : null);
+    }
+
+    private static void addSummary(TreeMap<String, ChatRecord> rows, ChatRecord row) {
+        rows.putIfAbsent(row.conversationId(), row);
+        if (rows.size() > HistoryQuery.PAGE_SIZE + 1) rows.pollLastEntry();
     }
 
     private Page messages(ChatArchive.Cursor input, String query) throws IOException {

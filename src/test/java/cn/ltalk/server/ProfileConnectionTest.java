@@ -63,6 +63,7 @@ class ProfileConnectionTest {
                 assertTrue(shared.revision() > initial.revision()); assertNull(shared.createdAt());
                 b.send(Message.of(MessageType.DISPLAY_PROFILE).requestId("fake").userId("alice").nickname("冒名").avatar("").revision(99).build());
                 b.error("BAD_MESSAGE");
+                SocialFixtures.permitPrivate(server, "alice", "bob");
                 a.privateTo("bob", "stable route"); assertEquals("alice", b.type(MessageType.PRIVATE_MESSAGE).from()); a.type(MessageType.PRIVATE_MESSAGE);
                 b.assertNo(m -> m.type() == MessageType.PROFILE_OK, 80);
             }

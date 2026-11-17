@@ -2,6 +2,7 @@ package cn.ltalk.client;
 
 import cn.ltalk.common.*;
 import cn.ltalk.server.ChatServer;
+import cn.ltalk.server.SocialFixtures;
 import cn.ltalk.support.Peer;
 import org.junit.jupiter.api.*;
 import javax.swing.SwingUtilities;
@@ -17,6 +18,8 @@ class ClientSessionsTest {
         Events events = new Events(); ClientSessions sessions = new ClientSessions(events);
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.start(); Peer.seed(server);
+            SocialFixtures.permitPrivate(server, "alice", "watcher");
+            SocialFixtures.permitPrivate(server, "other", "watcher");
             onEdt(() -> sessions.connectServer("127.0.0.1", server.port())); awaitEdt(() -> sessions.authenticationState() == ChatClient.State.SERVER_CONNECTED);
             onEdt(() -> sessions.login("alice", "test123!")); assertEquals("alice", events.profiles.poll(5, TimeUnit.SECONDS).userId());
             try (Peer watcher = Peer.login(server.port(), "watcher")) {

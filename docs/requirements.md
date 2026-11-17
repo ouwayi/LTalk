@@ -13,14 +13,16 @@
 | R-07 边界与协议 | 2000 UTF-16 单元正文、普通帧 16 KiB、指定头像帧 176 KiB，换行转义，错误按连接处理 | MessageCodecTest、ChatServerTest |
 | R-08 清理与手动重连 | EOF/RST/读写失败清理；服务端停止关闭会话；旧连接不能影响新连接 | ChatServerTest / ChatClientTest |
 | R-09 桌面响应 | 后台连接/收发、EDT 更新、连接中禁重复提交、断线禁发送 | ChatClientTest + Swing 人工验收 |
-| R-10 目标离线保护 | 保留私聊会话与草稿，撤销发送许可，目标重新上线后须明确重选 | ConversationStoreTest、ChatWindowTest |
+| R-10 目标离线保护 | 好友可留离线消息。陌生人离线时只可查看旧记录与草稿，重新上线后重选会话 | ConversationStoreTest、ChatWindowTest、SocialIntegrationTest |
 | R-11 资源限制 | 局域网模式默认 20 连接；TLS 模式默认 140 个总连接、24 个未认证连接和单独的认证期限。初始握手 10 秒，HELLO 后心跳保活，逐连接有界发送队列 | ChatServerTest、LoadTest、PublicCapacityTest |
 | R-12 局域网交付 | 跨系统群聊、私聊、上下线；说明真实环境与证据来源 | docs/test-report.md 的 Q16，宿主机＋虚拟机人工通过（用户反馈）；双物理设备未测 |
 | X1 心跳与失联 | HELLO 或直接登录成功后双向 PING/PONG，间隔/响应期限可配置，正常空闲不踢，静默失联清理并允许手动重连 | HeartbeatIntegrationTest / HeartbeatSettingsTest 本机通过；2026-10-28 用户反馈虚拟机断网后自动检测断开正常，实际测试日期/配置/精确耗时未提供 |
 | X2 当前会话导出 | 本人可选择 JSON/CSV、文件名和位置，旧文件覆盖需确认 | AuthenticationExportTest、HistoryExportTest、FileDialogsTest |
 | X3 账号与资料 | 注册登录、资料编辑与同步、本人改密。改密成功后当前会话继续，下次用新密码登录 | AccountFlowTest、ProfileConnectionTest、PasswordChangeTest、ChatWindowTest |
 | X4 授权历史 | 服务端重启后保留本人可见记录，登录恢复会话摘要及当前会话最近一页，上滚取旧记录，搜索可定位到原消息，支持逐条删除或清空本人当前会话 | HistoryPersistenceTest、HistoryClientTest、HistoryStoreTest、ChatWindowTest |
-| X5/X6 | 私聊离线投递和聊天文件传输待实现 | 预留范围见课程任务拆解 |
+| X5 私聊离线投递 | 已互为好友时可发送离线消息，接收人通过本人历史查阅 | SocialIntegrationTest、ChatWindowTest |
+| X6 聊天文件传输 | 待实现 | 预留范围见课程任务拆解 |
+| 好友与独立群组 | 用户名查找、双方确认好友关系、独立私聊许可、加群审核与邀请、管理员移交或解散、授权群历史 | SocialIntegrationTest、ChatWindowTest |
 
 ## 用户流程
 

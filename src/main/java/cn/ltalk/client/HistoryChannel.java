@@ -170,7 +170,10 @@ final class HistoryChannel implements AutoCloseable {
             throw new IOException("历史记录缺少字段");
         Instant.parse(record.sentAt());
         String expected;
-        if ("GROUP_MESSAGE".equals(record.messageType())) expected = ConversationScope.PUBLIC;
+        if ("GROUP_MESSAGE".equals(record.messageType()) && record.recipient() == null) {
+            expected = record.conversationId();
+            if (!ConversationScope.PUBLIC.equals(expected)) ConversationScope.groupId(expected);
+        }
         else if ("PRIVATE_MESSAGE".equals(record.messageType()) && (self.get().equals(record.sender()) || self.get().equals(record.recipient())))
             expected = ConversationScope.privateChat(record.sender(), record.recipient());
         else throw new IOException("历史记录类型或权限无效");

@@ -7,7 +7,7 @@ public record Message(MessageType type, String requestId, String userId, String 
                       String content, String serverTime, List<String> users, Long revision,
                       String code, String message, String nickname, String password, String usernameMode,
                       String messageId, String conversationId, String cursor, ChatRecord record, String avatar, String createdAt,
-                      String newPassword, String historyMode) {
+                      String newPassword, String historyMode, String socialAction, SocialItem socialItem) {
     public Message {
         if (users != null) users = List.copyOf(users);
     }
@@ -25,7 +25,8 @@ public record Message(MessageType type, String requestId, String userId, String 
         private Long revision;
         private String nickname, password, usernameMode, messageId, conversationId, cursor;
         private ChatRecord record;
-        private String avatar, createdAt, newPassword, historyMode;
+        private String avatar, createdAt, newPassword, historyMode, socialAction;
+        private SocialItem socialItem;
 
         private Builder(MessageType type) { this.type = type; }
         public Builder requestId(String value) { requestId = value; return this; }
@@ -49,9 +50,12 @@ public record Message(MessageType type, String requestId, String userId, String 
         public Builder avatar(String value) { avatar = value; return this; }
         public Builder createdAt(String value) { createdAt = value; return this; }
         public Builder historyMode(String value) { historyMode = value; return this; }
+        public Builder socialAction(String value) { socialAction = value; return this; }
+        public Builder socialItem(SocialItem value) { socialItem = value; return this; }
         public Message build() {
             return new Message(type, requestId, userId, from, to, content, serverTime, users, revision, code, message,
-                    nickname, password, usernameMode, messageId, conversationId, cursor, record, avatar, createdAt, newPassword, historyMode);
+                    nickname, password, usernameMode, messageId, conversationId, cursor, record, avatar, createdAt, newPassword,
+                    historyMode, socialAction, socialItem);
         }
     }
 }

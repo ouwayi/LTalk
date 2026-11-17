@@ -21,7 +21,8 @@
 | 连接与登录 | 启动页先连接服务器，再注册或登录。预填地址自动连接，注册成功后自动登录。双向心跳检测静默失联。断线后聊天页可按原地址重新连接，预填原用户名并重新验证密码。同址同账号登录恢复所选会话与窗口内草稿。 |
 | 启动与发现 | Windows 构建附带 `start-client.cmd`。未指定地址时后台查找约 2 秒，一台自动尝试连接，多台可选择。手动地址优先，最近列表保存 6 个通过握手的地址。命令行服务端默认监听发现 UDP 9001，可关闭。 |
 | 公网连接 | TLS 在发送认证数据前校验证书信任链及主机名。公网模式限制接入、未认证连接和认证频率。服务端按连接设置有界发送队列，拥塞时关闭对应连接。提供 Linux 单机服务配置及部署、备份恢复步骤。 |
-| 群聊与私聊 | 单一公共聊天室，私聊仅双方。消息以服务端回显为准，用户路由键为区分大小写的用户名。同名昵称可通过悬停确认用户名。私聊对象离线时保留会话和草稿，重新上线后需明确重选才能发送。 |
+| 好友与私聊 | 按区分大小写的用户名查找账号。好友申请支持离线收取，接收方可接受或拒绝。好友可收离线留言。陌生人聊天需在线发送私聊请求并取得许可，离线时可查看旧记录。可解除好友关系或屏蔽陌生人私聊。 |
+| 群组 | 保留公共聊天室，独立群组支持创建、搜索、申请、审核、邀请、退群、转让管理员和解散。实时消息仅向现有成员投递。每次入群授权当时最近 100 条及此后在群期间消息，退群保留已授权记录。 |
 | 发送反馈 | 本人新消息逐条显示发送中、已确认、发送失败或结果待确认。失败或待确认时可取回正文到输入框。客户端等待匹配的服务端回显，默认 5 秒；迟到回显可更新同一条消息。待确认消息保留在当前窗口，重连后可核对本人归档。 |
 | 账号切换 | 候选使用独立连接，登录成功后才移交并清理旧界面资料。取消或失败保留原会话。退出登录清除窗口内的历史和草稿，服务端本人归档保留。 |
 | 个人信息 | 左下角本人头像 →「个人信息」。能改昵称、上传或重置头像、修改密码。改密码需验证当前密码和确认新密码，成功后本次连接继续，下次使用新密码。 |
@@ -32,7 +33,7 @@
 | 导出 | 当前会话菜单打开另存为，选择 JSON/CSV、文件名和位置。JSON 为合法数组，每条一行。目标文件存在时确认覆盖。Windows 使用原生文件选择器，其他系统使用 Swing 选择器。 |
 | 外观与布局 | 浅色、近黑深色、预设或自选纯色/渐变。拖动色盘或输入 HEX 可预览，外观参数单独保存在本机。聊天小于 760 逻辑像素改单列，启动页小于 660 时改为上下排列并可滚动。 |
 
-附件、表情面板、好友与创建群组入口为占位。离线私聊、自动重连、已读回执、多群、聊天文件传输和找回密码尚未实现。联系人列表展示在线用户和已有会话。
+附件与表情面板入口为占位。自动重连、已读回执、聊天文件传输和找回密码仍在后续范围。会话列表展示群组、好友、在线用户和已有会话。
 
 ## 关键约定
 
@@ -50,11 +51,13 @@
 | common/Message、MessageCodec、MessageType、Validation | 帧、消息模型和输入校验 |
 | common/ConversationScope、UserProfile、AvatarData | 会话键、本人资料、头像格式约束 |
 | server/AccountStore、ChatArchive、ArchiveView | 账号、改密、展示资料、公共共享归档、本人历史、摘要和搜索 |
+| server/SocialStore、common/SocialAction、SocialItem | 好友、私聊许可、请求和群成员的原子保存及协议模型 |
 | server/MessageRouter、ClientSession、SessionRegistry、ChatServer | 握手与认证、会话权限、路由、心跳、连接清理 |
 | common/TlsTransport、server/PublicAccess、SessionOutput | TLS 握手和端点校验、公网准入、逐连接发送队列 |
 | common/LanDiscovery、server/DiscoveryResponder、client/DiscoveryClient、ServerSelection、RecentServers | UDP 发现帧、后台应答与查找、启动页选择、最近地址保存 |
 | client/ChatClient、ClientSessions、HistoryChannel、HistoryExport | 后台连接、候选账号交接、历史分页和导出 |
 | client/ChatWindow、HistorySearchDialog、client/ui/WelcomePanel、ConnectionPanel、AuthenticationPanel | 窗口组装、历史浏览与定位、连接及认证界面 |
+| client/SocialChannel、SocialDialog | 社交请求、好友及群组目录和收件箱 |
 | client/ContactProfile、AvatarImporter、client/ui/ProfileAvatar、ProfilePanel、PasswordChangePanel | 头像导入、展示资料、本人资料编辑及改密 |
 | client/ui/ConversationStore、ConversationId、ConversationList、MessageTimeline、ResponsiveShell | EDT 展示、会话选择、分组气泡与布局 |
 | client/ui/Appearance*、ColorPicker、ChatTheme、ThemePalette、FileDialogs、WindowsFilePicker | 外观与色盘、主题、系统文件对话框 |
@@ -68,6 +71,7 @@
 
 ## 已有验证与后续核对
 
+- 好友、陌生人私聊与群组于 2026-11-17 执行 `build.ps1 -o package`，**125 项通过，0 失败、错误或跳过**，约 2:04。覆盖离线申请与留言、群实时隔离、入群 100 条、退群历史、管理员移交、解散与重启。验证使用本机回环和 Swing，日志 `.tools/social-verified.log`。[测试报告](test-report.md)
 - 按需加载历史与搜索定位于 2026-11-17 执行 `build.ps1 -o package`，**122 项通过，0 失败、错误或跳过**。覆盖回环分页、旧归档、搜索权限、窄屏滚动锚点和定位。构建产物为 `target/ltalk-1.0.0.jar`，日志 `.tools/history-view-verified.log`。[测试报告](test-report.md#按需加载历史与搜索定位2026-11-17阶段-30)
 - 公网阶段于 2026-11-17 完整回归 **120 项通过**，约 1:58。本机 100 个 TLS 客户端连续验证约 180 秒，持续阶段 88,100 次群聊投递、无意外断线。已验证慢端关闭、TLS 证书及主机名拒绝、连接及认证限制、备份复制后恢复、打包 JAR 启动。[测试报告](test-report.md)
 - Windows 启动与发现于 2026-11-16 执行 `build.ps1 -o package`，**116 项通过，0 失败、错误或跳过**，约 1:28。验证包括本机网卡 IPv4 广播与回环去重、打包启动器、关闭发现后的 TCP 握手、窄屏深色启动页。日志为 `.tools/lan-discovery-repeat.log`。跨设备与防火墙配置仍待现场验收。
@@ -75,5 +79,5 @@
 - 发送反馈和重连于 2026-11-16 执行 `powershell -NoProfile -File .\build.ps1 -o package`，**107 项通过，0 失败、错误或跳过**，约 1:25。Windows、JDK 25.0.4、Maven 3.9.9，以 release 17 编译。验证使用回环 TCP、临时数据与 Swing 组件。构建产物为 `target/ltalk-1.0.0.jar`，本机日志为 `.tools/chat-experience-final.log`。
 - 此前功能提交包括 `74aa291` 改密、`d629d5e` 高清头像、`c4840f3` 资料同步、`984cb5b` 消息组头像裁切。各阶段的结果与历史人工反馈见 [测试报告](test-report.md)。
 - 当前 v6 的多设备资料同步等完整流程、独立 JDK 17 自动化回归、各档 DPI、其他客户端系统和长时间负载仍待验收。早期宿主机＋虚拟机的局域网反馈保持原版本归属。
-- 跨账号私聊归档写入没有事务保证。窗口保留已展开的历史页面，JSONL 深页和搜索会扫描归档。改密、资料保存或删除超时可能已生效，可重新登录或重载历史核对。
-- 实机可核对点击发送期间断网、重连后核对归档、离线私聊对象重新上线，以及 v6 多设备资料同步、改密后重登与 256/512 头像上传。后续开发选项见 [路线图](ROADMAP.md)。
+- 跨账号私聊归档写入没有事务保证。JSONL 深页和搜索会扫描归档，社交数据每次修改原子替换 `social.json`。备份须包含该文件及群组日志。改密、资料、历史删除或社交操作超时可能已生效，可刷新或重登核对。
+- 云部署或多设备复测时同步更新两端 JAR，重点核对离线好友留言、请求刷新及群组历史边界。其他现场验证与后续开发选项见 [路线图](ROADMAP.md)。

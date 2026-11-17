@@ -12,33 +12,55 @@ import java.util.*;
 final class ChatArchive {
     private final Path directory;
     private final Path publicJournal;
+    private final Path groupDirectory;
     private final Gson gson = new Gson();
     private Instant last = Instant.MIN;
     private final Map<String, Set<Cursor>> cursors = new HashMap<>();
+    private SocialStore social;
     ChatArchive(Path directory) throws IOException {
         this.directory = directory; Files.createDirectories(directory);
         publicJournal = directory.resolve("public.jsonl");
+        groupDirectory = directory.resolve("groups");
+        Files.createDirectories(groupDirectory);
         Path clock = directory.resolve("last-time");
         if (Files.exists(clock)) {
             try { last = Instant.parse(Files.readString(clock)); }
             catch (RuntimeException ex) { throw new IOException("历史时间元数据损坏", ex); }
         }
     }
+    void social(SocialStore value) { social = value; }
+    Set<String> groupScopes(String user) { return social.groupScopes(user); }
+    synchronized String lastTime() { return last.toString(); }
+    synchronized String groupHistoryStart(String id) throws IOException {
+        ChatRecord oldest = null;
+        try (Journal rows = new Journal(groupJournal(id), true)) {
+            for (int i = 0; i < HistoryQuery.GROUP_JOIN_LIMIT; i++) {
+                ChatRecord row = rows.next();
+                if (row == null) break;
+                oldest = row;
+            }
+        }
+        return oldest == null ? last.plusNanos(1).toString() : oldest.sentAt();
+    }
+
+    private Path groupJournal(String id) { return groupDirectory.resolve(id + ".jsonl"); }
     synchronized Message record(MessageType type, String sender, String nickname, Message request,
                                 Collection<String> recipients) throws IOException {
         Instant now = Instant.now();
         if (!now.isAfter(last)) now = last.plusNanos(1);
         Files.writeString(directory.resolve("last-time"), now.toString());
         last = now;
-        boolean publicMessage = type == MessageType.GROUP_MESSAGE;
-        String conversation = publicMessage ? ConversationScope.PUBLIC : ConversationScope.privateChat(sender, request.to());
+        boolean groupMessage = type == MessageType.GROUP_MESSAGE;
+        String conversation = groupMessage ? Objects.requireNonNullElse(request.conversationId(), ConversationScope.PUBLIC)
+                : ConversationScope.privateChat(sender, request.to());
         String id = UUID.randomUUID().toString();
         ChatRecord record = new ChatRecord(id, conversation, sender,
-                publicMessage ? null : request.to(), request.content(), type.name(), now.toString());
+                groupMessage ? null : request.to(), request.content(), type.name(), now.toString());
         byte[] line = (gson.toJson(record) + "\n").getBytes(StandardCharsets.UTF_8);
-        if (publicMessage) {
+        if (groupMessage) {
+            Path journal = ConversationScope.PUBLIC.equals(conversation) ? publicJournal : groupJournal(ConversationScope.groupId(conversation));
             // Keep the previous readable prefix if an append fails partway.
-            try (RandomAccessFile file = new RandomAccessFile(publicJournal.toFile(), "rw")) {
+            try (RandomAccessFile file = new RandomAccessFile(journal.toFile(), "rw")) {
                 long end = file.length();
                 file.seek(end);
                 try { file.write(line); }
@@ -78,12 +100,19 @@ final class ChatArchive {
     }
 
     private Cursor snapshot(String user, String scope, boolean newestFirst, boolean includeShared) throws IOException {
+        if (ConversationScope.isGroup(scope)) {
+            String group = ConversationScope.groupId(scope);
+            List<SocialStore.Range> ranges = social.ranges(group, user);
+            if (ranges.isEmpty()) throw new ProtocolException("FORBIDDEN", "你没有此群的历史权限");
+            PublicDeletion deletion = readDeletion(deletionFile(user, scope));
+            return new Cursor(new Journal(groupJournal(group), newestFirst), null, scope, deletion, newestFirst, ranges);
+        }
         boolean includePublic = scope == null || ConversationScope.PUBLIC.equals(scope);
-        PublicDeletion deletion = includePublic ? readPublicDeletion(user) : PublicDeletion.NONE;
+        PublicDeletion deletion = includePublic ? readDeletion(deletionFile(user, ConversationScope.PUBLIC)) : PublicDeletion.NONE;
         Journal personal = new Journal(accountJournal(user), newestFirst);
         try {
             Journal shared = includePublic && includeShared ? new Journal(publicJournal, newestFirst) : null;
-            return new Cursor(personal, shared, scope, deletion, newestFirst);
+            return new Cursor(personal, shared, scope, deletion, newestFirst, List.of());
         } catch (IOException ex) {
             try { personal.close(); }
             catch (IOException close) { ex.addSuppressed(close); }
@@ -95,12 +124,17 @@ final class ChatArchive {
         static final PublicDeletion NONE = new PublicDeletion(null, Set.of());
     }
 
-    private Path publicDeletionFile(String user) {
-        return directory.resolve(AccountStore.fileKey(user) + ".public-deletions.json");
+    private record TimeRange(Instant start, Instant end) {
+        TimeRange(SocialStore.Range range) { this(Instant.parse(range.start()), range.end() == null ? null : Instant.parse(range.end())); }
+        boolean includes(Instant time) { return !time.isBefore(start) && (end == null || !time.isAfter(end)); }
     }
 
-    private PublicDeletion readPublicDeletion(String user) throws IOException {
-        Path path = publicDeletionFile(user);
+    private Path deletionFile(String user, String scope) throws ProtocolException {
+        String suffix = ConversationScope.PUBLIC.equals(scope) ? "public" : ConversationScope.groupId(scope);
+        return directory.resolve(AccountStore.fileKey(user) + "." + suffix + "-deletions.json");
+    }
+
+    private PublicDeletion readDeletion(Path path) throws IOException {
         if (!Files.exists(path)) return PublicDeletion.NONE;
         try {
             PublicDeletion deletion = gson.fromJson(Files.readString(path), PublicDeletion.class);
@@ -117,10 +151,9 @@ final class ChatArchive {
             try { if (!UUID.fromString(id).toString().equals(id)) throw new IllegalArgumentException(); }
             catch (IllegalArgumentException ex) { throw new ProtocolException("BAD_MESSAGE", "无效消息编号"); }
         }
-        Set<Cursor> active = cursors.remove(user);
-        if (active != null) for (Cursor cursor : List.copyOf(active)) cursor.close();
-        if (ConversationScope.PUBLIC.equals(scope)) {
-            deletePublic(user, id);
+        invalidate(user);
+        if (ConversationScope.PUBLIC.equals(scope) || ConversationScope.isGroup(scope)) {
+            deleteShared(user, scope, id);
             return;
         }
         Path original = accountJournal(user);
@@ -139,9 +172,14 @@ final class ChatArchive {
         } finally { Files.deleteIfExists(temporary); }
     }
 
-    private void deletePublic(String user, String id) throws IOException {
+    synchronized void invalidate(String user) throws IOException {
+        Set<Cursor> active = cursors.remove(user);
+        if (active != null) for (Cursor cursor : List.copyOf(active)) cursor.close();
+    }
+
+    private void deleteShared(String user, String scope, String id) throws IOException {
         PublicDeletion updated;
-        try (Cursor input = snapshot(user, ConversationScope.PUBLIC, false, true)) {
+        try (Cursor input = snapshot(user, scope, false, true)) {
             ChatRecord record;
             if (id == null) {
                 while (input.next() != null) { /* Check the snapshot before publishing the clear. */ }
@@ -157,7 +195,7 @@ final class ChatArchive {
         Path temporary = Files.createTempFile(directory, ".public-delete-", ".tmp");
         try {
             Files.writeString(temporary, gson.toJson(updated));
-            Files.move(temporary, publicDeletionFile(user), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            Files.move(temporary, deletionFile(user, scope), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } finally { Files.deleteIfExists(temporary); }
     }
 
@@ -168,13 +206,18 @@ final class ChatArchive {
         final PublicDeletion deletion;
         final Instant clearedThrough;
         final boolean newestFirst;
+        final List<TimeRange> ranges;
+        final Instant firstAuthorized;
         ChatRecord personalHead, sharedHead;
         boolean closed;
         private boolean sharedCleared;
 
-        Cursor(Journal personal, Journal shared, String scope, PublicDeletion deletion, boolean newestFirst) {
+        Cursor(Journal personal, Journal shared, String scope, PublicDeletion deletion, boolean newestFirst,
+               List<SocialStore.Range> ranges) {
             this.personal = personal; this.shared = shared; this.scope = scope; this.deletion = deletion;
             this.newestFirst = newestFirst;
+            this.ranges = ranges.stream().map(TimeRange::new).toList();
+            firstAuthorized = this.ranges.stream().map(TimeRange::start).min(Comparator.naturalOrder()).orElse(Instant.MIN);
             clearedThrough = deletion.clearedThrough() == null ? Instant.MIN : Instant.parse(deletion.clearedThrough());
         }
 
@@ -197,6 +240,15 @@ final class ChatArchive {
             if (publicOnly && sharedCleared) return null;
             ChatRecord record;
             while ((record = source.next()) != null) {
+                if (!ranges.isEmpty()) {
+                    if (!scope.equals(record.conversationId()) || record.recipient() != null || !"GROUP_MESSAGE".equals(record.messageType()))
+                        throw new IOException("群组归档损坏");
+                    Instant time = sentAt(record);
+                    if (newestFirst && time.isBefore(firstAuthorized)) return null;
+                    if (time.isAfter(clearedThrough) && !deletion.hiddenIds().contains(record.messageId())
+                            && ranges.stream().anyMatch(range -> range.includes(time))) return record;
+                    continue;
+                }
                 boolean publicMessage = ConversationScope.PUBLIC.equals(record.conversationId());
                 if (publicOnly && (!publicMessage || record.recipient() != null || !"GROUP_MESSAGE".equals(record.messageType())))
                     throw new IOException("公共聊天室归档损坏");

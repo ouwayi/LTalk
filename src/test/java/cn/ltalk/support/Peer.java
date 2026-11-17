@@ -41,6 +41,7 @@ public final class Peer implements AutoCloseable {
             try { server.accounts().register(user, user, "test123!", false); }
             catch (cn.ltalk.common.ProtocolException ex) { if (!ex.code().equals("USER_EXISTS")) throw ex; }
         }
+        cn.ltalk.server.SocialFixtures.permitPrivate(server, "alice", "bob");
     }
     public void send(Message message) throws IOException { MessageCodec.write(socket.getOutputStream(), message); }
     public void raw(String text) throws IOException { socket.getOutputStream().write(text.getBytes(StandardCharsets.UTF_8)); socket.getOutputStream().flush(); }

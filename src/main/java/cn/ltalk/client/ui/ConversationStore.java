@@ -5,6 +5,7 @@ import cn.ltalk.common.Message;
 import cn.ltalk.common.MessageType;
 import cn.ltalk.common.ChatRecord;
 import cn.ltalk.common.ConversationScope;
+import cn.ltalk.common.SocialItem;
 
 import java.time.Instant;
 import java.util.*;
@@ -37,6 +38,7 @@ public final class ConversationStore {
         int unread;
         Entry lastMessage;
         String emptyPreview = "";
+        String label;
         Conversation(ConversationId id) { this.id = id; }
     }
 
@@ -44,8 +46,11 @@ public final class ConversationStore {
     private final Map<String, ContactProfile> profiles = new HashMap<>();
     private final Set<String> messageIds = new HashSet<>();
     private final Set<String> liveIds = new HashSet<>();
-    private final Map<String, Entry> outgoing = new HashMap<>();
+    private record Outgoing(ConversationId id, Entry entry) { }
+    private final Map<String, Outgoing> outgoing = new HashMap<>();
     private final Set<String> confirmedSends = new HashSet<>();
+    private final Set<String> friends = new HashSet<>(), allowed = new HashSet<>(), blocked = new HashSet<>(), pending = new HashSet<>();
+    private final Map<String, SocialItem> groups = new HashMap<>();
     private String self = "";
     private ConversationId selected = ConversationId.PUBLIC;
     private boolean visible = true;
@@ -61,6 +66,7 @@ public final class ConversationStore {
         liveIds.clear();
         outgoing.clear();
         confirmedSends.clear();
+        friends.clear(); allowed.clear(); blocked.clear(); pending.clear(); groups.clear();
         Conversation group = new Conversation(ConversationId.PUBLIC);
         group.emptyPreview = "和局域网里的伙伴开始聊天";
         conversations.put(group.id, group);
@@ -78,6 +84,47 @@ public final class ConversationStore {
     public int onlineCount() { return onlineUsers.size(); }
     public String draft() { return conversations.get(selected).draft; }
     public void saveDraft(String text) { conversations.get(selected).draft = text; }
+    public boolean friend(String user) { return friends.contains(user); }
+    public boolean blocked(String user) { return blocked.contains(user); }
+    public boolean privatePending(String user) { return pending.contains(user); }
+    public boolean online(String user) { return onlineUsers.contains(user); }
+    public boolean mayRequestPrivate(String user) { return online(user) && !friend(user) && !allowed.contains(user)
+            && !blocked(user) && !pending.contains(user); }
+    public SocialItem groupInfo(String id) { return groups.get(id); }
+    public ConversationId openPrivate(String user) { return ensurePrivate(user).id; }
+    public ConversationId openGroup(String id) { return ensureGroup(id).id; }
+
+    public Set<ConversationId> updateSocial(List<SocialItem> items) {
+        Map<String, SocialItem> previousGroups = new HashMap<>(groups);
+        friends.clear(); allowed.clear(); blocked.clear(); pending.clear(); groups.clear();
+        for (SocialItem row : items) {
+            switch (row.kind()) {
+                case FRIEND -> {
+                    friends.add(row.user());
+                    ensurePrivate(row.user()).label = row.title();
+                }
+                case PRIVATE_ALLOWED -> {
+                    allowed.add(row.user());
+                    Conversation pair = conversations.get(ConversationId.privateWith(row.user()));
+                    if (pair != null) pair.label = row.title();
+                }
+                case PRIVATE_BLOCKED -> blocked.add(row.user());
+                case PRIVATE_IN, PRIVATE_OUT -> pending.add(row.user());
+                case GROUP -> {
+                    groups.put(row.group(), row);
+                    ensureGroup(row.group()).label = row.title();
+                }
+                default -> { }
+            }
+        }
+        Set<ConversationId> joined = new HashSet<>();
+        for (SocialItem row : groups.values()) {
+            SocialItem previous = previousGroups.get(row.group());
+            if (Boolean.TRUE.equals(row.member()) && (previous == null || !Boolean.TRUE.equals(previous.member())))
+                joined.add(ConversationId.group(row.group()));
+        }
+        return joined;
+    }
 
     public void clearProfiles() { profiles.clear(); }
     public ContactProfile profile(String userId) { return profiles.get(userId); }
@@ -96,13 +143,20 @@ public final class ConversationStore {
         String key = conversation.id.key();
         Entry last = conversation.lastMessage;
         String preview = conversation.emptyPreview;
+        if (preview.isEmpty() && !group && friend(key)) preview = conversation.online ? "好友 · 在线" : "好友 · 离线";
+        if (preview.isEmpty() && group && !conversation.id.equals(ConversationId.PUBLIC)) {
+            SocialItem info = groups.get(key);
+            if (info != null) preview = joined(key) ? "点击打开群聊" : info.admin() == null ? "已解散 · 查看旧记录" : "已退群 · 查看旧记录";
+        }
         if (last != null) {
             String prefix = group ? displayName(last.from(), last.displayName()) + "："
                     : self.equals(last.from()) ? "你：" : "";
             preview = prefix + last.content();
         }
-        return new Summary(conversation.id, group ? "公共聊天室" : displayName(key, key), preview,
-                last == null ? null : last.time(), conversation.unread, conversation.online, group ? null : profiles.get(key));
+        String label = Objects.requireNonNullElse(conversation.label, key);
+        String title = conversation.id.equals(ConversationId.PUBLIC) ? "公共聊天室" : group ? label : displayName(key, label);
+        return new Summary(conversation.id, title, preview, last == null ? null : last.time(), conversation.unread,
+                group && !conversation.id.equals(ConversationId.PUBLIC) ? joined(key) : conversation.online, group ? null : profiles.get(key));
     }
 
     public void select(ConversationId id) {
@@ -120,12 +174,30 @@ public final class ConversationStore {
 
     public boolean canSend() {
         Conversation current = conversations.get(selected);
-        return selectionConfirmed && (selected.kind() == ConversationId.Kind.GROUP || current.online);
+        if (selected.equals(ConversationId.PUBLIC)) return true;
+        if (selected.kind() == ConversationId.Kind.GROUP) return joined(selected.key());
+        return friend(selected.key()) || (selectionConfirmed && current.online && allowed.contains(selected.key()));
+    }
+
+    private boolean joined(String id) {
+        SocialItem group = groups.get(id);
+        return group != null && Boolean.TRUE.equals(group.member());
     }
 
     public String targetLabel() {
-        if (selected.kind() == ConversationId.Kind.GROUP) return "群聊 · 所有在线用户";
+        if (selected.equals(ConversationId.PUBLIC)) return "群聊 · 所有在线用户";
+        if (selected.kind() == ConversationId.Kind.GROUP) {
+            SocialItem group = groups.get(selected.key());
+            if (group != null && group.admin() == null) return "群组已解散 · 可查看旧记录";
+            if (!joined(selected.key())) return "已退群 · 可查看旧记录";
+            return self.equals(group.admin()) ? "群组 · 你是管理员" : "群组 · 仅成员可见";
+        }
         String prefix = "私聊 " + displayName(selected.key(), selected.key());
+        if (friend(selected.key())) return prefix + (online(selected.key()) ? " · 好友在线" : " · 好友离线，可以留言");
+        if (blocked(selected.key())) return prefix + " · 已屏蔽";
+        if (pending.contains(selected.key())) return prefix + " · 等待处理私聊请求";
+        if (!online(selected.key())) return prefix + (allowed.contains(selected.key()) ? " · 对象已离线，请重新选择会话" : " · 对方离线");
+        if (!allowed.contains(selected.key())) return prefix + " · 需要私聊许可";
         if (!selectionConfirmed && conversations.get(selected).online) return prefix + " · 已上线，请重新选择会话";
         if (!canSend()) return prefix + " · 对象已离线，请重新选择会话";
         return prefix + " · 在线，仅双方可见";
@@ -134,7 +206,7 @@ public final class ConversationStore {
     public boolean updateUsers(List<String> users) {
         onlineUsers = List.copyOf(users);
         Conversation current = conversations.get(selected);
-        boolean invalidated = selected.kind() == ConversationId.Kind.PRIVATE && selectionConfirmed
+        boolean invalidated = selected.kind() == ConversationId.Kind.PRIVATE && !friend(selected.key()) && selectionConfirmed
                 && (current.online || awaitingUsers) && !users.contains(selected.key());
         awaitingUsers = false;
         for (Conversation conversation : conversations.values()) conversation.online = false;
@@ -156,6 +228,13 @@ public final class ConversationStore {
         ConversationId id = ConversationId.privateWith(user);
         return conversations.computeIfAbsent(id, Conversation::new);
     }
+    private Conversation ensureGroup(String group) {
+        ConversationId id = ConversationId.group(group);
+        return conversations.computeIfAbsent(id, Conversation::new);
+    }
+    private Conversation groupConversation(String scope) {
+        return ConversationScope.isGroup(scope) ? ensureGroup(scope.substring("GROUP:".length())) : conversations.get(ConversationId.PUBLIC);
+    }
 
     public ConversationId receive(Message message) {
         return receive(message, false);
@@ -163,18 +242,19 @@ public final class ConversationStore {
     public void submitted(ConversationId id, String requestId, String content) {
         String to = id.kind() == ConversationId.Kind.PRIVATE ? id.key() : null;
         Entry entry = new Entry(EntryKind.OUTGOING, self, to, content, Instant.now(), null, null, SendStatus.SENDING, null);
-        outgoing.put(requestId, entry);
+        outgoing.put(requestId, new Outgoing(id, entry));
         conversations.get(id).entries.add(entry);
     }
     public ConversationId sendError(String requestId, boolean uncertain, String detail) {
-        Entry entry = outgoing.get(requestId);
-        if (entry == null || entry.sendStatus() == SendStatus.FAILED) return null;
-        ConversationId id = entry.to() == null ? ConversationId.PUBLIC : ConversationId.privateWith(entry.to());
+        Outgoing pending = outgoing.get(requestId);
+        if (pending == null || pending.entry.sendStatus() == SendStatus.FAILED) return null;
+        Entry entry = pending.entry;
+        ConversationId id = pending.id;
         List<Entry> entries = conversations.get(id).entries;
         Entry replacement = new Entry(EntryKind.OUTGOING, entry.from(), entry.to(), entry.content(), entry.time(),
                 null, null, uncertain ? SendStatus.UNCONFIRMED : SendStatus.FAILED, detail);
         entries.set(entries.indexOf(entry), replacement);
-        outgoing.put(requestId, replacement);
+        outgoing.put(requestId, new Outgoing(id, replacement));
         return id;
     }
     public void beginHistory() {
@@ -189,10 +269,11 @@ public final class ConversationStore {
     }
     public ConversationId restore(ChatRecord record, String nickname) {
         return receive(Message.of(MessageType.valueOf(record.messageType())).messageId(record.messageId()).from(record.sender())
-                .to(record.recipient()).content(record.content()).serverTime(record.sentAt()).nickname(nickname).build(), true);
+                .conversationId(record.conversationId()).to(record.recipient()).content(record.content())
+                .serverTime(record.sentAt()).nickname(nickname).build(), true);
     }
     public void summarize(ChatRecord record, String nickname) {
-        Conversation conversation = ConversationScope.PUBLIC.equals(record.conversationId()) ? conversations.get(ConversationId.PUBLIC)
+        Conversation conversation = "GROUP_MESSAGE".equals(record.messageType()) ? groupConversation(record.conversationId())
                 : ensurePrivate(self.equals(record.sender()) ? record.recipient() : record.sender());
         updateLatest(conversation, archivedEntry(record, nickname));
     }
@@ -203,13 +284,12 @@ public final class ConversationStore {
     private ConversationId receive(Message message, boolean historical) {
         boolean group = message.type() == MessageType.GROUP_MESSAGE;
         String peer = self.equals(message.from()) ? message.to() : message.from();
-        Conversation conversation = group ? conversations.get(ConversationId.PUBLIC) : ensurePrivate(peer);
+        Conversation conversation = group ? groupConversation(message.conversationId()) : ensurePrivate(peer);
         if (!historical && self.equals(message.from()) && message.messageId() != null) {
-            Entry submitted = outgoing.get(message.requestId());
-            if (submitted != null && Objects.equals(submitted.to(), message.to()) && (submitted.to() == null) == group
-                    && submitted.content().equals(message.content())) {
+            Outgoing submitted = outgoing.get(message.requestId());
+            if (submitted != null && submitted.id.equals(conversation.id) && submitted.entry.content().equals(message.content())) {
                 outgoing.remove(message.requestId());
-                conversation.entries.remove(submitted);
+                conversation.entries.remove(submitted.entry);
                 confirmedSends.add(message.messageId());
                 // A history page may already have added the archive row while the echo was pending.
                 if (messageIds.contains(message.messageId())) {
@@ -237,6 +317,7 @@ public final class ConversationStore {
     }
     public void deleteHistory(String scope, String id) {
         ConversationId target = ConversationScope.PUBLIC.equals(scope) ? ConversationId.PUBLIC
+                : ConversationScope.isGroup(scope) ? groupConversation(scope).id
                 : ConversationId.privateWith(Arrays.stream(scope.split(":" )).skip(1).filter(p -> !p.equals(self)).findFirst().orElseThrow());
         Conversation conversation = conversations.get(target); if (conversation == null) return;
         conversation.entries.removeIf(entry -> {

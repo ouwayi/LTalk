@@ -5,6 +5,8 @@ import cn.ltalk.common.Message;
 import cn.ltalk.common.MessageCodec;
 import cn.ltalk.common.ConversationScope;
 import cn.ltalk.common.HistoryQuery;
+import cn.ltalk.common.SocialAction;
+import cn.ltalk.common.SocialItem;
 import cn.ltalk.client.ui.*;
 import cn.ltalk.server.ChatServer;
 import cn.ltalk.support.Peer;
@@ -294,6 +296,12 @@ class ChatWindowTest {
     private static void finishLoading(Socket socket, MessageCodec.FrameReader reader, String selected) throws Exception {
         finishHistoryRequest(socket, reader, HistoryQuery.MESSAGES, selected);
         finishHistoryRequest(socket, reader, HistoryQuery.SUMMARIES, null);
+        Message social = reader.read();
+        assertEquals(MessageType.SOCIAL_REQUEST, social.type());
+        assertEquals(SocialAction.STATE.name(), social.socialAction());
+        MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.SOCIAL_ROW).requestId(social.requestId())
+                .socialItem(SocialItem.user(SocialItem.Kind.PRIVATE_ALLOWED, "bob", "bob")).build());
+        MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.SOCIAL_END).requestId(social.requestId()).build());
         MessageCodec.write(socket.getOutputStream(), Message.of(MessageType.USER_LIST).revision(1L).users(List.of("alice", "bob")).build());
     }
 
@@ -334,6 +342,9 @@ class ChatWindowTest {
                     assertFalse(text(window, "host").isEnabled());
                     selectPeer(window, "bob");
                     assertTrue(label(window, "recipient").getText().contains("私聊 bob"));
+                });
+                awaitEdt(() -> button(window, "send").isEnabled());
+                onEdt(() -> {
                     area(window, "input").setText("UI-P-001"); button(window, "send").doClick();
                     assertEquals("", area(window, "input").getText());
                 });
@@ -374,6 +385,7 @@ class ChatWindowTest {
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.start(); cn.ltalk.support.Peer.seed(server);
             try (Peer bob = Peer.login(server.port(), "bob"); Peer carol = Peer.login(server.port(), "carol")) {
+                cn.ltalk.server.SocialFixtures.permitPrivate(server, "alice", "carol");
                 onEdt(() -> { ChatTheme.install(); ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("appearance.properties"))); });
                 ChatWindow window = ref.get(); login(window);
                 awaitEdt(() -> button(window, "send").isEnabled() && list(window).getModel().getSize() == 3);
@@ -836,14 +848,110 @@ class ChatWindowTest {
     }
 
     private static JDialog historySearchDialog(ChatWindow window) throws Exception {
+        return ownedDialog(window, "historySearchDialog");
+    }
+
+    private static JDialog ownedDialog(ChatWindow window, String name) throws Exception {
         AtomicReference<JDialog> dialog = new AtomicReference<>();
         onEdt(() -> {
             for (Window child : window.getOwnedWindows()) {
-                if ("historySearchDialog".equals(child.getName())) dialog.set((JDialog) child);
+                if (name.equals(child.getName()) && child.isDisplayable()) dialog.set((JDialog) child);
             }
         });
         assertNotNull(dialog.get());
         return dialog.get();
+    }
+
+    @Test @Timeout(35)
+    void socialMenusFindAnOfflineFriendApproveTheRequestAndOpenAnIndependentGroup() throws Exception {
+        AtomicReference<ChatWindow> alice = new AtomicReference<>(), bob = new AtomicReference<>();
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start();
+            server.accounts().register("alice", "Alice", "test123!", false);
+            server.accounts().register("bob", "Bob", "test123!", false);
+            String port = Integer.toString(server.port());
+            onEdt(() -> alice.set(new ChatWindow("127.0.0.1", port, "alice", appearanceDirectory.resolve("social-alice.properties"))));
+            ChatWindow a = alice.get();
+            login(a);
+            awaitEdt(() -> button(a, "send").isEnabled());
+            onEdt(() -> ((JMenuItem) find(a.socialMenu(), "socialFindUser")).doClick());
+            JDialog lookup = ownedDialog(a, "socialDialog");
+            onEdt(() -> {
+                ((JTextField) find(lookup, "socialQuery")).setText("bob");
+                ((JButton) find(lookup, "socialSearch")).doClick();
+            });
+            awaitEdt(() -> ((JList<?>) find(lookup, "socialRows")).getModel().getSize() == 1);
+            onEdt(() -> ((JButton) find(lookup, "socialPrimary")).doClick());
+            awaitEdt(() -> ((JButton) find(lookup, "socialSecondary")).isEnabled());
+            onEdt(() -> {
+                ((JButton) find(lookup, "socialSecondary")).doClick();
+                assertFalse(button(a, "send").isEnabled());
+                assertFalse(button(a, "requestPrivate").isVisible());
+                bob.set(new ChatWindow("127.0.0.1", port, "bob", appearanceDirectory.resolve("social-bob.properties")));
+            });
+            ChatWindow b = bob.get();
+            login(b);
+            awaitEdt(() -> button(b, "requestInbox").isVisible());
+            onEdt(() -> {
+                b.applyAppearance(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK), false);
+                button(b, "requestInbox").doClick();
+            });
+            JDialog requests = ownedDialog(b, "socialDialog");
+            onEdt(() -> {
+                JList<?> rows = (JList<?>) find(requests, "socialRows");
+                assertEquals(SocialItem.Kind.FRIEND_IN, ((SocialItem) rows.getModel().getElementAt(0)).kind());
+                rows.setSelectedIndex(0);
+                renderContainer(requests.getContentPane(), 420, 430, "social-requests-narrow.png");
+                ((JButton) find(requests, "socialPrimary")).doClick();
+            });
+            awaitEdt(() -> button(a, "send").isEnabled() && label(a, "recipient").getText().contains("好友在线"));
+            closeWindow(bob);
+            bob.set(null);
+            awaitEdt(() -> label(a, "recipient").getText().contains("好友离线"));
+            onEdt(() -> {
+                assertTrue(button(a, "send").isEnabled());
+                area(a, "input").setText("给离线好友留言");
+                button(a, "send").doClick();
+            });
+            awaitEdt(() -> hasSendStatus(a, "已确认") && history(a).contains("给离线好友留言"));
+            onEdt(() -> {
+                Timer timer = new Timer(30, null);
+                timer.addActionListener(event -> {
+                    for (Window child : a.getOwnedWindows()) if (child instanceof JDialog dialog && dialog.isVisible()) {
+                        var name = find(dialog, "groupName");
+                        if (name instanceof JTextField text) {
+                            timer.stop();
+                            text.setText("UI 设计群");
+                            findOptionPane(dialog).setValue(JOptionPane.OK_OPTION);
+                            break;
+                        }
+                    }
+                });
+                timer.start();
+                ((JMenuItem) find(a.socialMenu(), "socialCreateGroup")).doClick();
+            });
+            awaitEdt(() -> list(a).getModel().getSize() == 3);
+            onEdt(() -> {
+                for (int i = 0; i < list(a).getModel().getSize(); i++) {
+                    var row = list(a).getModel().getElementAt(i);
+                    if ("UI 设计群".equals(row.title())) list(a).setSelectedIndex(i);
+                }
+                assertTrue(label(a, "recipient").getText().contains("管理员"));
+                assertNotNull(find(a.conversationMenu(), "groupTransfer"));
+                assertTrue(button(a, "send").isEnabled());
+                area(a, "input").setText("群组专属消息");
+                button(a, "send").doClick();
+            });
+            awaitEdt(() -> history(a).contains("群组专属消息") && hasSendStatus(a, "已确认"));
+            onEdt(() -> {
+                render(a, 420, 680, "social-group-narrow.png");
+                button(a, "group").doClick();
+                assertFalse(history(a).contains("群组专属消息"));
+            });
+        } finally {
+            closeWindow(bob);
+            closeWindow(alice);
+        }
     }
 
     private static int viewportY(MessageTimeline timeline, String content) {

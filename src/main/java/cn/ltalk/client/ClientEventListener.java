@@ -10,6 +10,7 @@ public interface ClientEventListener {
     default void onPrivate(Message message) { }
     default void onUserList(Message message) { }
     default void onSystem(Message message) { }
+    default void onSocialChanged(Message event) { }
     default void onError(Message message) { }
     default void onChatSendError(Message message, boolean uncertain) { onError(message); }
     default void onRegistered(String userId) { }

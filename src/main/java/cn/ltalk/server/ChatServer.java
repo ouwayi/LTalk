@@ -27,11 +27,13 @@ public final class ChatServer implements AutoCloseable {
     private final HeartbeatSettings heartbeatSettings;
     private AccountStore accounts;
     private ChatArchive archive;
+    private SocialStore social;
     private java.nio.file.Path dataDirectory;
     private java.nio.channels.FileChannel dataLockChannel;
     private java.nio.channels.FileLock dataLock;
     public AccountStore accounts() { return accounts; }
     ChatArchive archive() { return archive; }
+    SocialStore social() { return social; }
     public synchronized void dataDirectory(java.nio.file.Path path) {
         if (listener != null) throw new IllegalStateException("启动后不能更改数据目录");
         dataDirectory = path;
@@ -106,6 +108,8 @@ public final class ChatServer implements AutoCloseable {
             if (dataLock == null) throw new IOException("数据目录已被另一个服务端使用");
             accounts = new AccountStore(dataDirectory.resolve("accounts"));
             archive = new ChatArchive(dataDirectory.resolve("history"));
+            social = new SocialStore(dataDirectory.resolve("social.json"), archive);
+            archive.social(social);
         } catch (IOException | RuntimeException ex) {
             dataLockChannel.close(); throw new IOException("无法打开服务端数据目录", ex);
         }

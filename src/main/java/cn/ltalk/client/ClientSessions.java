@@ -55,6 +55,7 @@ public final class ClientSessions implements AutoCloseable {
     }
     public void disconnect() { authentication().client.disconnect(); }
     public String sendGroup(String text) throws IOException { return current.client.sendGroup(text); }
+    public String sendGroup(String scope, String text) throws IOException { return current.client.sendGroup(scope, text); }
     public String sendPrivate(String target, String text) throws IOException { return current.client.sendPrivate(target, text); }
     public void exportHistory(Path directory, String format, String scope) throws IOException { current.client.exportHistory(directory, format, scope); }
     public void exportTo(Path path, String format, String scope, boolean replace) throws IOException { current.client.exportTo(path, format, scope, replace); }
@@ -66,6 +67,12 @@ public final class ClientSessions implements AutoCloseable {
         });
     }
     public void loadHistory() throws IOException { current.client.loadHistory(); }
+    void social(SocialAction action, Consumer<Message.Builder> fields, Consumer<SocialChannel.Result> completion) throws IOException {
+        Slot slot = current;
+        slot.client.social(action, fields, result -> {
+            if (slot.active()) completion.accept(result);
+        });
+    }
     void browseHistory(HistoryQuery mode, String scope, String cursor, String query, String anchor,
                        Consumer<HistoryPage> completion) throws IOException {
         Slot slot = current;
@@ -115,6 +122,7 @@ public final class ClientSessions implements AutoCloseable {
         @Override public void onUserList(Message message) { if (active()) listener.onUserList(message); }
         @Override public void onDisplayProfile(ContactProfile profile) { if (active()) listener.onDisplayProfile(profile); }
         @Override public void onSystem(Message message) { if (active()) listener.onSystem(message); }
+        @Override public void onSocialChanged(Message event) { if (active()) listener.onSocialChanged(event); }
         @Override public void onExported(Path path) { if (active()) listener.onExported(path); }
         @Override public void onHistoryStarted() { if (active()) listener.onHistoryStarted(); }
         @Override public void onHistoryRecord(ChatRecord record, String nickname) { if (active()) listener.onHistoryRecord(record, nickname); }

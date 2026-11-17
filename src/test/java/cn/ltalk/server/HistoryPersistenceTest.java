@@ -57,6 +57,7 @@ class HistoryPersistenceTest {
                     b.type(MessageType.GROUP_MESSAGE);
                     c.type(MessageType.GROUP_MESSAGE);
                 }
+                SocialFixtures.permitPrivate(server, "alice", "bob");
                 a.privateTo("bob", "private-only-keyword");
                 Message secret = a.type(MessageType.PRIVATE_MESSAGE);
                 b.type(MessageType.PRIVATE_MESSAGE);
@@ -116,6 +117,7 @@ class HistoryPersistenceTest {
                 }
                 try (Peer bob = Peer.login(server.port(), "bob")) {
                     assertEquals(originalIds, records(bob).stream().map(ChatRecord::messageId).toList());
+                    SocialFixtures.permitPrivate(server, "alice", "bob");
                     alice.privateTo("bob", "仅双方");
                     alice.type(MessageType.PRIVATE_MESSAGE); bob.type(MessageType.PRIVATE_MESSAGE);
                     try (Peer carol = Peer.login(server.port(), "carol")) {
@@ -193,6 +195,8 @@ class HistoryPersistenceTest {
             server.dataDirectory(directory); server.start();
             try (Peer a = Peer.login(server.port(), "alice"); Peer b = Peer.login(server.port(), "bob"); Peer c = Peer.login(server.port(), "carol")) {
                 a.group("public"); for (Peer p : List.of(a,b,c)) p.type(MessageType.GROUP_MESSAGE);
+                SocialFixtures.permitPrivate(server, "alice", "bob");
+                SocialFixtures.permitPrivate(server, "alice", "carol");
                 a.privateTo("bob", "secret"); Message secret = a.type(MessageType.PRIVATE_MESSAGE); b.type(MessageType.PRIVATE_MESSAGE);
                 c.privateTo("alice", "keep"); a.type(MessageType.PRIVATE_MESSAGE); c.type(MessageType.PRIVATE_MESSAGE);
                 byte[] other = Files.readAllBytes(directory.resolve("history").resolve(AccountStore.fileKey("bob") + ".jsonl"));

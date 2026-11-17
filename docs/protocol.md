@@ -14,15 +14,15 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 
 ## 字段与消息类型
 
-所有对象必有字符串 `type`，未使用字段不输出。HELLO、REGISTER、LOGIN、PROFILE_GET、PROFILE_UPDATE、PASSWORD_CHANGE、EXPORT_REQUEST、HISTORY_REQUEST、HISTORY_VIEW_REQUEST、HISTORY_DELETE、GROUP_SEND 和 PRIVATE_SEND 均需携带非空白、最多 64 个字符的 `requestId`。PING/PONG 也需要编号。客户端按连接生成请求编号，不同用户的编号可以相同。聊天的消息 ID 由服务端生成，请求编号只用于关联请求和响应。
+所有对象必有字符串 `type`，未使用字段不输出。HELLO、REGISTER、LOGIN、PROFILE_GET、PROFILE_UPDATE、PASSWORD_CHANGE、EXPORT_REQUEST、HISTORY_REQUEST、HISTORY_VIEW_REQUEST、HISTORY_DELETE、GROUP_SEND、PRIVATE_SEND 和 SOCIAL_REQUEST 均需携带非空白、最多 64 个字符的 `requestId`。PING/PONG 也需要编号。客户端按连接生成请求编号，不同用户的编号可以相同。聊天的消息 ID 由服务端生成，请求编号只用于关联请求和响应。
 
 | 类型 | 方向 | 字段 | 结果 |
 | --- | --- | --- | --- |
 | LOGIN | C → S | requestId, userId, password | 成功 LOGIN_OK；HELLO 模式失败保留连接，直接登录失败关闭 |
 | LOGIN_OK | S → 当前 C | requestId, userId, nickname, avatar, createdAt（旧账号可缺省） | 客户端切为 CONNECTED |
-| GROUP_SEND | C → S | requestId, content | 当前全部就绪会话收到 GROUP_MESSAGE，包括发送者 |
+| GROUP_SEND | C → S | requestId, content, 可选 conversationId | 公共聊天室发往全部就绪会话；独立群组校验成员并仅投递给就绪成员。均含发送者回显 |
 | GROUP_MESSAGE | S → 在线 C | requestId, messageId, conversationId, from, content, serverTime, nickname（可选） | 群聊展示，以服务端事件为唯一正式回显 |
-| PRIVATE_SEND | C → S | requestId, to, content | 校验目标在线并归档后，先加入目标发送队列，入队成功后回显发送者 |
+| PRIVATE_SEND | C → S | requestId, to, content | 必须是好友，或已获许可且目标在线。归档后在线目标先入投递队列，离线好友从其归档收取。最后回显发送者 |
 | PRIVATE_MESSAGE | S → 私聊双方 | requestId, messageId, conversationId, from, to, content, serverTime, nickname（可选） | 仅双方收包，不通过广播 |
 | USER_LIST | S → 在线 C | users: string[], revision: 非负 long | 全量列表，按较新版本覆盖 |
 | SYSTEM | S → 在线 C | content, serverTime | 上下线提示，不作为列表数据来源 |
@@ -137,7 +137,7 @@ nickname strip 后 1～40 char；userId 沿用 1～20 ASCII 字母/数字/下划
 
 新增错误：MISSING_FIELD 缺必填参数；INVALID_NICKNAME 昵称越界；INVALID_PASSWORD 密码长度非法；INVALID_USER_ID 用户名非法；USER_EXISTS 注册重名或已有在线会话；LOGIN_FAILED 统一用户名或密码错误（不区分不存在与密码错误）；NOT_AUTHENTICATED 未认证；FORBIDDEN 他人历史或无效/过期/跨连接游标；STORAGE_ERROR 注册/归档文件失败；EXPORT_FAILED 历史读取失败。原 BAD_MESSAGE 继续处理未知模式、方向/类型/帧错误。客户端本地文件错误或逐页响应超时也提示 EXPORT_FAILED，不自动重试或断开健康聊天连接。
 
-record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC 或 PRIVATE:按用户名排序的双方）、sender、recipient（群聊为 null）、content、messageType、sentAt（ISO 8601 UTC）。聊天回显另增加 messageId/conversationId，不以此提供幂等重试。新版服务端给新消息分配递增时间，时钟回拨或重复时在上次时间上增加一纳秒。历史和导出按服务端时间合并共享公共归档及本人归档。所有已认证账号都可读取新版记录的公共消息，包含登录前和离线期间的消息。旧版公共记录沿用各账号已有的可见范围。私聊归档仅双方可读，离线私聊仍返回 USER_OFFLINE。
+record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC、GROUP:群组 UUID 或 PRIVATE:按用户名排序的双方）、sender、recipient（群聊为 null）、content、messageType、sentAt（ISO 8601 UTC）。聊天回显另增加 messageId/conversationId。新版服务端给新消息分配递增时间，时钟回拨或重复时在上次时间上增加一纳秒。所有已认证账号都可读取公共共享归档，包含登录前和离线期间的消息，旧版公共记录沿用原权限。独立群组按入群、退群和本人删除范围查询。私聊归档仅双方可读，向离线陌生人发送返回 USER_OFFLINE。
 
 游标为原认证连接私有的随机标识，开始时固定文件末尾，新消息不进入该快照。导出和历史查询各有一个独立快照，同类新请求替换旧游标，完成或连接结束时关闭。客户端消费一页后再请求下一页。导出为 JSON UTF-8 数组（保留 null recipient），或带七列表头和双引号转义的 CSV。客户端负责本地文件路径，发布失败会清理临时文件。
 
@@ -145,7 +145,7 @@ record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC �
 
 ## 按会话导出（2026-10-30）
 
-EXPORT_REQUEST 可增加 conversationId：GROUP:PUBLIC 或 PRIVATE:按用户名排序的双方，私聊双方必须包含当前认证用户。服务端在本人授权归档内过滤，不扩大历史可见范围。省略字段保留底层全账号导出能力；新版界面只提供当前会话导出。
+EXPORT_REQUEST 可增加 conversationId，由服务端按本人权限过滤。省略字段时使用公共与本人私聊归档，独立群组须指定会话。客户端提供当前会话导出。
 
 首次请求固定会话范围和文件末尾；每次翻页须携带相同 conversationId 和 cursor，改变范围返回 FORBIDDEN。无记录直接 EXPORT_END。非法/非本人会话拒绝，过滤不改变时间顺序、流式写出或文件失败清理语义。
 
@@ -170,7 +170,7 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 
 ## 本人历史查询与删除（2026-11-01，v4）
 
-所有历史操作须认证，仅使用连接绑定的账号文件；可选 userId 只能是本人。群/私聊范围沿用 GROUP:PUBLIC 与 PRIVATE:排序双方，私聊必须包含本人。
+所有历史操作须认证，可选 userId 只能是连接绑定账号。私聊范围必须包含本人。独立群组必须有本人的历史授权，删除只修改本人标记。
 
 | 类型 | 字段/行为 |
 | --- | --- |
@@ -200,6 +200,35 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 每次查询返回 0～20 个 `HISTORY_VIEW_ROW`，每行一帧，字段为 `requestId`、`record` 和可选的当前 `nickname`。结束帧 `HISTORY_VIEW_END` 携带同一个 `requestId`，还有记录时包含 `cursor`，定位结果无后续游标。浏览消息为从新到旧。帧上限均为 16 KiB，摘要、浏览和定位涉及的头像仍通过独立的 `DISPLAY_PROFILE` 同步。
 
 每次请求重新按认证账号、会话和删除设置打开快照。消息游标与定位目标必须在该会话的可见记录中，找不到返回 `NOT_FOUND`。参数组合或标识格式错误返回 `BAD_MESSAGE`，他人账号或不含本人的私聊范围返回 `FORBIDDEN`，存储读取失败返回 `STORAGE_ERROR`。追加的实时消息在翻页时不会让先前返回的记录重复进入下一页。客户端根据请求编号消费完整页面。超时、失败或不完整的页面可重试。
+
+## 好友、陌生人私聊与独立群组（v6 扩展）
+
+`SOCIAL_REQUEST` 必填 `requestId` 和 `socialAction`。身份来自连接，可选 `userId` 须与本人一致。查询以最多 24 个 `SOCIAL_ROW` 响应，字段为 `requestId` 和 `socialItem`。随后同编号的 `SOCIAL_END` 表示完成，还有结果时携带 `cursor`。游标为末项的 `kind:id`，用于同类查询。修改请求成功时只有结束帧。服务端发给受影响的就绪会话的 `SOCIAL_CHANGED` 提醒重取状态，可携带好友或私聊请求处理提示。离线账号下次登录后主动查询持久状态。
+
+| socialAction | 参数与授权 |
+| --- | --- |
+| STATE | 可选 cursor；本人好友、私聊许可、待处理请求与已获历史授权的群组 |
+| FIND_USER | to 为完整用户名；返回用户目录项与昵称 |
+| FIND_GROUP | content 为可选群名片段或群 UUID，最长 64 字符；可选 cursor；返回存续群组的目录元数据 |
+| FRIEND_REQUEST / FRIEND_REMOVE | to 为对方用户名，允许离线；申请需要对方确认 |
+| FRIEND_ACCEPT / FRIEND_REJECT | messageId 为申请 ID；只有接收方可处理 |
+| PRIVATE_REQUEST | to 为对方用户名，须在线；每对账号至多一个在途请求 |
+| PRIVATE_ACCEPT / PRIVATE_REJECT | messageId 为请求 ID；只有接收方可处理 |
+| PRIVATE_BLOCK / PRIVATE_UNBLOCK | to 为对方用户名；屏蔽会撤销独立私聊许可和待处理私聊请求 |
+| GROUP_CREATE | nickname 为 1～40 字符群名，content 为 `OPEN` 或 `REVIEW` |
+| GROUP_REQUEST | conversationId 为 `GROUP:<UUID>`；开放群直接进入，需审核的群产生申请 |
+| GROUP_APPROVE / GROUP_REJECT | messageId 为入群申请 ID；由当前管理员处理 |
+| GROUP_INVITE | conversationId、to；在群成员可邀请自己的好友 |
+| INVITE_ACCEPT / INVITE_REJECT | messageId 为邀请 ID；接收方决定。接受当前管理员的邀请直接入群，其他邀请沿用群的审核设置 |
+| GROUP_REVIEW | conversationId、content（`OPEN` 或 `REVIEW`）；由管理员切换审核 |
+| GROUP_TRANSFER | conversationId、to；管理员指定另一位当前成员 |
+| GROUP_LEAVE / GROUP_DISBAND | conversationId；普通成员可退出，管理员可解散，或先转让再退出 |
+
+`socialItem` 包含 `kind` 和 `id`。用户类可带 `user`、`title`。请求项使用请求 UUID，`user` 为对端，涉及群组时附带 `group`、`title`、`admin` 和 `review`。群目录项附带群 UUID、群名、当前管理员、审核开关和本人的 `member`。已解散群组仅保留在曾获授权成员的 STATE 中，管理员字段省略。
+
+仅当前群成员可通过带群组会话 ID 的 `GROUP_SEND` 发消息。成员加入时记录当时最近 100 条的起点，退出或解散时关闭授权区间，再次入群增加新的区间。浏览、搜索定位、导出、删除和摘要共同使用这些区间。从未加入的账号无法获取群消息。独立群组使用服务端 UUID，公共聊天室保留 `GROUP:PUBLIC`。
+
+缺少历史权限或操作身份不符返回 `FORBIDDEN`，无私聊许可返回 `PRIVATE_FORBIDDEN`，重复待处理请求返回 `REQUEST_PENDING`，已有关系或成员返回 `ALREADY_EXISTS`，请求失效返回 `NOT_FOUND`。管理员直接退群返回 `ADMIN_REQUIRED`。客户端与服务端需同步升级，旧消息可沿用原数据目录。
 
 ## 消息展示昵称（2026-11-15，v4 可选扩展）
 

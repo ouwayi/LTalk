@@ -8,6 +8,7 @@ import java.net.Socket;
 import javax.net.ssl.SSLContext;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -92,6 +93,8 @@ public final class ChatClient implements AutoCloseable {
                     () -> terminate(connection, "心跳超时，连接已中断，请手动重新连接；待发送消息未确认"));
             active = connection;
             state = State.CONNECTING;
+            connection.social = new SocialChannel(message -> submitControl(connection, message), event -> emit(connection, event),
+                    deadlines, loginTimeoutMillis);
             emit(connection, () -> listener.onStateChanged(State.CONNECTING, "正在连接服务器…"));
             connection.deadline = deadlines.schedule(() -> terminate(connection, "连接或登录超时，请检查地址后重新连接"),
                     (long) connectTimeoutMillis + loginTimeoutMillis, TimeUnit.MILLISECONDS);
@@ -229,6 +232,7 @@ public final class ChatClient implements AutoCloseable {
     }
 
     private void dispatch(Connection connection, Message message) throws IOException {
+        if (connection.social.receive(message)) return;
         if (connection.history.receive(message)) return;
         synchronized (connection) {
         if (message.requestId() != null && message.requestId().equals(connection.exportRequest)) {
@@ -298,6 +302,7 @@ public final class ChatClient implements AutoCloseable {
                 emit(connection, () -> listener.onDisplayProfile(profile));
             }
             case SYSTEM -> emit(connection, () -> listener.onSystem(message));
+            case SOCIAL_CHANGED -> emit(connection, () -> listener.onSocialChanged(message));
             case ERROR -> {
                 if (message.requestId() != null && message.requestId().startsWith(CHAT_REQUEST_PREFIX)) {
                     synchronized (lifecycle) {
@@ -306,7 +311,7 @@ public final class ChatClient implements AutoCloseable {
                         if (pending != null) finishChat(connection, pending);
                         boolean uncertain = switch (message.code() == null ? "" : message.code()) {
                             case "BAD_MESSAGE", "EMPTY_CONTENT", "CONTENT_TOO_LONG", "NOT_AUTHENTICATED",
-                                    "SELF_PRIVATE_NOT_ALLOWED", "USER_OFFLINE" -> false;
+                                    "SELF_PRIVATE_NOT_ALLOWED", "USER_OFFLINE", "PRIVATE_FORBIDDEN", "FORBIDDEN", "NOT_FOUND" -> false;
                             default -> true;
                         };
                         emit(connection, () -> listener.onChatSendError(message, uncertain));
@@ -318,7 +323,11 @@ public final class ChatClient implements AutoCloseable {
         }
     }
 
-    public String sendGroup(String content) throws IOException { return submitChat(null, content); }
+    public String sendGroup(String content) throws IOException { return submitChat(null, null, content); }
+    public String sendGroup(String scope, String content) throws IOException {
+        ConversationScope.groupId(scope);
+        return submitChat(null, scope, content);
+    }
     private Connection authenticated() throws IOException {
         synchronized (lifecycle) {
             if (state != State.CONNECTED || active == null || active.closed.get()) throw new IOException("请先登录");
@@ -326,6 +335,9 @@ public final class ChatClient implements AutoCloseable {
         }
     }
     public void loadHistory() throws IOException { authenticated().history.load(); }
+    void social(SocialAction action, Consumer<Message.Builder> fields, Consumer<SocialChannel.Result> completion) throws IOException {
+        authenticated().social.request(action, fields, completion);
+    }
     void browseHistory(HistoryQuery mode, String scope, String cursor, String query, String anchor,
                        Consumer<HistoryPage> done) throws IOException {
         authenticated().history.browse(mode, scope, cursor, query, anchor, done);
@@ -479,11 +491,11 @@ public final class ChatClient implements AutoCloseable {
     }
     public String sendPrivate(String target, String content) throws IOException {
         if (target == null || !target.matches("[A-Za-z0-9_]{1,20}"))
-            throw new ProtocolException("BAD_MESSAGE", "请选择当前在线的私聊对象");
-        return submitChat(target, content);
+            throw new ProtocolException("BAD_MESSAGE", "请选择私聊对象");
+        return submitChat(target, null, content);
     }
 
-    private String submitChat(String target, String content) throws IOException {
+    private String submitChat(String target, String scope, String content) throws IOException {
         Validation.content(content);
         synchronized (lifecycle) {
             Connection connection = active;
@@ -493,7 +505,7 @@ public final class ChatClient implements AutoCloseable {
                 throw new ProtocolException("SELF_PRIVATE_NOT_ALLOWED", "不能给自己发私聊");
             if (connection.chatSends.size() >= MAX_PENDING_CHAT) throw new IOException("待确认消息过多，请稍后发送");
             Message request = Message.of(target == null ? MessageType.GROUP_SEND : MessageType.PRIVATE_SEND)
-                    .requestId(CHAT_REQUEST_PREFIX + UUID.randomUUID()).to(target).content(content).build();
+                    .requestId(CHAT_REQUEST_PREFIX + UUID.randomUUID()).to(target).conversationId(scope).content(content).build();
             MessageCodec.encode(request); // Local frame validation does not tear down a healthy connection.
             ChatSend pending = new ChatSend(request);
             connection.chatSends.put(request.requestId(), pending);
@@ -526,6 +538,8 @@ public final class ChatClient implements AutoCloseable {
     private static boolean matchesEcho(Connection connection, Message request, Message echo) {
         return echo.messageId() != null && connection.userId.equals(echo.from()) && request.content().equals(echo.content())
                 && (request.to() == null ? echo.type() == MessageType.GROUP_MESSAGE
+                && Objects.equals(Objects.requireNonNullElse(request.conversationId(), ConversationScope.PUBLIC),
+                        Objects.requireNonNullElse(echo.conversationId(), ConversationScope.PUBLIC))
                 : echo.type() == MessageType.PRIVATE_MESSAGE && request.to().equals(echo.to()));
     }
 
@@ -555,6 +569,7 @@ public final class ChatClient implements AutoCloseable {
         if (connection.deadline != null) connection.deadline.cancel(false);
         connection.heartbeat.close();
         connection.history.close();
+        connection.social.close();
         connection.registrationPassword = null;
         if (connection.profileDeadline != null) connection.profileDeadline.cancel(false);
         connection.profileRequest = null;
@@ -613,6 +628,7 @@ public final class ChatClient implements AutoCloseable {
         volatile ScheduledFuture<?> deadline;
         Heartbeat heartbeat;
         HistoryChannel history;
+        SocialChannel social;
         final AtomicBoolean exporting = new AtomicBoolean();
         volatile HistoryExport export;
         volatile String exportRequest;

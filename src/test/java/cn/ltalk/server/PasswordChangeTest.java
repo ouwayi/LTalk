@@ -47,6 +47,7 @@ class PasswordChangeTest {
                     assertEquals(original.get(field), saved.get(field));
                 }
                 assertFalse(saved.toString().contains("demo-new!"));
+                SocialFixtures.permitPrivate(server, "alice", "bob");
                 alice.privateTo("bob", "连接继续可用");
                 assertEquals("连接继续可用", bob.type(MessageType.PRIVATE_MESSAGE).content());
                 assertFalse(bob.received.stream().anyMatch(m -> m.type() == MessageType.PASSWORD_CHANGED));

@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.function.Consumer;
 
 /** Swing presentation adapter; account and export operations stay in the background client. */
 public final class ChatWindow extends JFrame implements ClientSessions.Listener {
@@ -38,6 +39,9 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private final Map<ConversationId, HistoryPosition> historyPositions = new HashMap<>();
     private HistorySearchDialog historySearch;
     private List<ConversationStore.Entry> historyContext;
+    private SocialDialog socialDialog;
+    private List<SocialItem> socialItems = List.of();
+    private boolean socialLoading, socialDirty, privateRequesting;
     private final JTextField search = ChatTheme.field("", "conversationSearch");
     private final JTextArea input = new JTextArea(1, 16) {
         @Override protected void paintComponent(Graphics graphics) {
@@ -61,9 +65,10 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private final UserIdentityButton identity = new UserIdentityButton();
     private final JButton send = ChatTheme.primary("");
     private final JButton group = ChatTheme.pill("公共聊天室");
+    private final JButton requestInbox = ChatTheme.pill("请求");
     private final JButton back = ChatTheme.iconButton(LineIcon.Kind.BACK, "返回会话列表");
     private final JButton menu = ChatTheme.iconButton(LineIcon.Kind.MENU, "菜单与连接设置");
-    private final JButton create = ChatTheme.iconButton(LineIcon.Kind.COMPOSE, "新建会话");
+    private final JButton create = ChatTheme.iconButton(LineIcon.Kind.COMPOSE, "好友与群组");
     private final JButton chatSearch = ChatTheme.iconButton(LineIcon.Kind.SEARCH, "搜索当前会话消息");
     private final JButton more = ChatTheme.iconButton(LineIcon.Kind.MORE, "会话更多操作");
     private final JButton attach = ChatTheme.iconButton(LineIcon.Kind.ATTACH, "附件 · 暂未接入");
@@ -75,6 +80,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private final JPanel historyTools = new JPanel(new FlowLayout(FlowLayout.CENTER, 4, 0));
     private final JButton olderHistory = ChatTheme.pill("加载更早消息");
     private final JButton returnLatest = ChatTheme.pill("返回最近消息");
+    private final JButton requestPrivate = ChatTheme.pill("申请私聊");
     private final JPanel sidebar = new JPanel(new BorderLayout());
     private final ChatContent chatContent = new ChatContent();
     private final ResponsiveShell shell;
@@ -131,14 +137,17 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         historyTools.setOpaque(false);
         olderHistory.setName("olderHistory");
         returnLatest.setName("returnLatest");
+        requestPrivate.setName("requestPrivate");
         JLabel contextLabel = ChatTheme.label("搜索定位", 12, ChatTheme.MUTED, false);
         historyTools.add(olderHistory);
+        historyTools.add(requestPrivate);
         historyTools.add(contextLabel);
         historyTools.add(returnLatest);
         header.add(historyTools, BorderLayout.SOUTH);
         historyTools.setVisible(false);
         olderHistory.addActionListener(e -> loadConversation(true));
         returnLatest.addActionListener(e -> showLatest());
+        requestPrivate.addActionListener(e -> requestPrivate());
         timeline.addMouseWheelListener(e -> {
             if (e.getWheelRotation() < 0) SwingUtilities.invokeLater(this::loadAtTop);
         });
@@ -222,7 +231,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         input.getActionMap().put("send-message", action(() -> { if (send.isEnabled()) send(); }));
         addWindowListener(new WindowAdapter() {
             @Override public void windowClosing(WindowEvent e) {
-                closed = true; serverSelection.cancel(); closeHistorySearch();
+                closed = true; serverSelection.cancel(); closeHistorySearch(); closeSocialDialog();
                 store.saveDraft(input.getText()); closeProfile(); client.close(); dispose();
             }
         });
@@ -252,7 +261,12 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         brand.add(ChatTheme.label("LTalk", 22, ChatTheme.INK, true)); brand.add(onlineTitle, BorderLayout.EAST); top.add(brand);
         JPanel tabs = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 4)); ChatTheme.surface(tabs);
         group.setFocusPainted(false); group.setBorder(new EmptyBorder(8, 14, 8, 14)); group.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        group.setToolTipText("选择公共群聊"); tabs.add(group); tabs.add(ChatTheme.label("全部会话", 11, ChatTheme.MUTED, false)); top.add(tabs);
+        group.setToolTipText("选择公共群聊"); tabs.add(group); tabs.add(ChatTheme.label("全部会话", 11, ChatTheme.MUTED, false));
+        requestInbox.setName("requestInbox");
+        requestInbox.setVisible(false);
+        requestInbox.addActionListener(e -> openSocial(SocialDialog.View.REQUESTS));
+        tabs.add(requestInbox);
+        top.add(tabs);
         sidebar.add(top, BorderLayout.NORTH);
         JScrollPane listScroll = new JScrollPane(conversations); ChatTheme.scroll(listScroll, false);
         ChatTheme.surface(listCards); listCards.add(listScroll, "list");
@@ -309,7 +323,9 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         ConversationId submittedTo = store.selectedId();
         try {
             String content = input.getText();
-            String id = submittedTo.kind() == ConversationId.Kind.GROUP ? client.sendGroup(content) : client.sendPrivate(submittedTo.key(), content);
+            String id = submittedTo.equals(ConversationId.PUBLIC) ? client.sendGroup(content)
+                    : submittedTo.kind() == ConversationId.Kind.GROUP ? client.sendGroup(scope(submittedTo), content)
+                    : client.sendPrivate(submittedTo.key(), content);
             store.submitted(submittedTo, id, content);
             input.setText(""); input.requestFocusInWindow(); showLatest();
             hint.setText("Enter 发送 · Shift+Enter 换行"); ChatTheme.foreground(hint, ThemePalette.Role.MUTED);
@@ -344,13 +360,14 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         ConversationStore.Summary selected = store.selected();
         boolean group = selected.id().kind() == ConversationId.Kind.GROUP;
         title.setText(selected.title());
-        title.setToolTipText(group ? null : "@" + selected.id().key());
+        title.setToolTipText(group ? selected.id().equals(ConversationId.PUBLIC) ? null : "群组编号 " + selected.id().key()
+                : "@" + selected.id().key());
         headerAvatar.setIcon(group ? new Avatar(selected.title(), true, 42)
                 : ProfileAvatar.contact(selected.profile(), selected.title(), 42));
         if (signedInAddress != null && connectionState != ChatClient.State.CONNECTED) {
             recipient.setText((group ? "群聊" : "私聊") + " · 暂未连接");
         } else {
-            recipient.setText(store.targetLabel() + (group ? " · " + store.onlineCount() + " 人在线" : ""));
+            recipient.setText(store.targetLabel() + (selected.id().equals(ConversationId.PUBLIC) ? " · " + store.onlineCount() + " 人在线" : ""));
         }
         recipient.setToolTipText(group ? recipient.getText() : recipient.getText() + " · @" + selected.id().key());
     }
@@ -361,7 +378,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         send.setEnabled(connectionState == ChatClient.State.CONNECTED && store.canSend());
         chatSearch.setEnabled(connectionState == ChatClient.State.CONNECTED && !deletingHistory);
         input.setToolTipText(connectionState != ChatClient.State.CONNECTED ? "重新登录后可以继续发送"
-                : store.canSend() ? "消息 · Enter 发送，Shift+Enter 换行" : "草稿已保留，请明确重新选择在线联系人或群聊");
+                : store.canSend() ? "消息 · Enter 发送，Shift+Enter 换行" : store.targetLabel());
         renderTimeline();
     }
     private void renderTimeline() {
@@ -395,7 +412,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             store.useIdentity(profile.userId());
             store.clearProfiles();
             signedInAddress = client.address();
-            if (changedIdentity) search.setText("");
+            if (changedIdentity) { search.setText(""); socialItems = List.of(); }
             restoreAddress(); authentication.switching(false);
             hint.setText("Enter 发送 · Shift+Enter 换行"); hint.setToolTipText(null); ChatTheme.foreground(hint, ThemePalette.Role.MUTED);
             authentication.clearCredentials(false); showChat();
@@ -404,7 +421,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
                 sessionRevision++;
                 store.disconnected();
                 closeProfile();
-                deletingHistory = false; resetHistoryViews();
+                deletingHistory = false; resetHistoryViews(); stopSocial();
                 if (signedInAddress != null) {
                     hint.setText("草稿可继续编辑");
                     hint.setToolTipText(null);
@@ -432,7 +449,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         identity.showProfile(profile);
         setTitle("LTalk · 局域网聊天室" + (profile == null ? "" : " · " + profile.nickname()));
         setStatus(detail, false); refreshList(); refreshConversation();
-        if (loggedIn) reloadHistory();
+        if (loggedIn) { reloadHistory(); reloadSocial(); }
         else if (signedInAddress != null && !client.switching() && state == ChatClient.State.SERVER_CONNECTED && !chatPageVisible())
             authentication.password.requestFocusInWindow();
     }
@@ -475,7 +492,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         long revision = historyRevision;
         try {
             client.browseHistory(HistoryQuery.MESSAGES, scope(id), cursor, null, null, page -> {
-                if (revision != historyRevision) return;
+                if (revision != historyRevision || historyPositions.get(id) != position) return;
                 position.loading = false;
                 position.failed = page.error() != null;
                 if (position.failed) {
@@ -516,8 +533,15 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         olderHistory.setVisible(showOlder);
         olderHistory.setEnabled(showOlder && !position.loading && !deletingHistory);
         if (showOlder) olderHistory.setText(position.loading ? "正在加载…" : position.failed ? "重试加载消息" : "加载更早消息");
-        for (Component component : historyTools.getComponents()) if (component != olderHistory) component.setVisible(context);
-        historyTools.setVisible(context || showOlder);
+        ConversationId selected = store.selectedId();
+        boolean showRequest = !context && connectionState == ChatClient.State.CONNECTED && selected.kind() == ConversationId.Kind.PRIVATE
+                && store.mayRequestPrivate(selected.key());
+        requestPrivate.setVisible(showRequest);
+        requestPrivate.setEnabled(showRequest && !privateRequesting);
+        for (Component component : historyTools.getComponents()) {
+            if (component != olderHistory && component != requestPrivate) component.setVisible(context);
+        }
+        historyTools.setVisible(context || showOlder || showRequest);
         chatContent.revalidate();
         chatContent.repaint();
     }
@@ -581,13 +605,14 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         reloadHistory();
     }
     private String scope(ConversationId id) throws IOException {
-        return id.kind() == ConversationId.Kind.GROUP ? ConversationScope.PUBLIC : ConversationScope.privateChat(store.self(), id.key());
+        if (id.equals(ConversationId.PUBLIC)) return ConversationScope.PUBLIC;
+        if (id.kind() == ConversationId.Kind.GROUP) return ConversationScope.group(id.key());
+        return ConversationScope.privateChat(store.self(), id.key());
     }
     private void deleteMessage(ConversationStore.Entry entry) {
         if (entry.messageId() == null) return;
         try {
-            String target = entry.to() == null ? ConversationScope.PUBLIC : ConversationScope.privateChat(entry.from(), entry.to());
-            confirmDelete(target, entry.messageId(), "删除这条记录？");
+            confirmDelete(scope(store.selectedId()), entry.messageId(), "删除这条记录？");
         } catch (IOException ex) { showError(ex.getMessage()); }
     }
     private void clearHistory() {
@@ -623,7 +648,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     @Override public void onSwitchError(Message message) { authentication.feedback(message.code() + "：" + message.message(), true); }
     @Override public void onSwitchRegistered(String userId) { onRegistered(userId); }
     @Override public void onSessionReplaced() {
-        deletingHistory = false; resetHistoryViews();
+        deletingHistory = false; resetHistoryViews(); stopSocial();
         sessionRevision++; closeProfile(); store.useIdentity(""); input.setText(""); search.setText("");
     }
     @Override public void onProfile(UserProfile value) {
@@ -650,6 +675,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     @Override public void onUserList(Message message) {
         if (store.updateUsers(message.users())) store.notice(store.selectedId(), "私聊对象已离线，草稿保留；请重新选择会话。", false);
         refreshList(); refreshConversation();
+        if (socialDialog != null) socialDialog.repaint();
     }
     @Override public void onSystem(Message message) {
         store.system(message.content()); if (store.selectedId().equals(ConversationId.PUBLIC)) renderTimeline(true);
@@ -728,6 +754,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         closeProfile(); profile = null; identity.showProfile(null);
         deletingHistory = false;
         resetHistoryViews();
+        stopSocial();
+        socialItems = List.of();
         store.useIdentity(""); input.setText(""); search.setText("");
         authentication.clearCredentials(false); authentication.switching(false); showWelcome(); refreshList(); refreshConversation();
         // Re-establish only the unauthenticated transport after an explicit account action.
@@ -796,8 +824,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         long exportingSession = sessionRevision;
         ConversationId selected = store.selectedId();
         final String scope;
-        try { scope = selected.kind() == ConversationId.Kind.GROUP ? cn.ltalk.common.ConversationScope.PUBLIC
-                : cn.ltalk.common.ConversationScope.privateChat(store.self(), selected.key()); }
+        try { scope = scope(selected); }
         catch (IOException ex) { showError(ex.getMessage()); return; }
         final String suggested;
         try { suggested = HistoryExport.defaultName(exportingUser, "json"); } catch (IOException ex) { showError(ex.getMessage()); return; }
@@ -825,15 +852,204 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         return popup;
     }
     private void showMenu() { ChatPopupMenu popup = mainMenu(); popup.show(menu, 0, menu.getHeight() + 4); }
-    private void showNewConversation() {
-        ChatPopupMenu popup = new ChatPopupMenu(create, "新建会话");
-        popup.action("newPublic", "进入公共聊天室", LineIcon.Kind.USERS, () -> selectConversation(ConversationId.PUBLIC));
-        for (ConversationStore.Summary summary : store.summaries("")) {
-            if (summary.id().kind() == ConversationId.Kind.PRIVATE && summary.online())
-                popup.action("newPrivate-" + summary.id().key(), "私聊 " + summary.title(), LineIcon.Kind.COMPOSE, () -> selectConversation(summary.id()));
+
+    @Override public void onSocialChanged(Message event) {
+        if (event.message() != null) setStatus(event.message(), false);
+        reloadSocial();
+    }
+
+    private void reloadSocial() {
+        if (connectionState != ChatClient.State.CONNECTED) return;
+        if (socialLoading) { socialDirty = true; return; }
+        socialLoading = true;
+        fetchSocial(null, new ArrayList<>(), sessionRevision);
+    }
+
+    private void fetchSocial(String cursor, List<SocialItem> rows, long revision) {
+        try {
+            client.social(SocialAction.STATE, b -> b.cursor(cursor), result -> {
+                if (revision != sessionRevision || connectionState != ChatClient.State.CONNECTED) return;
+                if (result.error() == null && !socialDirty) {
+                    rows.addAll(result.rows());
+                    if (result.next() != null) {
+                        fetchSocial(result.next(), rows, revision);
+                        return;
+                    }
+                    socialItems = List.copyOf(rows);
+                    var joined = store.updateSocial(socialItems);
+                    for (ConversationId id : joined) historyPositions.remove(id);
+                    if (joined.contains(store.selectedId())) {
+                        closeHistorySearch();
+                        clearHistoryContext();
+                        loadConversation(false);
+                    }
+                    if (socialDialog != null && socialDialog.isDisplayable()) socialDialog.update(socialItems);
+                    refreshList();
+                    refreshConversation();
+                    updateRequestIndicator();
+                } else if (result.error() != null) setStatus("好友与群组加载失败：" + result.error(), true);
+                socialLoading = false;
+                if (socialDirty) { socialDirty = false; reloadSocial(); }
+            });
+        } catch (IOException ex) {
+            socialLoading = false;
+            socialDirty = false;
+            setStatus(ex.getMessage(), true);
         }
-        popup.addSeparator(); popup.action("newFuture", "添加好友 / 创建群组 · 待接入", LineIcon.Kind.USERS, () -> showPendingTool("好友与群组管理"));
+    }
+
+    private void updateRequestIndicator() {
+        long requests = incomingRequests();
+        create.setToolTipText(requests == 0 ? "好友与群组" : "好友与群组 · " + requests + " 条待处理请求");
+        create.getAccessibleContext().setAccessibleName(create.getToolTipText());
+        requestInbox.setText("请求 (" + requests + ")");
+        requestInbox.setVisible(requests > 0);
+    }
+
+    private long incomingRequests() {
+        return socialItems.stream().filter(row -> switch (row.kind()) {
+            case FRIEND_IN, PRIVATE_IN, JOIN_IN, INVITE_IN -> true;
+            default -> false;
+        }).count();
+    }
+
+    private void closeSocialDialog() {
+        if (socialDialog != null) { socialDialog.dispose(); socialDialog = null; }
+    }
+
+    private void stopSocial() {
+        socialLoading = false;
+        socialDirty = false;
+        privateRequesting = false;
+        requestInbox.setVisible(false);
+        closeSocialDialog();
+    }
+
+    private void openSocial(SocialDialog.View view) {
+        if (connectionState != ChatClient.State.CONNECTED) return;
+        if (socialDialog == null || !socialDialog.isDisplayable()) {
+            socialDialog = new SocialDialog(this, ThemePalette.of(appearance), client::social, store::online,
+                    user -> { if (!store.self().equals(user)) selectConversation(store.openPrivate(user)); },
+                    id -> selectConversation(store.openGroup(id)));
+        }
+        socialDialog.open(view, socialItems);
+        socialDialog.toFront();
+        reloadSocial();
+    }
+
+    private void socialChange(SocialAction action, Consumer<Message.Builder> fields, String success) {
+        if (connectionState != ChatClient.State.CONNECTED) return;
+        try {
+            client.social(action, fields, result -> feedback(result.error() == null ? success : result.error(), result.error() != null));
+        } catch (IOException ex) { feedback(ex.getMessage(), true); }
+    }
+
+    private void requestPrivate() {
+        String peer = store.selectedId().key();
+        if (privateRequesting || !store.mayRequestPrivate(peer)) return;
+        privateRequesting = true;
+        updateHistoryTools();
+        try {
+            client.social(SocialAction.PRIVATE_REQUEST, b -> b.to(peer), result -> {
+                privateRequesting = false;
+                if (result.error() != null) updateHistoryTools();
+                feedback(result.error() == null ? "已发送私聊请求，等待对方接受" : result.error(), result.error() != null);
+            });
+        } catch (IOException ex) {
+            privateRequesting = false;
+            updateHistoryTools();
+            feedback(ex.getMessage(), true);
+        }
+    }
+
+    private void createGroup() {
+        JTextField name = ChatTheme.field("", "groupName");
+        JCheckBox review = new JCheckBox("入群申请需要管理员审核", true);
+        JPanel form = new JPanel(new BorderLayout(0, 6));
+        form.add(new JLabel("群组名称"), BorderLayout.NORTH);
+        form.add(name, BorderLayout.CENTER);
+        form.add(review, BorderLayout.SOUTH);
+        long revision = sessionRevision;
+        if (JOptionPane.showConfirmDialog(this, form, "创建群组", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION
+                || revision != sessionRevision) return;
+        socialChange(SocialAction.GROUP_CREATE, b -> b.nickname(name.getText()).content(review.isSelected() ? "REVIEW" : "OPEN"), "群组已创建");
+    }
+
+    private void socialItem(ChatPopupMenu popup, String name, String title, Runnable callback) {
+        JMenuItem item = popup.action(name, title, LineIcon.Kind.USERS, callback);
+        item.setEnabled(connectionState == ChatClient.State.CONNECTED);
+    }
+
+    private void addConversationActions(ChatPopupMenu popup, ConversationId selected) {
+        if (selected.equals(ConversationId.PUBLIC)) return;
+        if (selected.kind() == ConversationId.Kind.PRIVATE) {
+            if (!store.friend(selected.key())) {
+                popup.addSeparator();
+                socialItem(popup, "chatFriendRequest", "申请好友",
+                        () -> socialChange(SocialAction.FRIEND_REQUEST, b -> b.to(selected.key()), "好友申请已发送"));
+                boolean blocked = store.blocked(selected.key());
+                socialItem(popup, "chatBlockPrivate", blocked ? "解除私聊屏蔽" : "屏蔽陌生人私聊",
+                        () -> socialChange(blocked ? SocialAction.PRIVATE_UNBLOCK : SocialAction.PRIVATE_BLOCK,
+                                b -> b.to(selected.key()), blocked ? "私聊屏蔽已解除" : "已屏蔽私聊"));
+            }
+            return;
+        }
+        SocialItem group = store.groupInfo(selected.key());
+        if (group == null || !Boolean.TRUE.equals(group.member())) return;
+        String scope = ConversationScope.group(group.id());
+        popup.addSeparator();
+        socialItem(popup, "groupInvite", "邀请好友", () -> inviteFriend(scope));
+        if (store.self().equals(group.admin())) {
+            boolean needsReview = Boolean.TRUE.equals(group.review());
+            socialItem(popup, "groupReview", needsReview ? "改为直接入群" : "启用入群审核",
+                    () -> socialChange(SocialAction.GROUP_REVIEW, b -> b.conversationId(scope).content(needsReview ? "OPEN" : "REVIEW"), "入群设置已保存"));
+            socialItem(popup, "groupTransfer", "转让管理员", () -> transferGroup(scope));
+            socialItem(popup, "groupDisband", "解散群组", () -> confirmGroupExit(scope, true));
+        } else socialItem(popup, "groupLeave", "退出群组", () -> confirmGroupExit(scope, false));
+    }
+
+    private void inviteFriend(String scope) {
+        String[] friends = socialItems.stream().filter(row -> row.kind() == SocialItem.Kind.FRIEND).map(SocialItem::user).toArray(String[]::new);
+        if (friends.length == 0) { feedback("暂无可邀请的好友", false); return; }
+        long revision = sessionRevision;
+        Object value = JOptionPane.showInputDialog(this, "选择好友的用户名", "邀请好友", JOptionPane.PLAIN_MESSAGE, null, friends, friends[0]);
+        if (value != null && revision == sessionRevision)
+            socialChange(SocialAction.GROUP_INVITE, b -> b.conversationId(scope).to(value.toString()), "邀请已发送，等待好友接受");
+    }
+
+    private void transferGroup(String scope) {
+        long revision = sessionRevision;
+        String user = JOptionPane.showInputDialog(this, "输入新管理员的用户名（须为当前群成员）", "转让管理员", JOptionPane.PLAIN_MESSAGE);
+        if (user != null && revision == sessionRevision)
+            socialChange(SocialAction.GROUP_TRANSFER, b -> b.conversationId(scope).to(user), "管理员已转让");
+    }
+
+    private void confirmGroupExit(String scope, boolean disband) {
+        String title = disband ? "解散群组" : "退出群组";
+        long revision = sessionRevision;
+        if (JOptionPane.showConfirmDialog(this, "确认" + title + "？已授权的旧记录可继续查看。", title,
+                JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION && revision == sessionRevision) {
+            socialChange(disband ? SocialAction.GROUP_DISBAND : SocialAction.GROUP_LEAVE,
+                    b -> b.conversationId(scope), disband ? "群组已解散" : "已退出群组");
+        }
+    }
+
+    private void showNewConversation() {
+        ChatPopupMenu popup = socialMenu();
         popup.show(create, 0, create.getHeight() + 4);
+    }
+    ChatPopupMenu socialMenu() {
+        ChatPopupMenu popup = new ChatPopupMenu(create, "好友与群组");
+        popup.action("newPublic", "进入公共聊天室", LineIcon.Kind.USERS, () -> selectConversation(ConversationId.PUBLIC));
+        popup.addSeparator();
+        socialItem(popup, "socialFindUser", "查找用户", () -> openSocial(SocialDialog.View.USERS));
+        socialItem(popup, "socialFriends", "好友", () -> openSocial(SocialDialog.View.FRIENDS));
+        long requests = incomingRequests();
+        socialItem(popup, "socialRequests", requests == 0 ? "请求" : "请求 (" + requests + ")", () -> openSocial(SocialDialog.View.REQUESTS));
+        popup.addSeparator();
+        socialItem(popup, "socialFindGroup", "查找群组", () -> openSocial(SocialDialog.View.GROUPS));
+        socialItem(popup, "socialCreateGroup", "创建群组", this::createGroup);
+        return popup;
     }
     ChatPopupMenu conversationMenu() {
         ChatPopupMenu popup = new ChatPopupMenu(more, store.selected().title());
@@ -844,6 +1060,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         clear.setEnabled(connectionState == ChatClient.State.CONNECTED && !deletingHistory);
         JMenuItem reload = popup.action("chatReloadHistory", "重新加载聊天记录", LineIcon.Kind.BACK, this::reloadHistory);
         reload.setEnabled(connectionState == ChatClient.State.CONNECTED && !deletingHistory);
+        addConversationActions(popup, store.selectedId());
         return popup;
     }
     private void showChatMenu() { ChatPopupMenu popup = conversationMenu(); popup.show(more, more.getWidth() - popup.getPreferredSize().width, more.getHeight() + 4); }
@@ -859,6 +1076,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         appearance = value; ThemePalette palette = ThemePalette.of(value); background.setAppearance(value);
         ChatTheme.apply(pages, palette); sidebar.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, palette.line()));
         if (historySearch != null && historySearch.isDisplayable()) historySearch.applyPalette(palette);
+        if (socialDialog != null && socialDialog.isDisplayable()) socialDialog.applyPalette(palette);
         conversations.repaint(); renderTimeline();
         if (persist) {
             try { appearancePreferences.save(value); setStatus("外观设置已保存到本机", false); }

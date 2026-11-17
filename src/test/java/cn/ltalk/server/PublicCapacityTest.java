@@ -34,6 +34,7 @@ class PublicCapacityTest {
             server.start();
             // Prepare fixture accounts outside the measurement. The live login wave uses real PBKDF2 verification.
             for (int i = 0; i <= CLIENTS; i++) server.accounts().register(user(i), user(i), PASSWORD, false);
+            SocialFixtures.permitPrivate(server, user(0), user(CLIENTS));
             long loginStart = System.nanoTime();
             for (int start = 0; start < CLIENTS; start += 20)
                 peers.addAll(loginWave(logins, identity, server.port(), start, Math.min(CLIENTS, start + 20)));

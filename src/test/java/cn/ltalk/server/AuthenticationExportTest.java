@@ -76,6 +76,7 @@ class AuthenticationExportTest {
             try (Peer a = Peer.login(server.port(), "alice"); Peer b = Peer.login(server.port(), "bob"); Peer c = Peer.login(server.port(), "carol")) {
                 a.group("公共\n🙂,\"<html>");
                 for (Peer p : List.of(a,b,c)) p.type(MessageType.GROUP_MESSAGE);
+                SocialFixtures.permitPrivate(server, "alice", "bob");
                 a.privateTo("bob", "secret"); a.type(MessageType.PRIVATE_MESSAGE); b.type(MessageType.PRIVATE_MESSAGE);
                 a.send(Message.of(MessageType.EXPORT_REQUEST).requestId("cursor-owner").build());
                 String owned = a.type(MessageType.EXPORT_PAGE).cursor();
@@ -139,6 +140,8 @@ class AuthenticationExportTest {
             server.start();
             try (Peer a = Peer.login(server.port(), "alice"); Peer b = Peer.login(server.port(), "bob"); Peer c = Peer.login(server.port(), "carol")) {
                 a.group("public"); for (Peer p : List.of(a, b, c)) p.type(MessageType.GROUP_MESSAGE);
+                SocialFixtures.permitPrivate(server, "alice", "bob");
+                SocialFixtures.permitPrivate(server, "alice", "carol");
                 a.privateTo("bob", "outbound"); a.type(MessageType.PRIVATE_MESSAGE); b.type(MessageType.PRIVATE_MESSAGE);
                 b.privateTo("alice", "inbound"); a.type(MessageType.PRIVATE_MESSAGE); b.type(MessageType.PRIVATE_MESSAGE);
                 a.privateTo("carol", "other"); a.type(MessageType.PRIVATE_MESSAGE); c.type(MessageType.PRIVATE_MESSAGE);
@@ -164,6 +167,7 @@ class AuthenticationExportTest {
                 public void onStateChanged(ChatClient.State s, String detail) { if (s == ChatClient.State.CONNECTED) ready.countDown(); }
                 public void onExported(Path path) { completed.add(path); }
             }, Runnable::run); Peer bob = Peer.login(server.port(), "bob")) {
+                SocialFixtures.permitPrivate(server, "alice", "bob");
                 client.connect("127.0.0.1", server.port(), "alice", "pass!12"); assertTrue(ready.await(4, TimeUnit.SECONDS));
                 client.sendGroup("group only"); bob.type(MessageType.GROUP_MESSAGE);
                 client.sendPrivate("bob", "private only"); bob.type(MessageType.PRIVATE_MESSAGE);

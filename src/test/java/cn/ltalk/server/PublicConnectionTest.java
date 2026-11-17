@@ -103,6 +103,7 @@ class PublicConnectionTest {
              ChatClient alice = client(a, identity.client); ChatClient bob = client(b, identity.client)) {
             server.accounts().register("alice", "Alice", "test123!", false);
             server.accounts().register("bob", "Bob", "test123!", false);
+            SocialFixtures.permitPrivate(server, "alice", "bob");
             login(alice, a, server.port(), "alice");
             login(bob, b, server.port(), "bob");
             long ready = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);

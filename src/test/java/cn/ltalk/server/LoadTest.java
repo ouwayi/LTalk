@@ -28,6 +28,7 @@ class LoadTest {
             server.start(); cn.ltalk.support.Peer.seed(server);
             try {
                 for (int i = 0; i < 10; i++) peers.add(Peer.login(server.port(), "load" + i));
+                for (int i = 0; i < 10; i++) SocialFixtures.permitPrivate(server, "load" + i, "load" + (i + 1) % 10);
                 for (Peer peer : peers) peer.users(10);
                 long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
                 do {
