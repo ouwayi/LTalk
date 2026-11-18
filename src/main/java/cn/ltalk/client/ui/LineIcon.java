@@ -6,7 +6,7 @@ import java.awt.geom.*;
 
 /** Small vector icons stay sharp at desktop display scaling, without remote or font assets. */
 public record LineIcon(Kind kind, Color color, int size) implements Icon {
-    public enum Kind { MENU, COMPOSE, SEARCH, MORE, SEND, ATTACH, IMAGE, EMOJI, BACK, COPY, CLOSE, USERS, LOGOUT, CHECK, SETTINGS, PALETTE, SUN, MOON }
+    public enum Kind { MENU, COMPOSE, SEARCH, MORE, SEND, ATTACH, IMAGE, EMOJI, BACK, DOWN, COPY, CLOSE, USERS, LOGOUT, CHECK, SETTINGS, PALETTE, SUN, MOON }
     @Override public int getIconWidth() { return size; }
     @Override public int getIconHeight() { return size; }
     @Override public void paintIcon(Component component, Graphics graphics, int x, int y) {
@@ -38,6 +38,7 @@ public record LineIcon(Kind kind, Color color, int size) implements Icon {
                 g.drawPolyline(new int[]{3, 9, 13, 17, 21}, new int[]{17, 12, 16, 11, 16}, 5);
             }
             case BACK -> { line(g, 20, 12, 4, 12); line(g, 4, 12, 11, 5); line(g, 4, 12, 11, 19); }
+            case DOWN -> { line(g, 12, 4, 12, 20); line(g, 5, 13, 12, 20); line(g, 12, 20, 19, 13); }
             case COPY -> {
                 g.drawRoundRect(8, 7, 12, 14, 3, 3);
                 g.draw(new Arc2D.Double(4, 3, 4, 4, 90, 90, Arc2D.OPEN));

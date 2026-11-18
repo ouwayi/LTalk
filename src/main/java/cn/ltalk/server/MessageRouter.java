@@ -19,7 +19,8 @@ final class MessageRouter {
 
     void handle(ClientSession session, Message request) {
         if (request.type() == MessageType.GROUP_SEND || request.type() == MessageType.PRIVATE_SEND
-                || request.type() == MessageType.HISTORY_DELETE || request.type() == MessageType.SOCIAL_REQUEST) {
+                || request.type() == MessageType.HISTORY_DELETE
+                || (request.type() == MessageType.SOCIAL_REQUEST && !SocialAction.GROUP_MEMBERS.name().equals(request.socialAction()))) {
             // A deleted record's earlier live delivery must not overtake the deletion acknowledgement.
             synchronized (mutationOrder) { handleRequest(session, request); }
         } else handleRequest(session, request);
@@ -252,6 +253,12 @@ final class MessageRouter {
         switch (action) {
             case STATE -> rows = server.social().items(session.userId, server.accounts());
             case FIND_GROUP -> rows = server.social().directory(request.content(), session.userId);
+            case GROUP_MEMBERS -> {
+                String id = ConversationScope.groupId(request.conversationId());
+                rows = server.social().roster(id, session.userId).stream()
+                        .map(user -> SocialItem.user(SocialItem.Kind.GROUP_MEMBER, user, server.accounts().nickname(user)))
+                        .toList();
+            }
             case FIND_USER -> {
                 if (request.content() != null) {
                     rows = server.accounts().findUsers(session.userId, request.content());
@@ -285,7 +292,15 @@ final class MessageRouter {
                 .sorted(Comparator.comparing(SocialItem::key)).limit(SocialAction.PAGE_SIZE + 1L).toList();
         int count = Math.min(SocialAction.PAGE_SIZE, page.size());
         for (int i = 0; i < count; i++) {
-            if (!server.deliver(session, Message.of(MessageType.SOCIAL_ROW).requestId(request.requestId()).socialItem(page.get(i)).build()))
+            SocialItem row = page.get(i);
+            if (action == SocialAction.GROUP_MEMBERS) {
+                Message display = displayMessage(row.user());
+                if (display != null && !server.deliverAndWait(session, display)) {
+                    session.close("群成员资料发送失败");
+                    return;
+                }
+            }
+            if (!server.deliver(session, Message.of(MessageType.SOCIAL_ROW).requestId(request.requestId()).socialItem(row).build()))
                 return;
         }
         server.deliver(session, Message.of(MessageType.SOCIAL_END).requestId(request.requestId())

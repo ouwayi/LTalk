@@ -212,6 +212,7 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 | STATE | 可选 cursor；本人好友、私聊许可、待处理请求与已获历史授权的群组 |
 | FIND_USER | content 为昵称或用户名片段，去首尾空白后 1～40 个 UTF-16 单元，忽略大小写。可选 cursor。返回除本人外的匹配账号，包含完整用户名与当前昵称。无匹配时返回空页。省略 content 时仍接受旧客户端用 to 精确查询完整用户名。 |
 | FIND_GROUP | content 为可选群名片段或群 UUID，最长 64 字符；可选 cursor；返回存续群组的目录元数据 |
+| GROUP_MEMBERS | conversationId 为 `GROUP:<UUID>`，可选 cursor；仅当前群成员可查询，返回该群的当前成员（含离线成员） |
 | FRIEND_REQUEST / FRIEND_REMOVE | to 为对方用户名，允许离线；申请需要对方确认 |
 | FRIEND_ACCEPT / FRIEND_REJECT | messageId 为申请 ID；只有接收方可处理 |
 | PRIVATE_REQUEST | to 为对方用户名，须在线；每对账号至多一个在途请求 |
@@ -227,6 +228,8 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 | GROUP_LEAVE / GROUP_DISBAND | conversationId；普通成员可退出，管理员可解散，或先转让再退出 |
 
 `socialItem` 包含 `kind` 和 `id`。用户类可带 `user`、`title`。请求项使用请求 UUID，`user` 为对端，涉及群组时附带 `group`、`title`、`admin` 和 `review`。群目录项附带群 UUID、群名、当前管理员、审核开关和本人的 `member`。已解散群组仅保留在曾获授权成员的 STATE 中，管理员字段省略。
+
+`GROUP_MEMBERS` 的行使用 `GROUP_MEMBER`，`id` 和 `user` 均为完整用户名，`title` 为当前昵称。需要同步的展示资料通过 `DISPLAY_PROFILE` 先于对应行发送。客户端结合 `USER_LIST` 计算在线人数。加入或退出独立群组时，服务端也向其余当前成员发送 `SOCIAL_CHANGED`，打开名单的客户端可刷新各页。每次翻页重新校验当前成员身份。非成员返回 `FORBIDDEN`，不存在或已解散的群返回 `NOT_FOUND`。公共聊天室使用登录后已有的 `USER_LIST`，其范围不适用于本查询。
 
 仅当前群成员可通过带群组会话 ID 的 `GROUP_SEND` 发消息。成员加入时记录当时最近 100 条的起点，退出或解散时关闭授权区间，再次入群增加新的区间。浏览、搜索定位、导出、删除和摘要共同使用这些区间。从未加入的账号无法获取群消息。独立群组使用服务端 UUID，公共聊天室保留 `GROUP:PUBLIC`。
 

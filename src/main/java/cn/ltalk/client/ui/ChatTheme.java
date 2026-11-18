@@ -30,8 +30,9 @@ public final class ChatTheme {
         return DEFAULT;
     }
     public static void apply(JComponent root, ThemePalette palette) {
-        root.putClientProperty(PALETTE, palette); applyTree(root, palette); root.repaint();
+        root.putClientProperty(PALETTE, palette); refresh(root);
     }
+    static void refresh(JComponent root) { applyTree(root, palette(root)); root.repaint(); }
     private static void applyTree(Component component, ThemePalette palette) {
         if (component instanceof JComponent c) {
             if (c.getClientProperty(FOREGROUND) instanceof Role role) c.setForeground(palette.color(role));

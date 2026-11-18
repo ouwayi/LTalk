@@ -5,7 +5,7 @@ public record SocialItem(Kind kind, String id, String user, String group, String
                          String admin, Boolean review, Boolean member) {
     public enum Kind {
         USER, FRIEND, PRIVATE_ALLOWED, PRIVATE_BLOCKED,
-        FRIEND_IN, FRIEND_OUT, PRIVATE_IN, PRIVATE_OUT, GROUP, JOIN_IN, JOIN_OUT, INVITE_IN
+        FRIEND_IN, FRIEND_OUT, PRIVATE_IN, PRIVATE_OUT, GROUP, JOIN_IN, JOIN_OUT, INVITE_IN, GROUP_MEMBER
     }
 
     public String key() { return kind.name() + ":" + id; }

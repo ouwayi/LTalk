@@ -96,6 +96,12 @@ final class SocialStore {
         return activeMembers(group);
     }
 
+    synchronized Set<String> roster(String id, String requester) throws ProtocolException {
+        Group group = group(state, id);
+        if (!group.member(requester)) throw error("FORBIDDEN", "只有当前群成员可以查看群成员名单");
+        return activeMembers(group);
+    }
+
     synchronized List<SocialItem> directory(String query, String user) throws ProtocolException {
         String key = query == null ? "" : query.strip().toLowerCase(Locale.ROOT);
         if (key.length() > 64) throw error("BAD_MESSAGE", "群组搜索最多 64 个字符");
@@ -323,6 +329,7 @@ final class SocialStore {
             case GROUP_LEAVE -> {
                 if (!group.member(user)) throw error("FORBIDDEN", "当前账号已不在该群");
                 if (group.admin.equals(user)) throw error("ADMIN_REQUIRED", "请先转让管理员，或选择解散群组");
+                affected.addAll(activeMembers(group));
                 next.groups.put(id, endMembership(group, user, archive.lastTime()));
                 cancelGroupRequests(next, id, req -> req.kind == RequestKind.INVITE && user.equals(req.from), affected);
             }
@@ -359,8 +366,7 @@ final class SocialStore {
         ranges.add(new Range(archive.groupHistoryStart(group.id), null));
         memberships.put(user, List.copyOf(ranges));
         next.groups.put(group.id, new Group(group.id, group.title, group.admin, group.review, group.closed, memberships));
-        affected.add(user);
-        affected.add(group.admin);
+        affected.addAll(activeMembers(next.groups.get(group.id)));
         cancelGroupRequests(next, group.id,
                 req -> (req.kind == RequestKind.JOIN && user.equals(req.from)) || (req.kind == RequestKind.INVITE && user.equals(req.to)),
                 affected);

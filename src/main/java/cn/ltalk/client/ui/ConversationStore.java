@@ -85,6 +85,7 @@ public final class ConversationStore {
     public Summary selected() { return summary(conversations.get(selected)); }
     public List<Entry> entries() { return List.copyOf(conversations.get(selected).entries); }
     public int onlineCount() { return onlineUsers.size(); }
+    public List<String> onlineUsers() { return onlineUsers; }
     public String draft() { return conversations.get(selected).draft; }
     public void saveDraft(String text) { conversations.get(selected).draft = text; }
     public String replyDraft() { return conversations.get(selected).replyDraft; }
@@ -116,6 +117,7 @@ public final class ConversationStore {
     public boolean mayRequestPrivate(String user) { return online(user) && !friend(user) && !allowed.contains(user)
             && !blocked(user) && !pending.contains(user); }
     public SocialItem groupInfo(String id) { return groups.get(id); }
+    public Summary privateSummary(String user) { return summary(ensurePrivate(user)); }
     public ConversationId openPrivate(String user) { return ensurePrivate(user).id; }
     public ConversationId openGroup(String id) { return ensureGroup(id).id; }
 
@@ -202,7 +204,7 @@ public final class ConversationStore {
         return friend(selected.key()) || (selectionConfirmed && current.online && allowed.contains(selected.key()));
     }
 
-    private boolean joined(String id) {
+    public boolean joined(String id) {
         SocialItem group = groups.get(id);
         return group != null && Boolean.TRUE.equals(group.member());
     }
@@ -392,6 +394,21 @@ public final class ConversationStore {
                         .thenComparing(Summary::time, Comparator.nullsLast(Comparator.reverseOrder()))
                         .thenComparing(Summary::title).thenComparing(c -> c.id().key()))
                 .toList();
+    }
+
+    public boolean inPublicList(Summary row) {
+        return row.id().equals(ConversationId.PUBLIC)
+                || (row.id().kind() == ConversationId.Kind.PRIVATE && online(row.id().key()));
+    }
+
+    public boolean inContactsList(Summary row) {
+        ConversationId id = row.id();
+        return id.kind() == ConversationId.Kind.PRIVATE ? friend(id.key()) : !id.equals(ConversationId.PUBLIC) && joined(id.key());
+    }
+
+    public boolean hasDraft(ConversationId id) {
+        Conversation conversation = conversations.get(id);
+        return conversation != null && (!conversation.draft.isEmpty() || conversation.replyDraft != null);
     }
 
     private static Instant parseTime(String value) {

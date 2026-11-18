@@ -19,6 +19,7 @@ import javax.imageio.ImageIO;
 import javax.swing.*;
 import javax.swing.text.JTextComponent;
 import java.awt.*;
+import java.awt.event.MouseEvent;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
 import java.net.InetAddress;
@@ -274,7 +275,7 @@ class ChatWindowTest {
                 button(window, "send").doClick();
                 assertTrue(hasSendStatus(window, "发送中"));
                 assertEquals("", area(window, "input").getText());
-                button(window, "group").doClick();
+                openPublic(window);
             });
             reject.countDown();
             onEdt(() -> selectPeer(window, "bob"));
@@ -320,7 +321,7 @@ class ChatWindowTest {
                 assertTrue(hasSendStatus(window, "发送失败"));
                 assertTrue(hasSendStatus(window, "结果待确认"));
                 assertEquals("私聊草稿", area(window, "input").getText());
-                button(window, "group").doClick();
+                openPublic(window);
                 assertEquals("群聊草稿", area(window, "input").getText());
                 selectPeer(window, "bob");
                 button(window, "send").doClick();
@@ -418,7 +419,7 @@ class ChatWindowTest {
                 onEdt(() -> {
                     assertEquals("保留的私聊草稿", area(window, "input").getText());
                     assertTrue(label(window, "recipient").getText().contains("重新选择"));
-                    button(window, "group").doClick(); assertTrue(button(window, "send").isEnabled());
+                    openPublic(window); assertTrue(button(window, "send").isEnabled());
                     area(window, "input").setText("UI-G-001 中文🙂\n<html><b>纯文本</b>"); button(window, "send").doClick();
                 });
                 awaitEdt(() -> history(window).contains("UI-G-001"));
@@ -427,9 +428,10 @@ class ChatWindowTest {
                     assertEquals(1, history.split("UI-G-001", -1).length - 1);
                     assertTrue(history.contains("<html><b>纯文本</b>"));
                     assertFalse(history.contains("UI-P-001"), "Private history must not leak into the public conversation");
-                    selectPeer(window, "bob"); assertTrue(history(window).contains("UI-P-001"));
+                    assertEquals(1, list(window).getModel().getSize(), "Offline non-friends leave the public list");
+                    openArchived(window, ConversationId.privateWith("bob")); assertTrue(history(window).contains("UI-P-001"));
                     assertTrue(label(window, "recipient").getText().contains("私聊 bob"));
-                    button(window, "group").doClick();
+                    openPublic(window);
                     renderComponentPreview(window);
                     button(window, "disconnect").doClick();
                 });
@@ -463,7 +465,7 @@ class ChatWindowTest {
                     JTextComponent editor = area(window, "input"); editor.setCaretPosition(editor.getDocument().getLength());
                     invokeKey(editor, java.awt.event.KeyEvent.VK_ENTER, java.awt.event.InputEvent.SHIFT_DOWN_MASK);
                     editor.replaceSelection("第二行"); assertEquals("第一行\n第二行", editor.getText());
-                    button(window, "group").doClick(); assertEquals("公共草稿", editor.getText());
+                    openPublic(window); assertEquals("公共草稿", editor.getText());
                     selectPeer(window, "bob"); assertEquals("第一行\n第二行", editor.getText());
                     invokeKey(editor, java.awt.event.KeyEvent.VK_ENTER, 0); assertEquals("", editor.getText());
                 });
@@ -475,7 +477,7 @@ class ChatWindowTest {
                     text(window, "conversationSearch").setText("BOB");
                     assertEquals(2, list(window).getModel().getSize(), "Matches bob's private conversation and the public preview sent by bob");
                     assertEquals("bob", summary(window, "bob").title());
-                    text(window, "conversationSearch").setText(""); button(window, "group").doClick();
+                    text(window, "conversationSearch").setText(""); openPublic(window);
                     area(window, "input").setText("很高兴见到大家，我们可以开始讨论项目了。"); button(window, "send").doClick();
                 });
                 awaitEdt(() -> history(window).contains("讨论项目"));
@@ -518,7 +520,7 @@ class ChatWindowTest {
                     button(window, "back").doClick(); layout(window.getContentPane());
                     assertTrue(find(window, "sidebar").isVisible()); assertFalse(find(window, "chatPane").isVisible());
                     render(window, 420, 760, "ui-narrow-list.png");
-                    button(window, "group").doClick(); layout(window.getContentPane()); assertTrue(find(window, "chatPane").isVisible());
+                    openPublic(window); layout(window.getContentPane()); assertTrue(find(window, "chatPane").isVisible());
                     assertTrue(history(window).contains("讨论项目"));
                     area(window, "input").setText("\n "); button(window, "send").doClick();
                     assertEquals("\n ", area(window, "input").getText()); assertTrue(label(window, "status").getText().contains("空白"));
@@ -555,7 +557,7 @@ class ChatWindowTest {
                     assertEquals(ThemePalette.of(dark).text(), area(window, "input").getForeground());
                     assertTrue(history(window).contains("之前的消息")); assertFalse(text(window, "host").isEnabled());
                     render(window, 1200, 780, "ui-dark-desktop.png");
-                    button(window, "group").doClick(); render(window, 420, 760, "ui-dark-narrow.png");
+                    openPublic(window); render(window, 420, 760, "ui-dark-narrow.png");
                     area(window, "input").setText("DARK-G-001"); button(window, "send").doClick();
                 });
                 assertEquals("DARK-G-001", bob.await(m -> m.type() == MessageType.GROUP_MESSAGE && "alice".equals(m.from())).content());
@@ -597,7 +599,9 @@ class ChatWindowTest {
                 assertNull(find(window, "connectionSettings"));
                 assertNull(find(window.mainMenu(), "menuExport")); assertNotNull(find(window.mainMenu(), "menuAppearance"));
                 assertNull(find(window.conversationMenu(), "chatAppearance")); assertNull(find(window.conversationMenu(), "chatConnection"));
-                assertFalse(((JMenuItem) find(window.conversationMenu(), "chatExport")).isEnabled());
+                button(window, "conversationIdentity").doClick();
+                assertFalse(button(window, "infoExport").isEnabled());
+                button(window, "closeConversationInfo").doClick();
                 render(window, 1000, 760, "welcome-login.png");
             });
             ChatWindow window = ref.get(); awaitEdt(() -> button(window, "connect").isEnabled());
@@ -623,7 +627,9 @@ class ChatWindowTest {
             onEdt(() -> {
                 assertFalse(find(window, "welcomeScroll").isVisible()); assertEquals("新用户", label(window, "identityNickname").getText());
                 assertEquals("@newUI", label(window, "identityUsername").getText()); assertEquals("", text(window, "password").getText());
-                assertTrue(((JMenuItem) find(window.conversationMenu(), "chatExport")).isEnabled());
+                button(window, "conversationIdentity").doClick();
+                assertTrue(button(window, "infoExport").isEnabled());
+                button(window, "closeConversationInfo").doClick();
                 ((JMenuItem) find(window.identityMenu(), "accountProfile")).doClick();
                 JDialog dialog = profileDialog(window); assertNotNull(dialog);
                 renderContainer(dialog.getContentPane(), 480, 570, "profile-editor.png");
@@ -633,7 +639,7 @@ class ChatWindowTest {
             awaitEdt(() -> "修改后的昵称".equals(label(window, "identityNickname").getText()) && profileDialog(window) == null);
             assertEquals("修改后的昵称", server.accounts().profile("newUI").nickname());
             onEdt(() -> {
-                button(window, "group").doClick(); area(window, "input").setText("上一账号的草稿");
+                openPublic(window); area(window, "input").setText("上一账号的草稿");
                 render(window, 1000, 760, "profile-footer.png");
                 ((JMenuItem) find(window.identityMenu(), "accountLogout")).doClick();
                 assertFalse(button(window, "send").isEnabled()); assertEquals("", area(window, "input").getText());
@@ -728,7 +734,7 @@ class ChatWindowTest {
                 onEdt(() -> ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("switch.properties"))));
                 ChatWindow window = ref.get(); login(window); awaitEdt(() -> button(window, "send").isEnabled());
                 onEdt(() -> {
-                    button(window, "group").doClick(); area(window, "input").setText("原账号的草稿");
+                    openPublic(window); area(window, "input").setText("原账号的草稿");
                     ((JMenuItem) find(window.identityMenu(), "accountSwitch")).doClick();
                     assertTrue(button(window, "backToChat").isVisible()); assertEquals("@alice", label(window, "identityUsername").getText());
                 });
@@ -799,15 +805,15 @@ class ChatWindowTest {
             server.accounts().updateProfile("bob", "离线昵称", avatar);
             onEdt(() -> ref.set(new ChatWindow("127.0.0.1",Integer.toString(server.port()),"alice",appearanceDirectory.resolve("history.properties"))));
             ChatWindow window=ref.get(); login(window);
-            awaitEdt(() -> list(window).getModel().getSize() == 2 && history(window).contains("历史公共一")
+            awaitEdt(() -> list(window).getModel().getSize() == 1 && history(window).contains("历史公共一")
                     && history(window).contains("[离线昵称] 历史公共二") && label(window,"status").getText().contains("已加载"));
             onEdt(() -> {
                 assertEquals("离线昵称：历史公共二", summary(window, ConversationId.PUBLIC).preview());
-                assertEquals("离线昵称", summary(window, "bob").title());
-                BufferedImage receivedAvatar = summary(window, "bob").profile().avatar();
+                var offline = openArchived(window, ConversationId.privateWith("bob"));
+                assertEquals("离线昵称", offline.title());
+                BufferedImage receivedAvatar = offline.profile().avatar();
                 assertEquals(256, receivedAvatar.getWidth());
                 assertEquals(avatarColor.getRGB(), receivedAvatar.getRGB(128, 128));
-                selectPeer(window,"bob");
                 assertFalse(history(window).contains("离线联系人历史"), "A summary must not add a message to the timeline");
                 assertFalse(button(window,"send").isEnabled());
                 assertEquals("离线昵称", label(window, "conversationTitle").getText());
@@ -815,7 +821,7 @@ class ChatWindowTest {
             });
             awaitEdt(() -> history(window).contains("[离线昵称] 离线联系人历史"));
             onEdt(() -> {
-                button(window,"group").doClick(); area(window,"input").setText("删除不影响草稿");
+                openPublic(window); area(window,"input").setText("删除不影响草稿");
                 render(window,1000,760,"history-restored.png");
                 JMenuItem item=messageDelete(window,"历史公共一"); assertNotNull(item); assertTrue(item.isEnabled());
                 confirmNext(window); item.doClick();
@@ -823,14 +829,16 @@ class ChatWindowTest {
             awaitEdt(() -> !history(window).contains("历史公共一") && history(window).contains("历史公共二") && label(window,"status").getText().contains("已加载"));
             onEdt(() -> {
                 assertEquals("删除不影响草稿",area(window,"input").getText()); confirmNext(window);
-                ((JMenuItem)find(window.conversationMenu(),"chatClearHistory")).doClick();
+                button(window, "conversationIdentity").doClick();
+                button(window, "infoClearHistory").doClick();
+                button(window, "closeConversationInfo").doClick();
             });
             awaitEdt(() -> !history(window).contains("历史公共二") && label(window,"status").getText().contains("已加载"));
             onEdt(() -> window.dispatchEvent(new WindowEvent(window,WindowEvent.WINDOW_CLOSING))); ref.set(null); awaitEdt(() -> server.onlineCount()==0);
             onEdt(() -> ref.set(new ChatWindow("127.0.0.1",Integer.toString(server.port()),"alice",appearanceDirectory.resolve("history.properties"))));
             ChatWindow reopened=ref.get(); login(reopened);
-            awaitEdt(() -> list(reopened).getModel().getSize() == 2 && label(reopened,"status").getText().contains("已加载"));
-            onEdt(() -> { assertFalse(history(reopened).contains("历史公共")); selectPeer(reopened,"bob"); });
+            awaitEdt(() -> list(reopened).getModel().getSize() == 1 && label(reopened,"status").getText().contains("已加载"));
+            onEdt(() -> { assertFalse(history(reopened).contains("历史公共")); openArchived(reopened, ConversationId.privateWith("bob")); });
             awaitEdt(() -> history(reopened).contains("离线联系人历史"));
             try (Peer bob=Peer.login(server.port(),"bob")) {
                 bob.send(Message.of(MessageType.HISTORY_REQUEST).requestId("other-copy").build());
@@ -845,7 +853,7 @@ class ChatWindowTest {
                 });
                 bob.privateTo("alice", "实时私聊");
                 awaitEdt(() -> history(reopened).contains("[实时昵称] 实时私聊"));
-                onEdt(() -> button(reopened, "group").doClick());
+                onEdt(() -> openPublic(reopened));
                 bob.send(Message.of(MessageType.GROUP_SEND).requestId("forged-name").from("alice")
                         .nickname("伪造昵称").content("实时群聊").build());
                 Message echo = bob.type(MessageType.GROUP_MESSAGE);
@@ -885,13 +893,17 @@ class ChatWindowTest {
                 onEdt(() -> {
                     assertFalse(history(window).contains("公开历史-41"));
                     window.applyAppearance(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK), false);
-                    button(window, "group").doClick();
+                    openPublic(window);
                     render(window, 420, 680, "history-recent-narrow.png");
                     assertTrue(find(window, "chatPane").isVisible());
                 });
                 onEdt(() -> {
                     MessageTimeline timeline = (MessageTimeline) find(window, "timeline");
+                    assertFalse(button(window, "returnLatest").isVisible());
                     timeline.getVerticalScrollBar().setValue(0);
+                    JButton latest = button(window, "returnLatest");
+                    assertTrue(latest.isVisible());
+                    assertTrue(latest.getY() + latest.getHeight() < SwingUtilities.convertPoint(button(window, "send"), 0, 0, latest.getParent()).y);
                     anchorY[0] = viewportY(timeline, "公开历史-42");
                     assertTrue(anchorY[0] >= 0 && anchorY[0] < timeline.getViewport().getHeight());
                     timeline.dispatchEvent(new java.awt.event.MouseWheelEvent(timeline, java.awt.event.MouseEvent.MOUSE_WHEEL,
@@ -905,8 +917,10 @@ class ChatWindowTest {
                     assertFalse(history(window).contains("公开历史-21"));
                     assertFalse(history(window).contains("独特关键词"));
                     area(window, "input").setText("分页期间保留的草稿");
-                    button(window, "chatSearch").doClick();
+                    button(window, "returnLatest").doClick();
                 });
+                awaitEdt(() -> ((MessageTimeline) find(window, "timeline")).followingLatest() && !button(window, "returnLatest").isVisible());
+                onEdt(() -> button(window, "chatSearch").doClick());
                 JDialog dialog = historySearchDialog(window);
                 onEdt(() -> {
                     ((JTextField) find(dialog, "messageSearch")).setText("独特关键词");
@@ -954,6 +968,157 @@ class ChatWindowTest {
         });
         assertNotNull(dialog.get());
         return dialog.get();
+    }
+
+    @Test @Timeout(35)
+    void chatInformationCardsAndSidebarFollowMembershipPresenceAndFriendship() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start();
+            server.accounts().register("alice", "Alice", "test123!", false);
+            server.accounts().register("bob", "小波", "test123!", false);
+            server.accounts().register("carol", "离线成员", "test123!", false);
+            try (Peer bob = Peer.login(server.port(), "bob")) {
+                social(bob, Message.of(MessageType.SOCIAL_REQUEST).socialAction("GROUP_CREATE").nickname("项目小组").content("OPEN"));
+                bob.send(Message.of(MessageType.SOCIAL_REQUEST).requestId("find-group").socialAction("FIND_GROUP").content("项目").build());
+                SocialItem group = bob.await(frame -> "find-group".equals(frame.requestId()) && frame.type() == MessageType.SOCIAL_ROW).socialItem();
+                String scope = ConversationScope.group(group.id());
+                for (String user : List.of("alice", "carol")) {
+                    try (Peer member = Peer.login(server.port(), user)) {
+                        social(member, Message.of(MessageType.SOCIAL_REQUEST).socialAction("GROUP_REQUEST").conversationId(scope));
+                    }
+                    bob.users(1);
+                }
+                onEdt(() -> ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("info.properties"))));
+                ChatWindow window = ref.get();
+                login(window);
+                awaitEdt(() -> sidebarIds(window).equals(List.of(ConversationId.PUBLIC, ConversationId.privateWith("bob"))));
+                onEdt(() -> {
+                    button(window, "conversationIdentity").doClick();
+                    assertEquals("2 位成员 · 2 人在线", label(window, "infoDetail").getText());
+                    assertNotNull(find(window, "groupMember-alice"));
+                    assertNull(find(window, "groupLeave"));
+                    assertFalse(button(window, "chatMore").isVisible());
+                    ((JToggleButton) find(window, "contactsTab")).doClick();
+                    assertEquals("公共聊天室", label(window, "conversationTitle").getText(), "Changing categories leaves the current chat open");
+                });
+                ConversationId groupId = ConversationId.group(group.id());
+                awaitEdt(() -> sidebarIds(window).equals(List.of(groupId)));
+                onEdt(() -> {
+                    list(window).setSelectedIndex(0);
+                    assertFalse(find(window, "conversationInfo").isVisible());
+                    button(window, "conversationIdentity").doClick();
+                });
+                awaitEdt(() -> "3 位成员 · 2 人在线".equals(label(window, "infoDetail").getText()));
+                onEdt(() -> {
+                    assertEquals("群号 " + group.id(), label(window, "infoIdentifier").getText());
+                    assertTrue(button(window, "infoExport").isEnabled());
+                    assertTrue(button(window, "infoClearHistory").isEnabled());
+                    assertTrue(button(window, "groupLeave").isEnabled());
+                    assertNull(find(window, "groupDisband"));
+                    render(window, 1280, 760, "group-information.png");
+                    assertTrue(find(window, "chatContent").isVisible());
+                    assertTrue(find(window, "conversationInfo").getX() > find(window, "chatContent").getWidth());
+                    button(window, "groupMember-carol").doClick();
+                    assertEquals("离线成员", label(window, "infoName").getText());
+                    assertEquals("@carol", label(window, "infoIdentifier").getText());
+                    assertEquals("离线", label(window, "infoDetail").getText());
+                    assertTrue(button(window, "infoRequestFriend").isEnabled());
+                    button(window, "backToGroupInfo").doClick();
+                    button(window, "closeConversationInfo").doClick();
+                    area(window, "input").setText("仍保留的群聊草稿");
+                });
+                try (Peer carol = Peer.login(server.port(), "carol")) {
+                    bob.send(Message.of(MessageType.GROUP_SEND).requestId("card-message").conversationId(scope).content("头像打开资料").build());
+                    awaitEdt(() -> history(window).contains("头像打开资料"));
+                    onEdt(() -> {
+                        render(window, 1280, 760, "group-before-avatar.png");
+                        clickMessageAvatar(window, "头像打开资料");
+                        assertEquals("@bob", label(window, "infoIdentifier").getText());
+                        assertEquals("小波", label(window, "infoName").getText());
+                        button(window, "infoSendMessage").doClick();
+                        assertEquals("小波", label(window, "conversationTitle").getText());
+                        assertFalse(button(window, "send").isEnabled());
+                        assertTrue(button(window, "requestPrivate").isVisible());
+                        button(window, "conversationIdentity").doClick();
+                        window.applyAppearance(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK), false);
+                        render(window, 420, 680, "user-information-narrow.png");
+                        assertTrue(ChatTheme.palette(button(window, "infoRequestFriend")).dark());
+                        assertFalse(find(window, "chatContent").isVisible());
+                        button(window, "infoRequestFriend").doClick();
+                    });
+                    awaitEdt(() -> "好友申请待处理".equals(button(window, "infoRequestFriend").getText()));
+                    bob.send(Message.of(MessageType.SOCIAL_REQUEST).requestId("friend-in").socialAction("STATE").build());
+                    Message request = bob.await(frame -> "friend-in".equals(frame.requestId()) && frame.type() == MessageType.SOCIAL_ROW
+                            && frame.socialItem().kind() == SocialItem.Kind.FRIEND_IN);
+                    social(bob, Message.of(MessageType.SOCIAL_REQUEST).socialAction("FRIEND_ACCEPT").messageId(request.socialItem().id()));
+                    awaitEdt(() -> find(window, "infoRemoveFriend") != null && button(window, "send").isEnabled());
+                    onEdt(() -> {
+                        assertEquals("在线 · 好友", label(window, "infoDetail").getText());
+                        assertTrue(sidebarIds(window).contains(ConversationId.privateWith("bob")));
+                        button(window, "closeConversationInfo").doClick();
+                        assertTrue(find(window, "chatContent").isVisible());
+                        render(window, 1280, 760, "group-friends-tab.png");
+                        list(window).setSelectedValue(summary(window, groupId), true);
+                        assertEquals("仍保留的群聊草稿", area(window, "input").getText());
+                        button(window, "conversationIdentity").doClick();
+                    });
+                    awaitEdt(() -> "3 位成员 · 3 人在线".equals(label(window, "infoDetail").getText()));
+                    social(carol, Message.of(MessageType.SOCIAL_REQUEST).socialAction("GROUP_LEAVE").conversationId(scope));
+                    awaitEdt(() -> "2 位成员 · 2 人在线".equals(label(window, "infoDetail").getText()) && find(window, "groupMember-carol") == null);
+                    bob.close();
+                    awaitEdt(() -> "2 位成员 · 1 人在线".equals(label(window, "infoDetail").getText()));
+                    onEdt(() -> {
+                        assertTrue(sidebarIds(window).contains(ConversationId.privateWith("bob")), "Offline friends remain in this tab");
+                        assertFalse(sidebarIds(window).contains(ConversationId.privateWith("carol")), "Online non-friends are excluded from this tab");
+                        button(window, "groupMember-bob").doClick();
+                        assertEquals("离线 · 好友", label(window, "infoDetail").getText());
+                        confirmNext(window);
+                        button(window, "infoRemoveFriend").doClick();
+                    });
+                    awaitEdt(() -> sidebarIds(window).equals(List.of(groupId)) && find(window, "infoRequestFriend") != null);
+                    onEdt(() -> {
+                        button(window, "backToGroupInfo").doClick();
+                        confirmNext(window);
+                        button(window, "groupLeave").doClick();
+                    });
+                    awaitEdt(() -> sidebarIds(window).isEmpty() && "你已退出群聊".equals(label(window, "infoDetail").getText()));
+                    onEdt(() -> {
+                        assertTrue(history(window).contains("头像打开资料"));
+                        assertNull(find(window, "groupMember-bob"));
+                        assertFalse(button(window, "send").isEnabled());
+                        ((JToggleButton) find(window, "group")).doClick();
+                        assertEquals(List.of(ConversationId.PUBLIC, ConversationId.privateWith("carol")), sidebarIds(window));
+                    });
+                }
+            }
+        } finally { closeWindow(ref); }
+    }
+
+    private static void social(Peer peer, Message.Builder request) throws Exception {
+        String id = UUID.randomUUID().toString();
+        peer.send(request.requestId(id).build());
+        assertEquals(MessageType.SOCIAL_END, peer.await(frame -> id.equals(frame.requestId())).type());
+    }
+
+    private static List<ConversationId> sidebarIds(ChatWindow window) {
+        var rows = list(window).getModel();
+        return java.util.stream.IntStream.range(0, rows.getSize()).mapToObj(rows::getElementAt).map(ConversationStore.Summary::id).toList();
+    }
+
+    private static void clickMessageAvatar(ChatWindow window, String content) {
+        MessageTimeline timeline = (MessageTimeline) find(window, "timeline");
+        Container column = (Container) timeline.getViewport().getView();
+        for (Component row : column.getComponents()) {
+            if (!(row instanceof Container candidate) || messageDelete(candidate, content) == null) continue;
+            int x = 28, y = Math.min(row.getY() + row.getHeight(), timeline.getViewport().getViewRect().y + timeline.getViewport().getHeight()) - 22;
+            Component target = SwingUtilities.getDeepestComponentAt(column, x, y);
+            Point point = SwingUtilities.convertPoint(column, x, y, target);
+            target.dispatchEvent(new MouseEvent(target, MouseEvent.MOUSE_CLICKED, System.currentTimeMillis(), 0,
+                    point.x, point.y, 1, false, MouseEvent.BUTTON1));
+            return;
+        }
+        fail("Could not find an avatar for " + content);
     }
 
     @Test @Timeout(35)
@@ -1024,14 +1189,17 @@ class ChatWindowTest {
                 timer.start();
                 ((JMenuItem) find(a.socialMenu(), "socialCreateGroup")).doClick();
             });
-            awaitEdt(() -> list(a).getModel().getSize() == 3);
+            onEdt(() -> ((JToggleButton) find(a, "contactsTab")).doClick());
+            awaitEdt(() -> list(a).getModel().getSize() == 2);
             onEdt(() -> {
                 for (int i = 0; i < list(a).getModel().getSize(); i++) {
                     var row = list(a).getModel().getElementAt(i);
                     if ("UI 设计群".equals(row.title())) list(a).setSelectedIndex(i);
                 }
                 assertTrue(label(a, "recipient").getText().contains("管理员"));
-                assertNotNull(find(a.conversationMenu(), "groupTransfer"));
+                button(a, "conversationIdentity").doClick();
+                assertTrue(button(a, "groupTransfer").isEnabled());
+                button(a, "closeConversationInfo").doClick();
                 assertTrue(button(a, "send").isEnabled());
                 area(a, "input").setText("群组专属消息");
                 button(a, "send").doClick();
@@ -1039,7 +1207,7 @@ class ChatWindowTest {
             awaitEdt(() -> history(a).contains("群组专属消息") && hasSendStatus(a, "已确认"));
             onEdt(() -> {
                 render(a, 420, 680, "social-group-narrow.png");
-                button(a, "group").doClick();
+                openPublic(a);
                 assertFalse(history(a).contains("群组专属消息"));
             });
         } finally {
@@ -1098,7 +1266,7 @@ class ChatWindowTest {
                     button(window, "cancelQuote").doClick();
                     assertFalse(label(window, "quoteDraftText").getParent().isVisible());
                     quote.doClick();
-                    button(window, "group").doClick();
+                    openPublic(window);
                     assertFalse(label(window, "quoteDraftText").getParent().isVisible());
                     selectPeer(window, "bob");
                     assertTrue(label(window, "quoteDraftText").getParent().isVisible());
@@ -1184,6 +1352,36 @@ class ChatWindowTest {
     }
     private static void selectPeer(ChatWindow window, String peer) {
         list(window).setSelectedValue(summary(window, peer), true);
+    }
+
+    private static void openPublic(ChatWindow window) {
+        ((JMenuItem) find(window.socialMenu(), "newPublic")).doClick();
+    }
+
+    private static ConversationStore.Summary openArchived(ChatWindow window, ConversationId id) {
+        AtomicReference<ConversationStore.Summary> chosen = new AtomicReference<>();
+        javax.swing.Timer timer = new javax.swing.Timer(25, null);
+        timer.addActionListener(event -> {
+            for (Window child : window.getOwnedWindows()) {
+                if (!child.isShowing() || !(find(child, "archivedConversations") instanceof JList<?> rows)) continue;
+                for (int index = 0; index < rows.getModel().getSize(); index++) {
+                    var row = (ConversationStore.Summary) rows.getModel().getElementAt(index);
+                    if (!id.equals(row.id())) continue;
+                    chosen.set(row);
+                    rows.setSelectedIndex(index);
+                    break;
+                }
+                findOptionPane(child).setValue(chosen.get() == null ? JOptionPane.CANCEL_OPTION : JOptionPane.OK_OPTION);
+                timer.stop();
+                return;
+            }
+        });
+        JMenuItem item = (JMenuItem) find(window.socialMenu(), "archivedConversations");
+        assertTrue(item.isEnabled());
+        timer.start();
+        try { item.doClick(); } finally { timer.stop(); }
+        assertNotNull(chosen.get(), "Missing archived conversation " + id);
+        return chosen.get();
     }
 
     private static void onEdt(Runnable task) throws Exception { SwingUtilities.invokeAndWait(task); }

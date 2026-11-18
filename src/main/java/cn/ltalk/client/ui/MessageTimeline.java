@@ -7,6 +7,8 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.text.DefaultCaret;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -38,6 +40,7 @@ public final class MessageTimeline extends JScrollPane {
     private Consumer<ConversationStore.Entry> onRecover = entry -> { };
     private Consumer<ConversationStore.Entry> onReply = entry -> { };
     private Consumer<String> onCopy = text -> { }, onLocate = id -> { };
+    private Consumer<String> onAvatar;
     private BiConsumer<ConversationStore.Entry, Boolean> onAttachment = (entry, preview) -> { };
     private boolean deletionEnabled, replyEnabled;
     public void deletion(boolean enabled, Consumer<ConversationStore.Entry> action) { deletionEnabled = enabled; onDelete = action; }
@@ -49,9 +52,27 @@ public final class MessageTimeline extends JScrollPane {
     }
     public void quoting(boolean enabled) { replyEnabled = enabled; }
     public void attachmentActions(BiConsumer<ConversationStore.Entry, Boolean> action) { onAttachment = action; }
+    public void avatarAction(Consumer<String> action) { onAvatar = action; }
+
+    private final MouseAdapter avatarMouse = new MouseAdapter() {
+        private String userAt(MouseEvent event) {
+            return onAvatar == null ? null : column.avatarAt(SwingUtilities.convertPoint(event.getComponent(), event.getPoint(), column));
+        }
+        @Override public void mouseClicked(MouseEvent event) {
+            if (!SwingUtilities.isLeftMouseButton(event) || event.getClickCount() != 1) return;
+            String user = userAt(event);
+            if (user != null) onAvatar.accept(user);
+        }
+        @Override public void mouseMoved(MouseEvent event) {
+            event.getComponent().setCursor(userAt(event) == null ? null : Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        }
+        @Override public void mouseExited(MouseEvent event) { event.getComponent().setCursor(null); }
+    };
 
     public MessageTimeline() {
         super(); setName("timeline"); setViewportView(column); ChatTheme.scroll(this, true);
+        column.addMouseListener(avatarMouse);
+        column.addMouseMotionListener(avatarMouse);
         getAccessibleContext().setAccessibleName("聊天消息");
         // An avatar's position depends on the viewport, so shifted copies of old pixels are invalid.
         getViewport().setScrollMode(JViewport.SIMPLE_SCROLL_MODE);
@@ -152,6 +173,10 @@ public final class MessageTimeline extends JScrollPane {
                         () -> onDelete.accept(entry), () -> onRecover.accept(entry), () -> onReply.accept(entry),
                         () -> onCopy.accept(entry.content()), () -> onLocate.accept(entry.replyTo()),
                         () -> onAttachment.accept(entry, true), () -> onAttachment.accept(entry, false)) : (BubbleRow) row;
+                if (row == null && !own) {
+                    bubble.addMouseListener(avatarMouse);
+                    bubble.addMouseMotionListener(avatarMouse);
+                }
                 bubble.setDisplayName(displayName);
                 bubble.located(highlightedId != null && highlightedId.equals(entry.messageId()));
                 bubble.startsRun(!shownInRun);
@@ -162,7 +187,7 @@ public final class MessageTimeline extends JScrollPane {
                 if (entry.replyTo() != null) bubble.quoteLabel(quoteText(originals.get(entry.replyTo())));
                 if (!own) {
                     if (avatar == null) {
-                        avatar = new AvatarGroup(bubble, ProfileAvatar.contact(profile, displayName, AVATAR_SIZE));
+                        avatar = new AvatarGroup(bubble, ProfileAvatar.contact(profile, displayName, AVATAR_SIZE), entry.from());
                         column.avatarGroups.add(avatar);
                     }
                     avatar.last = bubble;
@@ -267,9 +292,18 @@ public final class MessageTimeline extends JScrollPane {
     private static final class AvatarGroup {
         final BubbleRow first;
         final Icon icon;
+        final String user;
         BubbleRow last;
-        AvatarGroup(BubbleRow first, Icon icon) { this.first = first; this.last = first; this.icon = icon; }
+        AvatarGroup(BubbleRow first, Icon icon, String user) { this.first = first; this.last = first; this.icon = icon; this.user = user; }
         int bottom() { return last.getY() + last.getHeight(); }
+        Rectangle bounds(Rectangle view) {
+            int top = first.getY();
+            int bottom = Math.min(bottom(), view.y + view.height);
+            // Keep the avatar within the group and let the viewport clip both at its edges.
+            int visibleHeight = bottom - Math.max(top, view.y);
+            int inset = Math.min(AVATAR_INSET, Math.max(0, visibleHeight - AVATAR_SIZE));
+            return new Rectangle(AVATAR_X, Math.max(top, bottom - AVATAR_SIZE - inset), AVATAR_SIZE, AVATAR_SIZE);
+        }
     }
 
     private final class Column extends JPanel implements Scrollable {
@@ -305,27 +339,31 @@ public final class MessageTimeline extends JScrollPane {
                 }
             });
         }
-        @Override protected void paintComponent(Graphics graphics) {
-            super.paintComponent(graphics);
-            Rectangle view = getViewport().getViewRect();
-            int viewBottom = view.y + view.height;
-            // Skip groups already above the viewport even on long histories.
+        private int firstGroupAfter(int y) {
             int low = 0, high = avatarGroups.size();
             while (low < high) {
                 int mid = (low + high) >>> 1;
-                if (avatarGroups.get(mid).bottom() <= view.y) low = mid + 1;
+                if (avatarGroups.get(mid).bottom() <= y) low = mid + 1;
                 else high = mid;
             }
-            for (int i = low; i < avatarGroups.size(); i++) {
+            return low;
+        }
+        String avatarAt(Point point) {
+            Rectangle view = getViewport().getViewRect();
+            if (!view.contains(point) || point.x < AVATAR_X || point.x >= AVATAR_X + AVATAR_SIZE) return null;
+            int index = firstGroupAfter(point.y);
+            if (index >= avatarGroups.size()) return null;
+            AvatarGroup group = avatarGroups.get(index);
+            return group.bounds(view).contains(point) ? group.user : null;
+        }
+        @Override protected void paintComponent(Graphics graphics) {
+            super.paintComponent(graphics);
+            Rectangle view = getViewport().getViewRect();
+            for (int i = firstGroupAfter(view.y); i < avatarGroups.size(); i++) {
                 AvatarGroup group = avatarGroups.get(i);
-                int groupTop = group.first.getY();
-                if (groupTop >= viewBottom) break;
-                int bottom = Math.min(group.bottom(), viewBottom);
-                int visibleHeight = bottom - Math.max(groupTop, view.y);
-                // Keep the avatar within the group and let the viewport clip both at its edges.
-                int inset = Math.min(AVATAR_INSET, Math.max(0, visibleHeight - AVATAR_SIZE));
-                int y = Math.max(groupTop, bottom - AVATAR_SIZE - inset);
-                group.icon.paintIcon(this, graphics, AVATAR_X, y);
+                if (group.first.getY() >= view.y + view.height) break;
+                Rectangle bounds = group.bounds(view);
+                group.icon.paintIcon(this, graphics, bounds.x, bounds.y);
             }
         }
         @Override public Dimension getPreferredScrollableViewportSize() { return new Dimension(600, 450); }

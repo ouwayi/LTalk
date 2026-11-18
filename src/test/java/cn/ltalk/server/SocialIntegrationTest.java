@@ -103,6 +103,42 @@ class SocialIntegrationTest {
         }
     }
 
+    @Test void groupRosterPaginatesCurrentMembersAndRestrictsAccess() throws Exception {
+        try (ChatServer server = start(); Peer alice = Peer.login(server.port(), "alice"); Peer bob = Peer.login(server.port(), "bob")) {
+            ok(alice, SocialAction.GROUP_CREATE, b -> b.nickname("名单分页").content("OPEN"));
+            SocialItem group = ok(alice, SocialAction.STATE, b -> {}).stream().filter(row -> row.kind() == SocialItem.Kind.GROUP)
+                    .findFirst().orElseThrow();
+            String scope = ConversationScope.group(group.id());
+            assertEquals("BAD_MESSAGE", call(alice, SocialAction.GROUP_MEMBERS, b -> b.conversationId(ConversationScope.PUBLIC)).error());
+            assertEquals("FORBIDDEN", call(bob, SocialAction.GROUP_MEMBERS, b -> b.conversationId(scope)).error());
+            ok(bob, SocialAction.GROUP_REQUEST, b -> b.conversationId(scope));
+            List<String> members = new ArrayList<>(List.of("alice", "bob"));
+            for (int index = 0; index <= SocialAction.PAGE_SIZE - 2; index++) {
+                String user = "member_%02d".formatted(index);
+                members.add(user);
+                server.accounts().register(user, "离线成员 " + index, "test123!", false);
+                server.social().change(user, SocialAction.GROUP_REQUEST, Message.of(MessageType.SOCIAL_REQUEST).conversationId(scope).build(),
+                        server.accounts(), ignored -> false);
+            }
+            Reply first = call(bob, SocialAction.GROUP_MEMBERS, b -> b.conversationId(scope));
+            assertNull(first.error());
+            assertEquals(members.subList(0, SocialAction.PAGE_SIZE), first.rows().stream().map(SocialItem::user).toList());
+            assertTrue(first.rows().stream().allMatch(row -> row.kind() == SocialItem.Kind.GROUP_MEMBER));
+            assertEquals(first.rows().get(SocialAction.PAGE_SIZE - 1).key(), first.next());
+            Reply last = call(bob, SocialAction.GROUP_MEMBERS, b -> b.conversationId(scope).cursor(first.next()));
+            assertNull(last.error());
+            assertNull(last.next());
+            assertEquals(members.subList(SocialAction.PAGE_SIZE, members.size()), last.rows().stream().map(SocialItem::user).toList());
+            assertTrue(bob.received.stream().anyMatch(frame -> frame.type() == MessageType.DISPLAY_PROFILE
+                    && "member_00".equals(frame.userId()) && "离线成员 0".equals(frame.nickname())));
+            ok(bob, SocialAction.GROUP_LEAVE, b -> b.conversationId(scope));
+            assertEquals("FORBIDDEN", call(bob, SocialAction.GROUP_MEMBERS, b -> b.conversationId(scope).cursor(first.next())).error());
+            assertFalse(ok(alice, SocialAction.GROUP_MEMBERS, b -> b.conversationId(scope)).stream().anyMatch(row -> "bob".equals(row.user())));
+            ok(alice, SocialAction.GROUP_DISBAND, b -> b.conversationId(scope));
+            assertEquals("NOT_FOUND", call(alice, SocialAction.GROUP_MEMBERS, b -> b.conversationId(scope)).error());
+        }
+    }
+
     @Test void groupsEnforceReviewInvitationRolesAndHistoryWindowsAcrossRestart() throws Exception {
         String scope;
         try (ChatServer server = start(); Peer alice = Peer.login(server.port(), "alice"); Peer bob = Peer.login(server.port(), "bob");
