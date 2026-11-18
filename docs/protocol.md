@@ -137,7 +137,7 @@ TLS 模式对监听端口统一启用 TLS 1.2/1.3，服务端从 PKCS12 加载�
 
 nickname strip 后 1～40 char；userId 沿用 1～20 ASCII 字母/数字/下划线、区分大小写，用户名全局唯一。密码必填、6～128 Java UTF-16 char，不做 strip，数字/字母/特殊字符均允许；仅服务端保存随机盐及 PBKDF2-HMAC-SHA256 600000 次的 256 位散列。系统用户名为 u_ 加 16 位随机十六进制，检查占用后落盘；注册串行化，重复不会覆盖原账号。
 
-新增错误：MISSING_FIELD 缺必填参数；INVALID_NICKNAME 昵称越界；INVALID_PASSWORD 密码长度非法；INVALID_USER_ID 用户名非法；USER_EXISTS 注册重名或已有在线会话；LOGIN_FAILED 统一用户名或密码错误（不区分不存在与密码错误）；NOT_AUTHENTICATED 未认证；FORBIDDEN 他人历史或无效/过期/跨连接游标；STORAGE_ERROR 注册/归档文件失败；EXPORT_FAILED 历史读取失败。原 BAD_MESSAGE 继续处理未知模式、方向/类型/帧错误。客户端本地文件错误或逐页响应超时也提示 EXPORT_FAILED，不自动重试或断开健康聊天连接。
+新增错误：MISSING_FIELD 缺必填参数；INVALID_NICKNAME 昵称越界；INVALID_PASSWORD 密码长度非法；INVALID_USER_ID 用户名非法；USER_EXISTS 注册重名或已有在线会话；LOGIN_FAILED 统一用户名或密码错误（不区分不存在与密码错误）；NOT_AUTHENTICATED 未认证；FORBIDDEN 他人历史或无效/过期/跨连接游标；STORAGE_ERROR 服务端存储失败；EXPORT_FAILED 历史读取失败。原 BAD_MESSAGE 继续处理未知模式、方向/类型/帧错误。客户端本地文件错误或逐页响应超时也提示 EXPORT_FAILED，不自动重试或断开健康聊天连接。
 
 record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC、GROUP:群组 UUID 或 PRIVATE:按用户名排序的双方）、sender、recipient（群聊为 null）、content、messageType、sentAt（ISO 8601 UTC）。聊天回显另增加 messageId/conversationId。新版服务端给新消息分配递增时间，时钟回拨或重复时在上次时间上增加一纳秒。所有已认证账号都可读取公共共享归档，包含登录前和离线期间的消息，旧版公共记录沿用原权限。独立群组按入群、退群和本人删除范围查询。私聊归档仅双方可读，向离线陌生人发送返回 USER_OFFLINE。
 
@@ -180,17 +180,17 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 | HISTORY_PAGE | requestId, cursor, record, nickname（可选，顶层）；每页一条，record 与导出模型一致，客户端展示消费后再请求下一页 |
 | HISTORY_END | requestId；无剩余记录，空归档直接返回 |
 | HISTORY_DELETE | requestId, conversationId（必填）；无 messageId 清空当前会话的本人副本，有 messageId 删除本会话中该条本人副本。userId 可省略/本人；不接受他人文件/任意路径 |
-| HISTORY_DELETED | requestId, conversationId, messageId（逐条时）；仅在本人文件替换成功后确认，不广播给对方 |
+| HISTORY_DELETED | requestId, conversationId, messageId（逐条时）。本人删除事务成功提交后向请求方确认 |
 
-历史与导出各占一个独立游标，均只属于原认证连接；新查询替换旧历史游标。删除会关闭该账号已有历史/导出快照，使旧游标失效；客户端重新查询已删除后的归档。不存在的单条记录返回 NOT_FOUND，无会话/无效编号为 BAD_MESSAGE，他人账号/私聊/无效游标为 FORBIDDEN，文件失败为 STORAGE_ERROR。公共删除原子更新当前账号的隐藏记录，私聊删除原子重写当前账号的文件。文件错误时保留原有可见记录。
+历史与导出各占一个独立游标，均只属于原认证连接。新查询替换旧历史游标。删除成功后关闭该账号已有历史和导出快照，使旧游标失效。不存在的单条记录返回 NOT_FOUND，无会话或编号无效为 BAD_MESSAGE，他人账号或私聊范围以及无效游标为 FORBIDDEN，存储失败为 STORAGE_ERROR。删除只更新本人可见范围，事务失败时保留原有记录。
 
-聊天归档+投递与删除确认串行排序，防止删除前的实时消息在确认后重新进入本人窗口。清空公共会话覆盖当时可见的旧版和共享记录，之后发出的消息正常显示。客户端以 messageId 合并历史与实时消息，历史不增加未读。超时/失败显示可重试，删除超时结果可能已生效，重新加载核对。
+聊天归档、投递与删除确认串行排序，防止删除前的实时消息在确认后重新进入本人窗口。清空会话覆盖截止时刻的本人记录，之后发出的消息正常显示。客户端以 messageId 合并历史与实时消息，历史不增加未读。超时/失败显示可重试，删除超时结果可能已生效，重新加载核对。
 
 这些历史查询与删除类型自 v4 引入，v6 沿用上述授权与分页规则。
 
 ## 按需浏览、搜索及定位历史（v6 扩展）
 
-新版桌面客户端使用 `HISTORY_VIEW_REQUEST`。请求携带 `requestId` 和 `historyMode`，可选的 `userId` 须为本人。须升级服务端和客户端才能使用新入口。已有 `HISTORY_REQUEST`、删除、导出和归档文件格式继续适用。
+桌面客户端使用 `HISTORY_VIEW_REQUEST`。请求携带 `requestId` 和 `historyMode`，可选的 `userId` 须为本人。历史、删除和导出共用服务端的记录可见性规则。
 
 | historyMode | 请求参数与结果 |
 | --- | --- |
@@ -233,7 +233,7 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 
 仅当前群成员可通过带群组会话 ID 的 `GROUP_SEND` 发消息。成员加入时记录当时最近 100 条的起点，退出或解散时关闭授权区间，再次入群增加新的区间。浏览、搜索定位、导出、删除和摘要共同使用这些区间。从未加入的账号无法获取群消息。独立群组使用服务端 UUID，公共聊天室保留 `GROUP:PUBLIC`。
 
-缺少历史权限或操作身份不符返回 `FORBIDDEN`，无私聊许可返回 `PRIVATE_FORBIDDEN`，重复待处理请求返回 `REQUEST_PENDING`，已有关系或成员返回 `ALREADY_EXISTS`，请求失效返回 `NOT_FOUND`。管理员直接退群返回 `ADMIN_REQUIRED`。客户端与服务端需同步升级，旧消息可沿用原数据目录。
+缺少历史权限或操作身份不符返回 `FORBIDDEN`，无私聊许可返回 `PRIVATE_FORBIDDEN`，重复待处理请求返回 `REQUEST_PENDING`，已有关系或成员返回 `ALREADY_EXISTS`，请求失效返回 `NOT_FOUND`。管理员直接退群返回 `ADMIN_REQUIRED`。
 
 ## 图片和文件传输（v6 扩展）
 
@@ -267,7 +267,7 @@ Emoji 使用普通文字的 `content`。图片和附件沿用 `GROUP_MESSAGE`、
 
 ## 引用回复（v6 扩展）
 
-`GROUP_SEND` 和 `PRIVATE_SEND` 可携带 `replyTo`，值为原消息的规范 UUID。服务端只接受发送账号在同一会话中仍可查看的记录，编号无效返回 `BAD_MESSAGE`，原消息已删除、跨会话或超出可见范围返回 `NOT_FOUND`。正式消息事件、JSONL 归档和 JSON 导出保留该编号。旧记录省略该字段，CSV 继续使用原七列。
+`GROUP_SEND` 和 `PRIVATE_SEND` 可携带 `replyTo`，值为原消息的规范 UUID。服务端只接受发送账号在同一会话中仍可查看的记录，编号无效返回 `BAD_MESSAGE`，原消息已删除、跨会话或超出可见范围返回 `NOT_FOUND`。正式消息事件、数据库和 JSON 导出保留该编号，普通消息省略该字段。CSV 使用原七列。
 
 引用仅传递编号。客户端从当前可见消息取预览，按现有 `CONTEXT` 查询定位未加载原文。原消息可见性取决于查看者本人的群组历史区间和删除设置。客户端匹配发送回显时同时核对引用编号。未读定位使用客户端窗口状态。
 
@@ -275,7 +275,7 @@ Emoji 使用普通文字的 `content`。图片和附件沿用 `GROUP_MESSAGE`、
 
 实时 `GROUP_MESSAGE`、`PRIVATE_MESSAGE` 的 `nickname` 由服务端按已认证的 `from` 读取账号资料。发送请求中的 `from` 和 `nickname` 不参与决定正式事件的发送者或昵称。`HISTORY_PAGE` 按已授权记录的 `record.sender` 查阅账号当前昵称，作为帧顶层字段附加，离线账号也可解析。发送者无法查到资料或对端省略字段时，客户端显示稳定用户名。
 
-消息仍按 `from`、`to` 和会话标识路由。昵称随已授权的消息投递范围返回，私聊仅双方。头像通过 `DISPLAY_PROFILE` 同步，注册时间走本人资料接口。旧归档可直接查询，归档和 JSON/CSV 导出记录的字段保持原格式。缺少展示资料时，客户端使用消息携带的昵称，缺少昵称时回退用户名。
+消息按 `from`、`to` 和会话标识路由。昵称随已授权的消息投递范围返回，私聊仅双方。头像通过 `DISPLAY_PROFILE` 同步，注册时间走本人资料接口。历史响应和 JSON/CSV 导出沿用对应的消息记录字段。缺少展示资料时，客户端使用消息携带的昵称，缺少昵称时回退用户名。
 
 ## 用户展示资料同步（2026-11-15，v5）
 
@@ -289,6 +289,6 @@ Emoji 使用普通文字的 `content`。图片和附件沿用 `GROUP_MESSAGE`、
 
 `PASSWORD_CHANGE` 由已认证的客户端发出。必填 `requestId`、`password`（当前密码）、`newPassword`（新密码）。可选 `userId` 必须与连接绑定账号一致，他人账号返回 `FORBIDDEN`，未认证返回 `NOT_AUTHENTICATED`。密码字段须为字符串。缺省或空字符串返回 `MISSING_FIELD`，长度超出 6～128 UTF-16 单元返回 `INVALID_PASSWORD`，保留首尾空白。当前密码不匹配返回 `WRONG_PASSWORD`。
 
-服务端校验当前密码后生成新随机盐，以现有 PBKDF2 参数计算散列。账号文件原子替换成功后才通过 `PASSWORD_CHANGED` 回复原请求编号，回复不含密码，不广播。存储失败返回 `STORAGE_ERROR`，旧密码依然有效。当前连接保持已登录状态，下次登录用新密码。
+服务端校验当前密码后生成新随机盐，以现有 PBKDF2 参数计算散列。事务成功提交后通过 `PASSWORD_CHANGED` 回复请求方，带原请求编号。存储失败返回 `STORAGE_ERROR`，旧密码依然有效。当前连接保持已登录状态，下次登录用新密码。
 
 同一连接的客户端同时等待至多一个改密响应。超时提示修改结果未确认并建议重新登录核对。迟到回执忽略，客户端不自动重试。

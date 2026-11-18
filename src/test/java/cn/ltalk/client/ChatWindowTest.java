@@ -806,7 +806,8 @@ class ChatWindowTest {
             onEdt(() -> ref.set(new ChatWindow("127.0.0.1",Integer.toString(server.port()),"alice",appearanceDirectory.resolve("history.properties"))));
             ChatWindow window=ref.get(); login(window);
             awaitEdt(() -> list(window).getModel().getSize() == 1 && history(window).contains("历史公共一")
-                    && history(window).contains("[离线昵称] 历史公共二") && label(window,"status").getText().contains("已加载"));
+                    && history(window).contains("[离线昵称] 历史公共二") && label(window,"status").getText().contains("已加载")
+                    && ((JMenuItem) find(window.socialMenu(), "archivedConversations")).isEnabled());
             onEdt(() -> {
                 assertEquals("离线昵称：历史公共二", summary(window, ConversationId.PUBLIC).preview());
                 var offline = openArchived(window, ConversationId.privateWith("bob"));
@@ -837,7 +838,8 @@ class ChatWindowTest {
             onEdt(() -> window.dispatchEvent(new WindowEvent(window,WindowEvent.WINDOW_CLOSING))); ref.set(null); awaitEdt(() -> server.onlineCount()==0);
             onEdt(() -> ref.set(new ChatWindow("127.0.0.1",Integer.toString(server.port()),"alice",appearanceDirectory.resolve("history.properties"))));
             ChatWindow reopened=ref.get(); login(reopened);
-            awaitEdt(() -> list(reopened).getModel().getSize() == 1 && label(reopened,"status").getText().contains("已加载"));
+            awaitEdt(() -> list(reopened).getModel().getSize() == 1 && label(reopened,"status").getText().contains("已加载")
+                    && ((JMenuItem) find(reopened.socialMenu(), "archivedConversations")).isEnabled());
             onEdt(() -> { assertFalse(history(reopened).contains("历史公共")); openArchived(reopened, ConversationId.privateWith("bob")); });
             awaitEdt(() -> history(reopened).contains("离线联系人历史"));
             try (Peer bob=Peer.login(server.port(),"bob")) {

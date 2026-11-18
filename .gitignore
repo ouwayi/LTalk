@@ -6,6 +6,7 @@ out/
 *.class
 /.tools/
 /data/
+/data-sqlite/
 
 # Local IDE settings
 .idea/

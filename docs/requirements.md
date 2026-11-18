@@ -20,6 +20,7 @@
 | X2 当前会话导出 | 从群聊信息卡片或私聊更多菜单选择 JSON/CSV、文件名和位置，覆盖旧文件需确认 | AuthenticationExportTest、HistoryExportTest、FileDialogsTest |
 | X3 账号与资料 | 注册登录、资料编辑与同步、本人改密。改密成功后当前会话继续，下次用新密码登录 | AccountFlowTest、ProfileConnectionTest、PasswordChangeTest、ChatWindowTest |
 | X4 授权历史 | 服务端重启后保留本人可见记录，登录恢复会话摘要及当前会话最近一页，上滚取旧记录，搜索可定位到原消息，支持逐条删除或清空本人当前会话 | HistoryPersistenceTest、HistoryClientTest、HistoryStoreTest、ChatWindowTest |
+| SQLite 存储 | 首启创建数据库，服务端事务保存账号、社交关系、群成员权限、消息及附件元数据，文件版切换使用独立空库 | SqlitePersistenceTest、HistoryPersistenceTest、SocialIntegrationTest、PublicConnectionTest |
 | X5 私聊离线投递 | 已互为好友时可发送离线消息，接收人通过本人历史查阅 | SocialIntegrationTest、ChatWindowTest |
 | X6 聊天文件传输 | 图片专用入口接受 PNG、JPEG、GIF 与 BMP，最多 12 MiB 和 2400 万像素。普通附件支持任意类型，最多 50 MiB。选中文件后确认目标才上传，支持取消和保存，下载按本人历史权限授权 | AttachmentTransferTest、AttachmentIntegrationTest、ChatWindowTest、FileDialogsTest |
 | 好友与独立群组 | 按昵称或用户名片段查找，双方确认好友关系，支持独立私聊许可、加群审核与邀请、管理员移交或解散。独立群的当前成员可查看成员名单，退群后保留已授权的历史 | SocialIntegrationTest、ChatWindowTest |

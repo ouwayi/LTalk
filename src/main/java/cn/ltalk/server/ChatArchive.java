@@ -1,364 +1,307 @@
 package cn.ltalk.server;
 
 import cn.ltalk.common.*;
-import com.google.gson.Gson;
-import java.io.*;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.*;
+
+import java.io.IOException;
+import java.sql.*;
 import java.time.Instant;
 import java.util.*;
 
-/** Shared public journal and account journals, with bounded snapshots and owner-scoped deletion. */
-final class ChatArchive {
-    private final Path directory;
-    private final Path publicJournal;
-    private final Path groupDirectory;
-    private final Gson gson = new Gson();
-    private Instant last = Instant.MIN;
-    private final Map<String, Set<Cursor>> cursors = new HashMap<>();
-    private SocialStore social;
-    ChatArchive(Path directory) throws IOException {
-        this.directory = directory; Files.createDirectories(directory);
-        publicJournal = directory.resolve("public.jsonl");
-        groupDirectory = directory.resolve("groups");
-        Files.createDirectories(groupDirectory);
-        Path clock = directory.resolve("last-time");
-        if (Files.exists(clock)) {
-            try { last = Instant.parse(Files.readString(clock)); }
-            catch (RuntimeException ex) { throw new IOException("历史时间元数据损坏", ex); }
-        }
-    }
-    void social(SocialStore value) { social = value; }
-    Set<String> groupScopes(String user) { return social.groupScopes(user); }
-    synchronized String lastTime() { return last.toString(); }
-    synchronized String groupHistoryStart(String id) throws IOException {
-        ChatRecord oldest = null;
-        try (Journal rows = new Journal(groupJournal(id), true)) {
-            for (int i = 0; i < HistoryQuery.GROUP_JOIN_LIMIT; i++) {
-                ChatRecord row = rows.next();
-                if (row == null) break;
-                oldest = row;
-            }
-        }
-        return oldest == null ? last.plusNanos(1).toString() : oldest.sentAt();
-    }
+import static cn.ltalk.server.SqliteDatabase.execute;
+import static cn.ltalk.server.SqliteDatabase.prepare;
 
-    private Path groupJournal(String id) { return groupDirectory.resolve(id + ".jsonl"); }
-    synchronized Message record(MessageType type, String sender, String nickname, Message request,
-                                Collection<String> recipients) throws IOException {
-        Instant now = Instant.now();
-        if (!now.isAfter(last)) now = last.plusNanos(1);
-        Files.writeString(directory.resolve("last-time"), now.toString());
-        last = now;
-        boolean groupMessage = type == MessageType.GROUP_MESSAGE;
-        String conversation = groupMessage ? Objects.requireNonNullElse(request.conversationId(), ConversationScope.PUBLIC)
-                : ConversationScope.privateChat(sender, request.to());
-        String id = request.attachment() == null ? UUID.randomUUID().toString() : request.messageId();
-        ChatRecord record = new ChatRecord(id, conversation, sender,
-                groupMessage ? null : request.to(), request.content(), type.name(), now.toString(), request.replyTo(),
-                request.attachment());
-        byte[] line = (gson.toJson(record) + "\n").getBytes(StandardCharsets.UTF_8);
-        if (groupMessage) {
-            Path journal = ConversationScope.PUBLIC.equals(conversation) ? publicJournal : groupJournal(ConversationScope.groupId(conversation));
-            // Keep the previous readable prefix if an append fails partway.
-            try (RandomAccessFile file = new RandomAccessFile(journal.toFile(), "rw")) {
-                long end = file.length();
-                file.seek(end);
-                try { file.write(line); }
-                catch (IOException ex) {
-                    try { file.setLength(end); }
-                    catch (IOException rollback) { ex.addSuppressed(rollback); }
-                    throw ex;
+/** Stores each message once and applies the same visibility rules to every archive consumer. */
+final class ChatArchive {
+    private final SqliteDatabase database;
+    private final Map<String, Set<Cursor>> cursors = new HashMap<>();
+    private long lastSequence;
+    private Instant lastTime = Instant.MIN;
+
+    ChatArchive(SqliteDatabase database) throws IOException {
+        this.database = database;
+        database.read(connection -> {
+            try (Statement query = connection.createStatement();
+                 ResultSet rows = query.executeQuery("SELECT seq, sent_at FROM messages ORDER BY seq DESC LIMIT 1")) {
+                if (rows.next()) {
+                    lastSequence = rows.getLong(1);
+                    lastTime = Instant.parse(rows.getString(2));
                 }
             }
-        } else {
-            for (String user : new HashSet<>(recipients)) Files.write(accountJournal(user), line,
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-        }
-        return Message.of(type).requestId(request.requestId()).from(sender).nickname(nickname).to(record.recipient())
-                .content(record.content()).serverTime(record.sentAt()).messageId(id).conversationId(conversation)
-                .replyTo(record.replyTo()).attachment(record.attachment()).build();
+            return null;
+        });
+    }
+
+    synchronized long lastSequence() { return lastSequence; }
+
+    synchronized long groupHistoryStart(String id) throws IOException {
+        return database.read(connection -> {
+            try (PreparedStatement query = prepare(connection, """
+                    SELECT MIN(seq) FROM (
+                        SELECT seq FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?
+                    )
+                    """, ConversationScope.group(id), HistoryQuery.GROUP_JOIN_LIMIT);
+                 ResultSet rows = query.executeQuery()) {
+                if (!rows.next()) throw new SQLException("Missing group history boundary");
+                long start = rows.getLong(1);
+                return rows.wasNull() ? lastSequence + 1 : start;
+            }
+        });
+    }
+
+    synchronized Message record(MessageType type, String sender, String nickname, Message request) throws IOException {
+        Instant now = Instant.now();
+        Instant sentAt = now.isAfter(lastTime) ? now : lastTime.plusNanos(1);
+        long sequence = lastSequence + 1;
+        boolean groupMessage = type == MessageType.GROUP_MESSAGE;
+        String scope = groupMessage ? Objects.requireNonNullElse(request.conversationId(), ConversationScope.PUBLIC)
+                : ConversationScope.privateChat(sender, request.to());
+        String group = ConversationScope.isGroup(scope) ? ConversationScope.groupId(scope) : null;
+        String recipient = groupMessage ? null : request.to();
+        Attachment attachment = request.attachment();
+        String id = attachment == null ? UUID.randomUUID().toString() : request.messageId();
+        database.write(connection -> {
+            execute(connection, """
+                    INSERT INTO messages (seq, message_id, conversation_id, group_id, sender, recipient, content, sent_at,
+                                          reply_to, attachment_kind, attachment_name, attachment_size, thumbnail)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, sequence, id, scope, group, sender, recipient, request.content(), sentAt.toString(),
+                    request.replyTo(), attachment == null ? null : attachment.kind().name(),
+                    attachment == null ? null : attachment.name(), attachment == null ? null : attachment.size(),
+                    attachment == null ? null : attachment.thumbnail());
+            if (!groupMessage) {
+                execute(connection, "INSERT INTO private_visibility (user_id, message_seq) VALUES (?, ?), (?, ?)",
+                        sender, sequence, recipient, sequence);
+            }
+            return null;
+        });
+        lastSequence = sequence;
+        lastTime = sentAt;
+        return Message.of(type).requestId(request.requestId()).from(sender).nickname(nickname).to(recipient)
+                .content(request.content()).serverTime(sentAt.toString()).messageId(id).conversationId(scope)
+                .replyTo(request.replyTo()).attachment(attachment).build();
     }
 
     void requireVisibleReply(String user, String scope, String replyTo) throws IOException {
-        if (replyTo == null) return;
-        if (visibleRecord(user, scope, replyTo) == null)
+        if (replyTo != null && visibleRecord(user, scope, replyTo) == null) {
             throw new ProtocolException("NOT_FOUND", "引用的原消息在当前会话中不可查看");
+        }
     }
 
     ChatRecord visibleRecord(String user, String scope, String id) throws IOException {
         ConversationScope.uuid(id);
-        try (Cursor rows = openNewest(user, scope)) {
-            ChatRecord row;
-            while ((row = rows.next()) != null) {
-                if (id.equals(row.messageId())) return row;
+        return read(user, scope, view -> {
+            Entry entry = view.find(id);
+            return entry == null ? null : entry.record();
+        });
+    }
+
+    @FunctionalInterface
+    interface HistoryRead<T> {
+        T run(VisibleHistory view) throws SQLException, IOException;
+    }
+
+    <T> T read(String user, String scope, HistoryRead<T> operation) throws IOException {
+        ConversationScope.validate(user, scope);
+        return database.read(connection -> operation.run(new VisibleHistory(connection, user, scope,
+                membershipPeriod(connection, user, scope))));
+    }
+
+    List<ChatRecord> summaries(String user, String after) throws IOException {
+        return database.read(connection -> {
+            List<ChatRecord> summaries = new ArrayList<>();
+            try (PreparedStatement query = prepare(connection, """
+                    WITH scopes(scope) AS (
+                        VALUES ('GROUP:PUBLIC')
+                        UNION SELECT 'GROUP:' || group_id FROM group_memberships WHERE user_id = ?
+                        UNION SELECT m.conversation_id FROM private_visibility p
+                              JOIN messages m ON m.seq = p.message_seq WHERE p.user_id = ?
+                    )
+                    SELECT scope FROM scopes WHERE scope > ? ORDER BY scope
+                    """, user, user, Objects.requireNonNullElse(after, ""));
+                 ResultSet scopes = query.executeQuery()) {
+                while (summaries.size() <= HistoryQuery.PAGE_SIZE && scopes.next()) {
+                    String scope = scopes.getString(1);
+                    VisibleHistory view = new VisibleHistory(connection, user, scope, membershipPeriod(connection, user, scope));
+                    try (PreparedStatement latest = view.page(true, null, Long.MAX_VALUE, 1);
+                         ResultSet rows = latest.executeQuery()) {
+                        if (rows.next()) summaries.add(record(rows));
+                    }
+                }
+            }
+            return summaries;
+        });
+    }
+
+    private static Integer membershipPeriod(Connection connection, String user, String scope) throws IOException, SQLException {
+        if (!ConversationScope.isGroup(scope)) return null;
+        try (PreparedStatement query = prepare(connection, """
+                SELECT MAX(period) FROM group_memberships WHERE group_id = ? AND user_id = ?
+                """, ConversationScope.groupId(scope), user);
+             ResultSet rows = query.executeQuery()) {
+            if (!rows.next()) throw new SQLException("Missing group membership boundary");
+            int period = rows.getInt(1);
+            if (rows.wasNull()) throw new ProtocolException("FORBIDDEN", "你没有此群的历史权限");
+            return period;
+        }
+    }
+
+    record Entry(long sequence, ChatRecord record) { }
+
+    static final class VisibleHistory {
+        private static final String PRIVATE_ACCESS = """
+                EXISTS (SELECT 1 FROM private_visibility p WHERE p.user_id = ?1 AND p.message_seq = m.seq)
+                """;
+
+        private final Connection connection;
+        private final String user;
+        private final String scope;
+        private final Integer lastPeriod;
+        private final String visible;
+
+        VisibleHistory(Connection connection, String user, String scope, Integer lastPeriod) {
+            this.connection = connection;
+            this.user = user;
+            this.scope = scope;
+            this.lastPeriod = lastPeriod;
+            String access;
+            if (scope == null) {
+                // The original full-account operation returns the public room and private conversations.
+                access = "(m.conversation_id = 'GROUP:PUBLIC' OR " + PRIVATE_ACCESS + ")";
+            } else if (lastPeriod != null) {
+                access = """
+                        m.conversation_id = ?2 AND EXISTS (
+                            SELECT 1 FROM group_memberships g WHERE g.group_id = m.group_id AND g.user_id = ?1
+                            AND g.period <= ?3 AND g.start_seq <= m.seq AND (g.end_seq IS NULL OR g.end_seq >= m.seq)
+                        )
+                        """;
+            } else {
+                access = "m.conversation_id = ?2";
+                if (!ConversationScope.PUBLIC.equals(scope)) access += " AND " + PRIVATE_ACCESS;
+            }
+            String clearScope = scope == null ? "m.conversation_id" : "?2";
+            visible = "SELECT m.* FROM messages m WHERE " + access + """
+                     AND m.seq > COALESCE((SELECT c.through_seq FROM history_clears c
+                                          WHERE c.user_id = ?1 AND c.conversation_id =
+                    """ + clearScope + """
+                    ), 0)
+                    AND NOT EXISTS (SELECT 1 FROM hidden_messages h WHERE h.user_id = ?1 AND h.message_seq = m.seq)
+                    """;
+        }
+
+        // Positions 1–3 are the viewer, scope and group period. Query-specific bindings start at 4.
+        Entry find(String id) throws SQLException {
+            try (PreparedStatement query = prepare(connection, visible + " AND m.message_id = ?4", user, scope, lastPeriod, id);
+                 ResultSet rows = query.executeQuery()) {
+                return rows.next() ? new Entry(rows.getLong("seq"), record(rows)) : null;
             }
         }
-        return null;
+
+        PreparedStatement page(boolean newest, Long anchor, long ceiling, int limit) throws SQLException {
+            String order = newest ? " ORDER BY m.seq DESC LIMIT ?" : " ORDER BY m.seq LIMIT ?";
+            String bounded = visible + " AND m.seq <= ?4";
+            if (anchor == null) return prepare(connection, bounded + order, user, scope, lastPeriod, ceiling, limit);
+            String relative = newest ? " AND m.seq < ?" : " AND m.seq > ?";
+            return prepare(connection, bounded + relative + order, user, scope, lastPeriod, ceiling, anchor, limit);
+        }
     }
-    synchronized Cursor open(String user) throws IOException {
-        return open(user, null);
+
+    static ChatRecord record(ResultSet rows) throws SQLException {
+        String kind = rows.getString("attachment_kind");
+        Attachment attachment = kind == null ? null : new Attachment(Attachment.Kind.valueOf(kind),
+                rows.getString("attachment_name"), rows.getLong("attachment_size"), rows.getString("thumbnail"));
+        String recipient = rows.getString("recipient");
+        return new ChatRecord(rows.getString("message_id"), rows.getString("conversation_id"), rows.getString("sender"),
+                recipient, rows.getString("content"), recipient == null ? "GROUP_MESSAGE" : "PRIVATE_MESSAGE",
+                rows.getString("sent_at"), rows.getString("reply_to"), attachment);
     }
+
+    Cursor open(String user) throws IOException { return open(user, null); }
+
     synchronized Cursor open(String user, String scope) throws IOException {
-        return open(user, scope, false, true);
-    }
-    synchronized Cursor openNewest(String user, String scope) throws IOException {
-        return open(user, scope, true, true);
-    }
-    synchronized Cursor openPersonalNewest(String user) throws IOException {
-        return open(user, null, true, false);
-    }
-    private Cursor open(String user, String scope, boolean newestFirst, boolean includeShared) throws IOException {
         ConversationScope.validate(user, scope);
-        Cursor cursor = snapshot(user, scope, newestFirst, includeShared);
-        cursors.computeIfAbsent(user, key -> new HashSet<>()).add(cursor); return cursor;
-    }
-
-    private Path accountJournal(String user) {
-        return directory.resolve(AccountStore.fileKey(user) + ".jsonl");
-    }
-
-    private Cursor snapshot(String user, String scope, boolean newestFirst, boolean includeShared) throws IOException {
-        if (ConversationScope.isGroup(scope)) {
-            String group = ConversationScope.groupId(scope);
-            List<SocialStore.Range> ranges = social.ranges(group, user);
-            if (ranges.isEmpty()) throw new ProtocolException("FORBIDDEN", "你没有此群的历史权限");
-            PublicDeletion deletion = readDeletion(deletionFile(user, scope));
-            return new Cursor(new Journal(groupJournal(group), newestFirst), null, scope, deletion, newestFirst, ranges);
-        }
-        boolean includePublic = scope == null || ConversationScope.PUBLIC.equals(scope);
-        PublicDeletion deletion = includePublic ? readDeletion(deletionFile(user, ConversationScope.PUBLIC)) : PublicDeletion.NONE;
-        Journal personal = new Journal(accountJournal(user), newestFirst);
-        try {
-            Journal shared = includePublic && includeShared ? new Journal(publicJournal, newestFirst) : null;
-            return new Cursor(personal, shared, scope, deletion, newestFirst, List.of());
-        } catch (IOException ex) {
-            try { personal.close(); }
-            catch (IOException close) { ex.addSuppressed(close); }
-            throw ex;
-        }
-    }
-
-    private record PublicDeletion(String clearedThrough, Set<String> hiddenIds) {
-        static final PublicDeletion NONE = new PublicDeletion(null, Set.of());
-    }
-
-    private record TimeRange(Instant start, Instant end) {
-        TimeRange(SocialStore.Range range) { this(Instant.parse(range.start()), range.end() == null ? null : Instant.parse(range.end())); }
-        boolean includes(Instant time) { return !time.isBefore(start) && (end == null || !time.isAfter(end)); }
-    }
-
-    private Path deletionFile(String user, String scope) throws ProtocolException {
-        String suffix = ConversationScope.PUBLIC.equals(scope) ? "public" : ConversationScope.groupId(scope);
-        return directory.resolve(AccountStore.fileKey(user) + "." + suffix + "-deletions.json");
-    }
-
-    private PublicDeletion readDeletion(Path path) throws IOException {
-        if (!Files.exists(path)) return PublicDeletion.NONE;
-        try {
-            PublicDeletion deletion = gson.fromJson(Files.readString(path), PublicDeletion.class);
-            if (deletion == null || deletion.hiddenIds() == null) throw new IllegalArgumentException();
-            if (deletion.clearedThrough() != null) Instant.parse(deletion.clearedThrough());
-            return deletion;
-        } catch (RuntimeException ex) { throw new IOException("公共聊天室删除记录损坏", ex); }
+        Integer period = database.read(connection -> membershipPeriod(connection, user, scope));
+        Cursor cursor = new Cursor(user, scope, lastSequence, period);
+        cursors.computeIfAbsent(user, key -> new HashSet<>()).add(cursor);
+        return cursor;
     }
 
     synchronized void delete(String user, String scope, String id) throws IOException {
         if (scope == null) throw new ProtocolException("BAD_MESSAGE", "删除必须指定会话");
         ConversationScope.validate(user, scope);
-        if (id != null) {
-            try { if (!UUID.fromString(id).toString().equals(id)) throw new IllegalArgumentException(); }
-            catch (IllegalArgumentException ex) { throw new ProtocolException("BAD_MESSAGE", "无效消息编号"); }
-        }
-        invalidate(user);
-        if (ConversationScope.PUBLIC.equals(scope) || ConversationScope.isGroup(scope)) {
-            deleteShared(user, scope, id);
-            return;
-        }
-        Path original = accountJournal(user);
-        Path temporary = Files.createTempFile(directory, ".history-delete-", ".tmp"); boolean found = false;
-        try {
-            try (Journal input = new Journal(original, false);
-                 BufferedWriter output = Files.newBufferedWriter(temporary)) {
-                ChatRecord record;
-                while ((record = input.next()) != null) {
-                    if (scope.equals(record.conversationId()) && (id == null || id.equals(record.messageId()))) found = true;
-                    else { output.write(gson.toJson(record)); output.newLine(); }
-                }
-            }
-            if (id != null && !found) throw new ProtocolException("NOT_FOUND", "本人此会话中没有这条记录");
-            Files.move(temporary, original, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } finally { Files.deleteIfExists(temporary); }
-    }
-
-    synchronized void invalidate(String user) throws IOException {
-        Set<Cursor> active = cursors.remove(user);
-        if (active != null) for (Cursor cursor : List.copyOf(active)) cursor.close();
-    }
-
-    private void deleteShared(String user, String scope, String id) throws IOException {
-        PublicDeletion updated;
-        try (Cursor input = snapshot(user, scope, false, true)) {
-            ChatRecord record;
+        if (id != null) ConversationScope.uuid(id);
+        database.write(connection -> {
+            Integer period = membershipPeriod(connection, user, scope);
             if (id == null) {
-                while (input.next() != null) { /* Check the snapshot before publishing the clear. */ }
-                updated = new PublicDeletion(last.toString(), Set.of());
+                execute(connection, """
+                        INSERT INTO history_clears (user_id, conversation_id, through_seq) VALUES (?, ?, ?)
+                        ON CONFLICT(user_id, conversation_id) DO UPDATE SET through_seq = excluded.through_seq
+                        """, user, scope, lastSequence);
+                execute(connection, """
+                        DELETE FROM hidden_messages WHERE user_id = ?
+                            AND message_seq IN (SELECT seq FROM messages WHERE conversation_id = ?)
+                        """, user, scope);
             } else {
-                do { record = input.next(); } while (record != null && !id.equals(record.messageId()));
-                if (record == null) throw new ProtocolException("NOT_FOUND", "本人此会话中没有这条记录");
-                Set<String> hiddenIds = new HashSet<>(input.deletion.hiddenIds());
-                hiddenIds.add(id);
-                updated = new PublicDeletion(input.deletion.clearedThrough(), hiddenIds);
+                Entry entry = new VisibleHistory(connection, user, scope, period).find(id);
+                if (entry == null) throw new ProtocolException("NOT_FOUND", "本人此会话中没有这条记录");
+                execute(connection, "INSERT INTO hidden_messages (user_id, message_seq) VALUES (?, ?)", user, entry.sequence());
             }
-        }
-        Path temporary = Files.createTempFile(directory, ".public-delete-", ".tmp");
-        try {
-            Files.writeString(temporary, gson.toJson(updated));
-            Files.move(temporary, deletionFile(user, scope), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } finally { Files.deleteIfExists(temporary); }
+            return null;
+        });
+        Set<Cursor> active = cursors.remove(user);
+        if (active != null) for (Cursor cursor : active) cursor.close();
     }
 
     final class Cursor implements AutoCloseable {
+        private static final int BATCH_SIZE = 32;
         final String token = UUID.randomUUID().toString();
-        final Journal personal, shared;
         final String scope;
-        final PublicDeletion deletion;
-        final Instant clearedThrough;
-        final boolean newestFirst;
-        final List<TimeRange> ranges;
-        final Instant firstAuthorized;
-        ChatRecord personalHead, sharedHead;
-        boolean closed;
-        private boolean sharedCleared;
+        private final String user;
+        private final long ceiling;
+        private final Integer lastPeriod;
+        private final Deque<ChatRecord> batch = new ArrayDeque<>();
+        private long position;
+        private boolean done, closed;
 
-        Cursor(Journal personal, Journal shared, String scope, PublicDeletion deletion, boolean newestFirst,
-               List<SocialStore.Range> ranges) {
-            this.personal = personal; this.shared = shared; this.scope = scope; this.deletion = deletion;
-            this.newestFirst = newestFirst;
-            this.ranges = ranges.stream().map(TimeRange::new).toList();
-            firstAuthorized = this.ranges.stream().map(TimeRange::start).min(Comparator.naturalOrder()).orElse(Instant.MIN);
-            clearedThrough = deletion.clearedThrough() == null ? Instant.MIN : Instant.parse(deletion.clearedThrough());
+        Cursor(String user, String scope, long ceiling, Integer lastPeriod) {
+            this.user = user;
+            this.scope = scope;
+            this.ceiling = ceiling;
+            this.lastPeriod = lastPeriod;
         }
 
         synchronized ChatRecord next() throws IOException {
             if (closed) throw new IOException("历史快照已失效，请重新加载或导出");
-            if (personalHead == null) personalHead = nextVisible(personal, false);
-            if (sharedHead == null && shared != null) sharedHead = nextVisible(shared, true);
-            if (personalHead != null && (sharedHead == null || personalFirst())) {
-                ChatRecord result = personalHead; personalHead = null; return result;
-            }
-            ChatRecord result = sharedHead; sharedHead = null; return result;
+            if (batch.isEmpty() && !done) loadBatch();
+            return batch.pollFirst();
         }
 
-        private boolean personalFirst() throws IOException {
-            int order = sentAt(personalHead).compareTo(sentAt(sharedHead));
-            return newestFirst ? order > 0 : order <= 0;
-        }
-
-        private ChatRecord nextVisible(Journal source, boolean publicOnly) throws IOException {
-            if (publicOnly && sharedCleared) return null;
-            ChatRecord record;
-            while ((record = source.next()) != null) {
-                if (!ranges.isEmpty()) {
-                    if (!scope.equals(record.conversationId()) || record.recipient() != null || !"GROUP_MESSAGE".equals(record.messageType()))
-                        throw new IOException("群组归档损坏");
-                    Instant time = sentAt(record);
-                    if (newestFirst && time.isBefore(firstAuthorized)) return null;
-                    if (time.isAfter(clearedThrough) && !deletion.hiddenIds().contains(record.messageId())
-                            && ranges.stream().anyMatch(range -> range.includes(time))) return record;
-                    continue;
+        private void loadBatch() throws IOException {
+            database.read(connection -> {
+                VisibleHistory view = new VisibleHistory(connection, user, scope, lastPeriod);
+                try (PreparedStatement query = view.page(false, position, ceiling, BATCH_SIZE);
+                     ResultSet rows = query.executeQuery()) {
+                    while (rows.next()) {
+                        batch.addLast(record(rows));
+                        position = rows.getLong("seq");
+                    }
+                    done = batch.size() < BATCH_SIZE;
                 }
-                boolean publicMessage = ConversationScope.PUBLIC.equals(record.conversationId());
-                if (publicOnly && (!publicMessage || record.recipient() != null || !"GROUP_MESSAGE".equals(record.messageType())))
-                    throw new IOException("公共聊天室归档损坏");
-                if (scope != null && !scope.equals(record.conversationId())) continue;
-                if (!publicMessage) return record;
-                if (sentAt(record).isAfter(clearedThrough)) {
-                    if (!deletion.hiddenIds().contains(record.messageId())) return record;
-                } else if (publicOnly && newestFirst) {
-                    sharedCleared = true;
-                    return null;
-                }
-            }
-            return null;
+                return null;
+            });
         }
 
-        @Override public void close() throws IOException {
+        @Override public void close() {
             synchronized (ChatArchive.this) {
                 synchronized (this) {
-                    if (closed) return; closed = true;
-                    for (Set<Cursor> set : cursors.values()) set.remove(this);
-                    cursors.entrySet().removeIf(entry -> entry.getValue().isEmpty());
-                    try (personal; shared) { /* Release both snapshot handles. */ }
+                    closed = true;
+                    batch.clear();
+                }
+                Set<Cursor> active = cursors.get(user);
+                if (active != null) {
+                    active.remove(this);
+                    if (active.isEmpty()) cursors.remove(user);
                 }
             }
-        }
-    }
-
-    private static Instant sentAt(ChatRecord record) throws IOException {
-        try { return Instant.parse(record.sentAt()); }
-        catch (RuntimeException ex) { throw new IOException("历史时间无效", ex); }
-    }
-
-    private final class Journal implements AutoCloseable {
-        final RandomAccessFile file;
-        final long end;
-        private final byte[] block, reverseLine;
-        private long position, blockStart = -1;
-
-        Journal(Path path, boolean newestFirst) throws IOException {
-            end = Files.exists(path) ? Files.size(path) : 0;
-            file = end == 0 ? null : new RandomAccessFile(path.toFile(), "r");
-            position = end;
-            block = newestFirst && end > 0 ? new byte[32 * 1024] : null;
-            reverseLine = block == null ? null : new byte[MessageCodec.MAX_FRAME_BYTES];
-        }
-
-        ChatRecord next() throws IOException {
-            if (block != null) return previous();
-            if (file == null || file.getFilePointer() >= end) return null;
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            int b;
-            while (file.getFilePointer() < end && (b = file.read()) != '\n') {
-                if (b == -1 || bytes.size() >= MessageCodec.MAX_FRAME_BYTES) throw new IOException("历史文件损坏");
-                bytes.write(b);
-            }
-            return parse(bytes.toString(StandardCharsets.UTF_8));
-        }
-
-        private ChatRecord previous() throws IOException {
-            if (position == 0) return null;
-            if (byteAt(position - 1) == '\n') position--;
-            int start = reverseLine.length;
-            while (position > 0) {
-                byte value = byteAt(position - 1);
-                if (value == '\n') break;
-                if (start == 0) throw new IOException("历史文件损坏");
-                reverseLine[--start] = value;
-                position--;
-            }
-            return parse(new String(reverseLine, start, reverseLine.length - start, StandardCharsets.UTF_8));
-        }
-
-        private byte byteAt(long offset) throws IOException {
-            long start = offset - offset % block.length;
-            if (start != blockStart) {
-                file.seek(start);
-                file.readFully(block, 0, (int) Math.min(block.length, end - start));
-                blockStart = start;
-            }
-            return block[(int) (offset - start)];
-        }
-
-        private ChatRecord parse(String line) throws IOException {
-            try {
-                ChatRecord r = gson.fromJson(line, ChatRecord.class);
-                if (r == null || r.messageId() == null || r.content() == null || r.sentAt() == null) throw new IOException("历史文件损坏");
-                return r;
-            } catch (RuntimeException ex) { throw new IOException("历史文件损坏", ex); }
-        }
-        @Override public void close() throws IOException {
-            if (file != null) file.close();
         }
     }
 }

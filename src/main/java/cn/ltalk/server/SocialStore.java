@@ -1,17 +1,14 @@
 package cn.ltalk.server;
 
 import cn.ltalk.common.*;
-import com.google.gson.Gson;
-
 import java.io.IOException;
-import java.nio.file.*;
-import java.time.Instant;
+import java.sql.*;
 import java.util.*;
 import java.util.function.Predicate;
 
 /** Persists relationships, requests and group membership together before acknowledging changes. */
 final class SocialStore {
-    record Range(String start, String end) { }
+    private record Range(long start, Long end) { }
     private enum RequestKind { FRIEND, PRIVATE, JOIN, INVITE }
     private record Request(String id, RequestKind kind, String from, String to, String group) { }
     private record Group(String id, String title, String admin, boolean review, boolean closed,
@@ -32,41 +29,65 @@ final class SocialStore {
         }
     }
 
-    private final Gson gson = new Gson();
-    private final Path file;
+    private final SqliteDatabase database;
     private final ChatArchive archive;
-    private volatile State state;
+    private State state;
 
-    SocialStore(Path file, ChatArchive archive) throws IOException {
-        this.file = file;
+    SocialStore(SqliteDatabase database, ChatArchive archive) throws IOException {
+        this.database = database;
         this.archive = archive;
-        if (!Files.exists(file)) {
-            state = new State(new HashSet<>(), new HashSet<>(), new HashSet<>(), new HashMap<>(), new HashMap<>());
-            return;
-        }
-        try {
-            state = gson.fromJson(Files.readString(file), State.class);
-            state.copy();
-            for (var entry : state.groups.entrySet()) {
-                Group group = entry.getValue();
-                if (!ConversationScope.uuid(entry.getKey()).equals(group.id) || group.title == null || group.admin == null
-                        || (!group.closed && !group.member(group.admin))) throw new IllegalArgumentException();
-                for (List<Range> ranges : group.memberships.values()) {
-                    if (ranges.isEmpty()) throw new IllegalArgumentException();
-                    for (int i = 0; i < ranges.size(); i++) {
-                        Range range = ranges.get(i);
-                        Instant.parse(range.start);
-                        if (range.end != null) Instant.parse(range.end);
-                        else if (group.closed || i + 1 != ranges.size()) throw new IllegalArgumentException();
-                    }
+        state = database.read(SocialStore::load);
+    }
+
+    private static State load(Connection connection) throws SQLException, IOException {
+        State loaded = new State(new HashSet<>(), new HashSet<>(), new HashSet<>(), new HashMap<>(), new HashMap<>());
+        try (Statement query = connection.createStatement();
+             ResultSet rows = query.executeQuery("SELECT kind, from_user, to_user FROM relationships")) {
+            while (rows.next()) {
+                String from = rows.getString(2), to = rows.getString(3);
+                switch (rows.getString(1)) {
+                    case "FRIEND" -> loaded.friends.add(ConversationScope.privateChat(from, to));
+                    case "PRIVATE" -> loaded.privateAllowed.add(ConversationScope.privateChat(from, to));
+                    case "BLOCKED" -> loaded.blocked.add(from + ":" + to);
+                    default -> throw new IOException("无效的社交关系");
                 }
             }
-            for (Request request : state.requests.values()) {
-                if (request.group != null && !state.groups.containsKey(request.group)) throw new IllegalArgumentException();
-            }
-        } catch (ProtocolException | RuntimeException ex) {
-            throw new IOException("好友与群组数据损坏", ex);
         }
+        try (Statement query = connection.createStatement();
+             ResultSet rows = query.executeQuery("SELECT group_id, title, admin, review, closed FROM chat_groups")) {
+            while (rows.next()) {
+                String id = ConversationScope.uuid(rows.getString(1));
+                loaded.groups.put(id, new Group(id, rows.getString(2), rows.getString(3),
+                        rows.getBoolean(4), rows.getBoolean(5), new HashMap<>()));
+            }
+        }
+        try (Statement query = connection.createStatement();
+             ResultSet rows = query.executeQuery("SELECT * FROM group_memberships ORDER BY group_id, user_id, period")) {
+            while (rows.next()) {
+                Group group = loaded.groups.get(rows.getString("group_id"));
+                if (group == null) throw new IOException("群成员对应的群组不存在");
+                long end = rows.getLong("end_seq");
+                Long endSequence = rows.wasNull() ? null : end;
+                Range range = new Range(rows.getLong("start_seq"), endSequence);
+                List<Range> ranges = group.memberships.computeIfAbsent(rows.getString("user_id"), key -> new ArrayList<>());
+                if (rows.getInt("period") != ranges.size()
+                        || (!ranges.isEmpty() && ranges.get(ranges.size() - 1).end == null)
+                        || (group.closed && range.end == null)) throw new IOException("群历史授权区间损坏");
+                ranges.add(range);
+            }
+        }
+        for (Group group : loaded.groups.values()) {
+            if (!group.closed && !group.member(group.admin)) throw new IOException("群管理员不是当前成员");
+        }
+        try (Statement query = connection.createStatement();
+             ResultSet rows = query.executeQuery("SELECT request_id, kind, from_user, to_user, group_id FROM social_requests")) {
+            while (rows.next()) {
+                String id = rows.getString(1);
+                loaded.requests.put(id, new Request(id, RequestKind.valueOf(rows.getString(2)),
+                        rows.getString(3), rows.getString(4), rows.getString(5)));
+            }
+        }
+        return loaded;
     }
 
     synchronized boolean friends(String a, String b) throws ProtocolException {
@@ -75,19 +96,6 @@ final class SocialStore {
 
     synchronized boolean privateAllowed(String from, String to) throws ProtocolException {
         return friends(from, to) || (!blocked(state, from, to) && state.privateAllowed.contains(ConversationScope.privateChat(from, to)));
-    }
-
-    List<Range> ranges(String id, String user) {
-        Group group = state.groups.get(id);
-        return group == null ? List.of() : group.memberships.getOrDefault(user, List.of());
-    }
-
-    Set<String> groupScopes(String user) {
-        Set<String> scopes = new HashSet<>();
-        for (Group group : state.groups.values()) {
-            if (group.memberships.containsKey(user)) scopes.add(ConversationScope.group(group.id));
-        }
-        return scopes;
     }
 
     synchronized Set<String> members(String id, String sender) throws ProtocolException {
@@ -175,13 +183,71 @@ final class SocialStore {
                     changeGroup(next, user, action, message, accounts, affected);
             default -> throw error("BAD_MESSAGE", "无效的操作");
         }
-        Path temp = Files.createTempFile(file.getParent(), ".social-", ".tmp");
-        try {
-            Files.writeString(temp, gson.toJson(next));
-            Files.move(temp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            state = next;
-        } finally { Files.deleteIfExists(temp); }
+        database.write(connection -> {
+            persist(connection, state, next);
+            return null;
+        });
+        state = next;
         return affected;
+    }
+
+    private static void persist(Connection connection, State previous, State next) throws SQLException {
+        persistPairs(connection, "FRIEND", previous.friends, next.friends);
+        persistPairs(connection, "PRIVATE", previous.privateAllowed, next.privateAllowed);
+        persistPairs(connection, "BLOCKED", previous.blocked, next.blocked);
+        for (Group group : next.groups.values()) {
+            Group old = previous.groups.get(group.id);
+            if (old != group) persistGroup(connection, old, group);
+        }
+        for (String id : previous.requests.keySet()) {
+            if (!next.requests.containsKey(id)) {
+                SqliteDatabase.execute(connection, "DELETE FROM social_requests WHERE request_id = ?", id);
+            }
+        }
+        for (Request request : next.requests.values()) {
+            if (!previous.requests.containsKey(request.id)) {
+                SqliteDatabase.execute(connection, """
+                        INSERT INTO social_requests (request_id, kind, from_user, to_user, group_id)
+                        VALUES (?, ?, ?, ?, ?)
+                        """, request.id, request.kind.name(), request.from, request.to, request.group);
+            }
+        }
+    }
+
+    private static void persistPairs(Connection connection, String kind, Set<String> previous, Set<String> next) throws SQLException {
+        for (String key : previous) {
+            if (!next.contains(key)) writePair(connection, "DELETE FROM relationships WHERE kind = ? AND from_user = ? AND to_user = ?", kind, key);
+        }
+        for (String key : next) {
+            if (!previous.contains(key)) writePair(connection, "INSERT INTO relationships VALUES (?, ?, ?)", kind, key);
+        }
+    }
+
+    private static void writePair(Connection connection, String sql, String kind, String key) throws SQLException {
+        String[] ids = key.split(":");
+        SqliteDatabase.execute(connection, sql, kind, ids[ids.length - 2], ids[ids.length - 1]);
+    }
+
+    private static void persistGroup(Connection connection, Group previous, Group group) throws SQLException {
+        SqliteDatabase.execute(connection, """
+                INSERT INTO chat_groups (group_id, title, admin, review, closed) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(group_id) DO UPDATE SET admin = excluded.admin, review = excluded.review, closed = excluded.closed
+                """, group.id, group.title, group.admin, group.review, group.closed);
+        for (var member : group.memberships.entrySet()) {
+            String user = member.getKey();
+            List<Range> ranges = member.getValue();
+            List<Range> old = previous == null ? List.of() : previous.memberships.getOrDefault(user, List.of());
+            if (old == ranges) continue;
+            for (int i = 0; i < ranges.size(); i++) {
+                Range range = ranges.get(i);
+                if (i >= old.size() || !range.equals(old.get(i))) {
+                    SqliteDatabase.execute(connection, """
+                            INSERT INTO group_memberships (group_id, user_id, period, start_seq, end_seq)
+                            VALUES (?, ?, ?, ?, ?) ON CONFLICT(group_id, user_id, period) DO UPDATE SET end_seq = excluded.end_seq
+                            """, group.id, user, i, range.start, range.end);
+                }
+            }
+        }
     }
 
     private void changePair(State next, String user, SocialAction action, String target, AccountStore accounts,
@@ -330,13 +396,14 @@ final class SocialStore {
                 if (!group.member(user)) throw error("FORBIDDEN", "当前账号已不在该群");
                 if (group.admin.equals(user)) throw error("ADMIN_REQUIRED", "请先转让管理员，或选择解散群组");
                 affected.addAll(activeMembers(group));
-                next.groups.put(id, endMembership(group, user, archive.lastTime()));
+                next.groups.put(id, endMembership(group, user, archive.lastSequence()));
                 cancelGroupRequests(next, id, req -> req.kind == RequestKind.INVITE && user.equals(req.from), affected);
             }
             case GROUP_DISBAND -> {
                 requireAdmin(group, user);
                 Group archived = group.withSettings(user, group.review, true);
-                for (String member : activeMembers(group)) archived = endMembership(archived, member, archive.lastTime());
+                long end = archive.lastSequence();
+                for (String member : activeMembers(group)) archived = endMembership(archived, member, end);
                 next.groups.put(id, archived);
                 affected.addAll(group.memberships.keySet());
                 cancelGroupRequests(next, id, req -> true, affected);
@@ -372,7 +439,7 @@ final class SocialStore {
                 affected);
     }
 
-    private static Group endMembership(Group group, String user, String end) {
+    private static Group endMembership(Group group, String user, long end) {
         Map<String, List<Range>> memberships = new HashMap<>(group.memberships);
         List<Range> ranges = new ArrayList<>(memberships.get(user));
         Range open = ranges.remove(ranges.size() - 1);

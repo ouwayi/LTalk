@@ -2,12 +2,10 @@ package cn.ltalk.server;
 
 import cn.ltalk.common.*;
 import cn.ltalk.support.Peer;
-import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -17,13 +15,12 @@ class PasswordChangeTest {
     @TempDir Path directory;
 
     @Test void passwordChangeRequiresCurrentPasswordAndOnlyUpdatesTheAuthenticatedAccount() throws Exception {
-        Path file = directory.resolve("accounts").resolve(AccountStore.fileKey("alice") + ".json");
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.dataDirectory(directory);
             server.start();
             try (Peer alice = Peer.login(server.port(), "alice");
                  Peer bob = Peer.login(server.port(), "bob"); Peer anonymous = new Peer(server.port())) {
-                var original = JsonParser.parseString(Files.readString(file)).getAsJsonObject();
+                var original = SqliteFixtures.account(directory, "alice");
                 anonymous.send(change("anonymous", null, "test123!", "demo-new!"));
                 anonymous.error("NOT_AUTHENTICATED");
                 alice.send(change("other", "bob", "test123!", "demo-new!"));
@@ -32,7 +29,7 @@ class PasswordChangeTest {
                 alice.error("WRONG_PASSWORD");
                 alice.send(change("short", null, "test123!", "123"));
                 alice.error("INVALID_PASSWORD");
-                assertEquals(original, JsonParser.parseString(Files.readString(file)));
+                assertEquals(original, SqliteFixtures.account(directory, "alice"));
 
                 alice.send(change("save", null, "test123!", " demo-new! "));
                 Message confirmed = alice.type(MessageType.PASSWORD_CHANGED);
@@ -40,10 +37,10 @@ class PasswordChangeTest {
                 assertNull(confirmed.password());
                 assertNull(confirmed.newPassword());
                 assertNull(confirmed.userId());
-                var saved = JsonParser.parseString(Files.readString(file)).getAsJsonObject();
+                var saved = SqliteFixtures.account(directory, "alice");
                 assertNotEquals(original.get("salt"), saved.get("salt"));
                 assertNotEquals(original.get("hash"), saved.get("hash"));
-                for (String field : new String[]{"userId", "nickname", "avatar", "createdAt", "profileRevision"}) {
+                for (String field : new String[]{"user_id", "nickname", "avatar", "created_at", "profile_revision"}) {
                     assertEquals(original.get(field), saved.get(field));
                 }
                 assertFalse(saved.toString().contains("demo-new!"));

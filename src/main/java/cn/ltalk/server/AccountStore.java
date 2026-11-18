@@ -1,37 +1,40 @@
 package cn.ltalk.server;
 
 import cn.ltalk.common.*;
-import com.google.gson.Gson;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 import java.io.*;
-import java.nio.file.*;
 import java.security.*;
+import java.sql.*;
 import java.util.*;
 
-/** One server owns the account directory. Passwords never enter persisted JSON. */
+/** Caches account reads and publishes changes only after the database commits. */
 public final class AccountStore {
     private record Account(String userId, String nickname, String salt, String hash, String avatar, String createdAt, long profileRevision) { }
     record DisplayProfile(String nickname, String avatar, long revision) { }
-    private final Path directory;
+    private final SqliteDatabase database;
     private final Map<String, Account> accounts = new HashMap<>();
     private final SecureRandom random = new SecureRandom();
-    private final Gson gson = new Gson();
-    public AccountStore(Path directory) throws IOException {
-        this.directory = directory;
-        Files.createDirectories(directory);
-        try (var files = Files.list(directory)) {
-            for (Path file : files.filter(p -> p.toString().endsWith(".json")).toList()) {
-                try {
-                    Account a = gson.fromJson(Files.readString(file), Account.class);
+    AccountStore(SqliteDatabase database) throws IOException {
+        this.database = database;
+        database.read(connection -> {
+            try (Statement query = connection.createStatement();
+                 ResultSet rows = query.executeQuery("SELECT * FROM accounts")) {
+                while (rows.next()) {
+                    Account a = new Account(rows.getString("user_id"), rows.getString("nickname"),
+                            rows.getString("salt"), rows.getString("hash"), rows.getString("avatar"),
+                            rows.getString("created_at"), rows.getLong("profile_revision"));
                     Validation.userId(a.userId());
-                    if (a.nickname() == null || Base64.getDecoder().decode(a.salt()).length != 16
-                            || Base64.getDecoder().decode(a.hash()).length != 32) throw new IOException("账号文件损坏");
+                    if (Base64.getDecoder().decode(a.salt()).length != 16
+                            || Base64.getDecoder().decode(a.hash()).length != 32) throw new IOException("账号数据损坏");
                     AvatarData.decode(a.avatar());
                     accounts.put(a.userId(), a);
-                } catch (RuntimeException ex) { throw new IOException("账号文件损坏，拒绝覆盖", ex); }
+                }
+            } catch (IllegalArgumentException ex) {
+                throw new IOException("账号数据损坏", ex);
             }
-        }
+            return null;
+        });
     }
     public String register(String id, String nickname, String password, boolean generated) throws IOException {
         if (nickname == null || nickname.isBlank()) throw new ProtocolException("MISSING_FIELD", "请填写昵称");
@@ -49,17 +52,25 @@ public final class AccountStore {
             if (generated) {
                 do { id = "u_" + HexFormat.of().formatHex(random.generateSeed(8)); } while (accounts.containsKey(id));
             } else if (accounts.containsKey(id)) throw new ProtocolException("USER_EXISTS", "用户名已注册");
-            save(new Account(id, nickname.strip(), base64.encodeToString(salt), digest, "", java.time.Instant.now().toString(), 0));
+            save(new Account(id, nickname.strip(), base64.encodeToString(salt), digest, "", java.time.Instant.now().toString(), 0), true);
             return id;
         }
     }
-    private void save(Account a) throws IOException {
-        Path temporary = Files.createTempFile(directory, ".account-", ".tmp");
-        try {
-            Files.writeString(temporary, gson.toJson(a));
-            Files.move(temporary, directory.resolve(fileKey(a.userId()) + ".json"), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            accounts.put(a.userId(), a);
-        } finally { Files.deleteIfExists(temporary); }
+    private void save(Account a, boolean registration) throws IOException {
+        database.write(connection -> {
+            if (registration) {
+                SqliteDatabase.execute(connection, """
+                        INSERT INTO accounts (user_id, nickname, salt, hash, avatar, created_at, profile_revision)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, a.userId(), a.nickname(), a.salt(), a.hash(), a.avatar(), a.createdAt(), a.profileRevision());
+            } else if (SqliteDatabase.execute(connection, """
+                    UPDATE accounts SET nickname = ?, salt = ?, hash = ?, avatar = ?, profile_revision = ? WHERE user_id = ?
+                    """, a.nickname(), a.salt(), a.hash(), a.avatar(), a.profileRevision(), a.userId()) != 1) {
+                throw new IOException("账号记录不存在");
+            }
+            return null;
+        });
+        accounts.put(a.userId(), a);
     }
     public synchronized UserProfile profile(String id) throws ProtocolException {
         Account a = accounts.get(id);
@@ -103,7 +114,7 @@ public final class AccountStore {
             Account latest = accounts.get(id);
             if (!sameCredentials(account, latest)) throw new ProtocolException("WRONG_PASSWORD", "当前密码不正确");
             save(new Account(id, latest.nickname(), base64.encodeToString(salt), digest,
-                    latest.avatar(), latest.createdAt(), latest.profileRevision()));
+                    latest.avatar(), latest.createdAt(), latest.profileRevision()), false);
         }
     }
     public synchronized UserProfile updateProfile(String id, String nickname, String avatar) throws IOException {
@@ -113,7 +124,7 @@ public final class AccountStore {
         AvatarData.decode(avatar);
         Account a = accounts.get(id);
         if (a == null) throw new ProtocolException("NOT_AUTHENTICATED", "账号不存在");
-        save(new Account(id, nickname.strip(), a.salt(), a.hash(), avatar, a.createdAt(), a.profileRevision() + 1));
+        save(new Account(id, nickname.strip(), a.salt(), a.hash(), avatar, a.createdAt(), a.profileRevision() + 1), false);
         return profile(id);
     }
     public String authenticate(String id, String password) throws IOException {
@@ -132,7 +143,6 @@ public final class AccountStore {
     private static boolean sameCredentials(Account first, Account second) {
         return second != null && first.salt().equals(second.salt()) && first.hash().equals(second.hash());
     }
-    static String fileKey(String user) { return HexFormat.of().formatHex(user.getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
     public static void validatePassword(String password) throws ProtocolException {
         if (password == null || password.isEmpty()) throw new ProtocolException("MISSING_FIELD", "请填写密码");
         if (password.length() < 6 || password.length() > 128)

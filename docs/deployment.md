@@ -15,7 +15,7 @@ sudo install -d -m 0755 /opt/ltalk
 sudo install -m 0644 /home/ubuntu/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar
 ```
 
-已有账号和历史时，继续使用原数据目录。迁移到新机器时先按[备份与恢复演练](#备份与恢复演练)验证副本，再交给 `ltalk` 系统用户。
+SQLite 服务端首次启动会在数据目录创建 `ltalk.db`。已有 SQLite 账号和历史时，使用同一目录。换机器时先验证备份副本，再交给 `ltalk` 系统用户。文件版升级从空库开始。[备份与恢复演练](#备份与恢复演练) · [从文件版切换到 SQLite](#从文件版切换到-sqlite)
 
 ## 先在私网试用
 
@@ -80,7 +80,7 @@ sudo journalctl -u ltalk -n 20 --no-pager
 
 同一版本复测时执行 `sudo systemctl start ltalk`，然后从第 2 步核对网络和证书。换版本时从第 1 步开始。
 
-1. Windows 构建新版并上传 `target/ltalk-1.0.0.jar` 到 `/home/ubuntu/`。以下命令保留上一个版本。涉及数据格式变更时，停止服务后按[备份与恢复演练](#备份与恢复演练)备份 `/var/lib/ltalk`，随后按新版本的迁移说明操作。
+1. Windows 构建新版并上传 `target/ltalk-1.0.0.jar` 到 `/home/ubuntu/`。以下命令适用于两个 SQLite 版本之间更新。首次从文件版切换时，先按专节准备新数据目录。[从文件版切换到 SQLite](#从文件版切换到-sqlite)
 
    ```bash
    sudo systemctl stop ltalk
@@ -90,7 +90,7 @@ sudo journalctl -u ltalk -n 20 --no-pager
    sudo journalctl -u ltalk -n 20 --no-pager
    ```
 
-   如果需要回退，停服务后用 `sudo install -m 0644 /opt/ltalk/ltalk-1.0.0.jar.bak /opt/ltalk/ltalk-1.0.0.jar` 装回旧 JAR。涉及数据迁移时，同时按该版本的迁移说明恢复兼容的数据。服务文件有更新时，安装后先运行 `sudo systemctl daemon-reload`。
+   如果需要回退，停服务后用 `sudo install -m 0644 /opt/ltalk/ltalk-1.0.0.jar.bak /opt/ltalk/ltalk-1.0.0.jar` 装回旧 JAR。各版本使用对应的数据目录。服务文件有更新时，安装后先运行 `sudo systemctl daemon-reload`。
 
 2. 核对云端 TCP 9000 入站规则的来源地址。Ubuntu 的测试规则是临时的，实例重启后可用下面一行先检查再添加。
 
@@ -111,8 +111,15 @@ sudo journalctl -u ltalk -n 20 --no-pager
    - 登录后记录首批公共消息出现的时间。核对离线好友留言、首条未读、引用定位和输入框右上方的返回箭头。
    - 用昵称和用户名片段查找账号。切换「公共聊天室」和「好友与群聊」，查看独立群的在线人数、离线成员和用户资料。成员上下线或退群后核对名单，退群后从「历史会话」核对原有历史权限。
    - 分别选择图片与普通文件，先取消一次，再确认发送并从对端预览或保存。公网传输使用聊天同一端口上的独立 TLS 连接。
+   - 重启服务，用相同账号登录，核对资料、好友关系、群历史与附件下载。
 
 6. 测试结束可运行 `sudo systemctl stop ltalk`，用 `sudo systemctl is-active ltalk` 确认显示 `inactive`。若要关闭测试端口，在云控制台移除 `ltalk-public-test`，并执行 `sudo iptables -D INPUT -p tcp --dport 9000 -m comment --comment ltalk-public-test -j ACCEPT`。账号和聊天记录保存在 `/var/lib/ltalk`。
+
+## 从文件版切换到 SQLite
+
+1. 本地用新数据目录验证新版 JAR。确认云端切换时间后，停止 `ltalk.service`，完整备份原 `/var/lib/ltalk`，同时保留文件版 JAR。[备份与恢复演练](#备份与恢复演练)
+2. 将原目录改名保留，例如 `/var/lib/ltalk-file-backup`，使用前确认备份名称可用。为现有服务创建同名空目录 `/var/lib/ltalk`，归属 `ltalk:ltalk`，权限 `0750`。安装新版 JAR 并启动，检查服务日志和新建的 `ltalk.db`。
+3. 用新版客户端重新注册测试账号，按上节验证收发与重启恢复。新库从空库开始。若回退文件版，停服后分别保留新库目录和 JAR，再把旧目录及旧 JAR 恢复到服务配置中的位置。
 
 ## 容量与限制
 
@@ -132,7 +139,7 @@ TLS 默认共 140 条连接，最多 24 条尚未认证。TCP 接入后的 TLS �
 
 ## 备份与恢复演练
 
-停止服务后完整备份数据目录，确保账号、`social.json`（好友关系、私聊许可与群成员权限）、`history/`（含群组日志、删除标记和时间元数据）和 `attachments/`（图片与文件原始字节）属于同一快照。证书、私钥及密码单独安全备份。
+停止服务后完整备份数据目录。`ltalk.db`、SQLite 日志文件（若存在）和 `attachments/`（原始图片与文件）应属于同一快照。证书、私钥及密码单独安全备份。
 
 图片和附件使用与聊天相同的 TCP 端口，单独占用一个连接名额，公网模式仍使用 TLS。附件默认总配额为 1 GiB，可在服务端 JVM 配置 `-Dltalk.attachments.quotaBytes=字节数`。文件随归档保留，容量规划还需计入账号、历史及备份使用的空间。
 
@@ -142,9 +149,9 @@ sudo systemctl stop ltalk
 sudo tar --exclude='./server.lock' -C /var/lib/ltalk -czf "/var/backups/ltalk/ltalk-$(date +%F).tar.gz" .
 ```
 
-只做备份时，可在完成后用 `sudo systemctl start ltalk` 恢复服务。升级时先完成版本更换和需要的数据迁移，再启动服务。
+只做备份时，可在完成后用 `sudo systemctl start ltalk` 恢复服务。升级时先确认所用 JAR 与数据目录相匹配，再启动服务。
 
-恢复演练时先解压到独立目录，赋予 `ltalk` 用户权限，并指向该目录在回环地址与临时端口启动。用测试账号验证登录、公共与私聊记录，以及本人已删除的记录仍不显示。迁移生产数据时先保留原目录，再用恢复验证后的副本启动。
+恢复演练时先解压到独立目录，赋予 `ltalk` 用户权限，并指向该目录在回环地址与临时端口启动。用测试账号验证登录、公共与私聊记录、本人删除结果和附件下载。恢复生产数据时先保留原目录，再用演练通过的副本启动。
 
 ## 本机压测
 

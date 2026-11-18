@@ -109,13 +109,15 @@ class PublicCapacityTest {
             int pongs = peers.stream().mapToInt(peer -> peer.pongs).sum();
             if (seconds >= 4) assertTrue(pongs >= CLIENTS);
             assertEquals(CLIENTS, server.onlineCount());
-            long archive = Files.size(directory.resolve("data/history/public.jsonl"));
+            Path database = directory.resolve("data").resolve(SqliteDatabase.FILE_NAME);
+            Path journal = database.resolveSibling(SqliteDatabase.FILE_NAME + "-wal");
+            long databaseBytes = Files.size(database) + (Files.exists(journal) ? Files.size(journal) : 0);
             System.out.printf(Locale.ROOT, "PUBLIC_CAPACITY clients=%d elapsedSec=%.2f loginMs=%d reconnect10Ms=%d "
                             + "groupMessages=%d deliveries=%d p95Us=%d maxUs=%d heartbeatReplies=%d unexpectedDisconnects=0 "
-                            + "slowEvictions=%d serverThreadsPeak=%d combinedHeapMiB=%d combinedCpuCorePercent=%.1f publicArchiveBytes=%d%n",
+                            + "slowEvictions=%d serverThreadsPeak=%d combinedHeapMiB=%d combinedCpuCorePercent=%.1f databaseBytes=%d%n",
                     CLIENTS, duration / 1e9, loginMillis, reconnectMillis, latency.size(), latency.size() * CLIENTS,
                     latency.get(p95), latency.get(latency.size() - 1), pongs, server.slowClientCount(),
-                    peakServerThreads, peakHeap, cpuUsed < 0 ? -1 : cpuUsed * 100.0 / duration, archive);
+                    peakServerThreads, peakHeap, cpuUsed < 0 ? -1 : cpuUsed * 100.0 / duration, databaseBytes);
         } finally {
             for (Probe peer : peers) peer.close();
             logins.shutdownNow();

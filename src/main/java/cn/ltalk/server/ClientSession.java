@@ -125,11 +125,11 @@ final class ClientSession implements Runnable {
 
     @Override public String toString() { return userId == null ? socket.getRemoteSocketAddress().toString() : userId; }
     synchronized void closeExport() {
-        if (exportCursor != null) try { exportCursor.close(); } catch (IOException ignored) { }
+        if (exportCursor != null) exportCursor.close();
         exportCursor = null;
     }
     synchronized void closeHistory() {
-        if (historyCursor != null) try { historyCursor.close(); } catch (IOException ignored) { }
+        if (historyCursor != null) historyCursor.close();
         historyCursor = null;
     }
 }

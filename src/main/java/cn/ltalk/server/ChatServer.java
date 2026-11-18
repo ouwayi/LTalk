@@ -30,6 +30,7 @@ public final class ChatServer implements AutoCloseable {
     private SocialStore social;
     private AttachmentStore attachments;
     private java.nio.file.Path dataDirectory;
+    private SqliteDatabase database;
     private java.nio.channels.FileChannel dataLockChannel;
     private java.nio.channels.FileLock dataLock;
     public AccountStore accounts() { return accounts; }
@@ -108,19 +109,24 @@ public final class ChatServer implements AutoCloseable {
         try {
             dataLock = dataLockChannel.tryLock();
             if (dataLock == null) throw new IOException("数据目录已被另一个服务端使用");
-            accounts = new AccountStore(dataDirectory.resolve("accounts"));
-            archive = new ChatArchive(dataDirectory.resolve("history"));
-            social = new SocialStore(dataDirectory.resolve("social.json"), archive);
-            archive.social(social);
+            database = new SqliteDatabase(dataDirectory);
+            accounts = new AccountStore(database);
+            archive = new ChatArchive(database);
+            social = new SocialStore(database, archive);
             attachments = new AttachmentStore(this, dataDirectory.resolve("attachments"));
         } catch (IOException | RuntimeException ex) {
-            dataLockChannel.close(); throw new IOException("无法打开服务端数据目录", ex);
+            closeData();
+            throw new IOException("无法打开服务端数据目录：" + ex.getMessage(), ex);
         }
         ServerSocket socket = new ServerSocket();
         try {
             socket.setReuseAddress(true);
             socket.bind(new InetSocketAddress(bindAddress, requestedPort));
-        } catch (IOException ex) { socket.close(); throw ex; }
+        } catch (IOException ex) {
+            try { socket.close(); } catch (IOException closeFailure) { ex.addSuppressed(closeFailure); }
+            closeData();
+            throw ex;
+        }
         listener = socket;
         running = true;
         acceptThread = new Thread(this::acceptLoop, "ltalk-accept");
@@ -304,8 +310,15 @@ public final class ChatServer implements AutoCloseable {
             deadlines.awaitTermination(2, TimeUnit.SECONDS);
             for (ClientSession session : closing) session.awaitTermination();
         } catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
-        try { if (dataLock != null && dataLock.isValid()) dataLock.release(); } catch (IOException ignored) { }
-        try { if (dataLockChannel != null) dataLockChannel.close(); } catch (IOException ignored) { }
+        closeData();
+    }
+
+    private void closeData() {
+        try { if (database != null) database.close(); } catch (IOException ex) { LOG.warning(ex.getMessage()); }
+        try { if (dataLockChannel != null) dataLockChannel.close(); } catch (IOException ex) { LOG.warning(ex.getMessage()); }
+        database = null;
+        dataLockChannel = null;
+        dataLock = null;
     }
 
     private static ThreadFactory threadFactory(String prefix) {

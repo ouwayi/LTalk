@@ -173,11 +173,10 @@ final class MessageRouter {
     private void publishChat(ClientSession session, Message request, ChatRoute route) throws IOException {
         String nickname = server.accounts().nickname(session.userId);
         if (route.group() != null) {
-            Message event = server.archive().record(MessageType.GROUP_MESSAGE, session.userId, nickname, request, List.of());
+            Message event = server.archive().record(MessageType.GROUP_MESSAGE, session.userId, nickname, request);
             server.broadcast(event, route.group());
         } else {
-            Message event = server.archive().record(MessageType.PRIVATE_MESSAGE, session.userId, nickname, request,
-                    List.of(session.userId, request.to()));
+            Message event = server.archive().record(MessageType.PRIVATE_MESSAGE, session.userId, nickname, request);
             if (route.target() != null && !server.deliver(route.target(), event))
                 throw new ProtocolException("DELIVERY_UNCONFIRMED", "私聊写入中断，消息可能已归档，请核对记录");
             server.deliver(session, event);

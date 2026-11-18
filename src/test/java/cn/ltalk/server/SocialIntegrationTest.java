@@ -210,7 +210,13 @@ class SocialIntegrationTest {
             ok(alice, SocialAction.GROUP_TRANSFER, m -> m.conversationId(groupScope).to("carol"));
             ok(alice, SocialAction.GROUP_LEAVE, m -> m.conversationId(groupScope));
             ok(carol, SocialAction.GROUP_REVIEW, m -> m.conversationId(groupScope).content("OPEN"));
-            ok(bob, SocialAction.GROUP_REQUEST, m -> m.conversationId(groupScope));
+            try (ChatArchive.Cursor snapshot = server.archive().open("bob", groupScope)) {
+                ok(bob, SocialAction.GROUP_REQUEST, m -> m.conversationId(groupScope));
+                List<String> beforeRejoin = new ArrayList<>();
+                ChatRecord row;
+                while ((row = snapshot.next()) != null) beforeRejoin.add(row.content());
+                assertEquals(first, beforeRejoin);
+            }
             assertEquals("post-exit", export(bob, scope).get(100));
             ok(carol, SocialAction.GROUP_DISBAND, m -> m.conversationId(groupScope));
             assertTrue(ok(bob, SocialAction.FIND_GROUP, m -> m.content("设计")).isEmpty());

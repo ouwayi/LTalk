@@ -3,7 +3,6 @@ package cn.ltalk.server;
 import cn.ltalk.common.*;
 import cn.ltalk.client.AvatarImporter;
 import cn.ltalk.support.Peer;
-import com.google.gson.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import javax.imageio.ImageIO;
@@ -77,20 +76,23 @@ class ProfileConnectionTest {
             }
         }
     }
-    @Test void legacyAccountLoadsAndFailedSaveKeepsPreviousProfileAndPassword() throws Exception {
-        Path accounts = directory.resolve("accounts"); AccountStore store = new AccountStore(accounts);
-        store.register("alice", "旧昵称", "pass!12", false);
-        Path file = accounts.resolve(AccountStore.fileKey("alice") + ".json");
-        JsonObject old = JsonParser.parseString(Files.readString(file)).getAsJsonObject();
-        old.remove("avatar"); old.remove("createdAt"); old.remove("profileRevision"); Files.writeString(file, old.toString());
-        store = new AccountStore(accounts); assertNull(store.profile("alice").createdAt()); assertEquals("", store.profile("alice").avatar());
-        Files.delete(file); Files.createDirectory(file); Files.writeString(file.resolve("block"), "force replacement failure");
-        AccountStore loaded = store;
-        assertThrows(java.io.IOException.class, () -> loaded.updateProfile("alice", "不能落盘", ""));
-        assertThrows(java.io.IOException.class, () -> loaded.changePassword("alice", "pass!12", "newpass!"));
-        assertEquals("LOGIN_FAILED", assertThrows(ProtocolException.class, () -> loaded.authenticate("alice", "newpass!")).code());
-        assertEquals("旧昵称", store.profile("alice").nickname()); assertEquals("alice", store.authenticate("alice", "pass!12"));
-        assertEquals(old.get("hash").getAsString().length(), 44);
+    @Test void failedSaveKeepsPreviousProfileAndPasswordInMemoryAndOnDisk() throws Exception {
+        try (SqliteDatabase db = new SqliteDatabase(directory)) {
+            AccountStore store = new AccountStore(db);
+            store.register("alice", "旧昵称", "pass!12", false);
+            var original = SqliteFixtures.account(directory, "alice");
+            assertEquals(44, original.get("hash").length());
+            SqliteFixtures.edit(directory, """
+                    CREATE TRIGGER fail_account_update BEFORE UPDATE ON accounts
+                    BEGIN SELECT RAISE(ABORT, 'test write failure'); END
+                    """);
+            assertThrows(java.io.IOException.class, () -> store.updateProfile("alice", "不能落盘", ""));
+            assertThrows(java.io.IOException.class, () -> store.changePassword("alice", "pass!12", "newpass!"));
+            assertEquals("LOGIN_FAILED", assertThrows(ProtocolException.class, () -> store.authenticate("alice", "newpass!")).code());
+            assertEquals("旧昵称", store.profile("alice").nickname());
+            assertEquals("alice", store.authenticate("alice", "pass!12"));
+            assertEquals(original, SqliteFixtures.account(directory, "alice"));
+        }
     }
     @Test void avatarBoundsAndWireTypesAreValidatedBeforeDecodingLargeImages() throws Exception {
         assertEquals("INVALID_AVATAR", assertThrows(ProtocolException.class,

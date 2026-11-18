@@ -2,7 +2,6 @@ package cn.ltalk.server;
 
 import cn.ltalk.common.*;
 import cn.ltalk.support.Peer;
-import com.google.gson.Gson;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.*;
@@ -200,27 +199,23 @@ class HistoryPersistenceTest {
         }
     }
 
-    @Test void legacyPublicRecordsKeepTheirVisibilityAndPersonalDeletionSurvivesRestart() throws Exception {
-        Path history = Files.createDirectory(directory.resolve("history"));
-        String time = "2099-01-01T00:00:00Z";
-        ChatRecord legacy = new ChatRecord(UUID.randomUUID().toString(), ConversationScope.PUBLIC, "alice", null,
-                "旧版仅 Alice 的副本", "GROUP_MESSAGE", time);
-        Files.writeString(history.resolve("last-time"), time);
-        Files.writeString(history.resolve(AccountStore.fileKey("alice") + ".jsonl"), new Gson().toJson(legacy) + "\n");
+    @Test void sharedPublicDeletionAndClearStayPersonalAcrossRestart() throws Exception {
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.dataDirectory(directory); server.start();
             try (Peer alice = Peer.login(server.port(), "alice"); Peer bob = Peer.login(server.port(), "bob")) {
                 alice.group("共享公共消息"); String shared = alice.type(MessageType.GROUP_MESSAGE).messageId();
                 bob.type(MessageType.GROUP_MESSAGE);
-                assertEquals(List.of(legacy.messageId(), shared), records(alice).stream().map(ChatRecord::messageId).toList());
+                assertEquals(List.of(shared), records(alice).stream().map(ChatRecord::messageId).toList());
                 assertEquals(List.of(shared), records(bob).stream().map(ChatRecord::messageId).toList());
-                assertEquals(List.of(shared, legacy.messageId()), view(alice, HistoryQuery.MESSAGES, ConversationScope.PUBLIC, null, null, null)
+                assertEquals(List.of(shared), view(alice, HistoryQuery.MESSAGES, ConversationScope.PUBLIC, null, null, null)
                         .rows.stream().map(ChatRecord::messageId).toList());
-                assertTrue(view(bob, HistoryQuery.SEARCH, ConversationScope.PUBLIC, null, "旧版", null).rows.isEmpty());
                 alice.send(Message.of(MessageType.HISTORY_DELETE).requestId("one").conversationId(ConversationScope.PUBLIC)
                         .messageId(shared).build()); alice.type(MessageType.HISTORY_DELETED);
-                assertEquals(List.of(legacy), records(alice));
+                assertTrue(records(alice).isEmpty());
+                assertTrue(view(alice, HistoryQuery.SEARCH, ConversationScope.PUBLIC, null, "共享", null).rows.isEmpty());
                 assertEquals(List.of(shared), records(bob).stream().map(ChatRecord::messageId).toList());
+                bob.group("清空前的新消息"); alice.type(MessageType.GROUP_MESSAGE); bob.type(MessageType.GROUP_MESSAGE);
+                assertEquals(List.of("清空前的新消息"), records(alice).stream().map(ChatRecord::content).toList());
                 alice.send(Message.of(MessageType.HISTORY_DELETE).requestId("clear").conversationId(ConversationScope.PUBLIC).build());
                 alice.type(MessageType.HISTORY_DELETED);
                 assertTrue(records(alice).isEmpty());
@@ -232,7 +227,7 @@ class HistoryPersistenceTest {
             try (Peer alice = Peer.login(restarted.port(), "alice"); Peer bob = Peer.login(restarted.port(), "bob")) {
                 bob.group("清空后的新消息"); alice.type(MessageType.GROUP_MESSAGE); bob.type(MessageType.GROUP_MESSAGE);
                 assertEquals(List.of("清空后的新消息"), records(alice).stream().map(ChatRecord::content).toList());
-                assertEquals(List.of("共享公共消息", "清空后的新消息"), records(bob).stream().map(ChatRecord::content).toList());
+                assertEquals(List.of("共享公共消息", "清空前的新消息", "清空后的新消息"), records(bob).stream().map(ChatRecord::content).toList());
             }
         }
     }
@@ -245,7 +240,7 @@ class HistoryPersistenceTest {
                 SocialFixtures.permitPrivate(server, "alice", "carol");
                 a.privateTo("bob", "secret"); Message secret = a.type(MessageType.PRIVATE_MESSAGE); b.type(MessageType.PRIVATE_MESSAGE);
                 c.privateTo("alice", "keep"); a.type(MessageType.PRIVATE_MESSAGE); c.type(MessageType.PRIVATE_MESSAGE);
-                byte[] other = Files.readAllBytes(directory.resolve("history").resolve(AccountStore.fileKey("bob") + ".jsonl"));
+                List<ChatRecord> other = records(b);
                 assertEquals(3, records(a).size());
                 a.send(Message.of(MessageType.HISTORY_REQUEST).requestId("snapshot").build()); String historyCursor = a.type(MessageType.HISTORY_PAGE).cursor();
                 a.send(Message.of(MessageType.EXPORT_REQUEST).requestId("export").build()); String exportCursor = a.type(MessageType.EXPORT_PAGE).cursor();
@@ -256,7 +251,7 @@ class HistoryPersistenceTest {
                 assertEquals(List.of("public", "secret"), records(b).stream().map(ChatRecord::content).toList());
                 a.send(Message.of(MessageType.HISTORY_DELETE).requestId("clear").conversationId(ConversationScope.PUBLIC).build()); a.type(MessageType.HISTORY_DELETED);
                 assertEquals(List.of("keep"), records(a).stream().map(ChatRecord::content).toList());
-                assertArrayEquals(other, Files.readAllBytes(directory.resolve("history").resolve(AccountStore.fileKey("bob") + ".jsonl")));
+                assertEquals(other, records(b));
                 a.send(Message.of(MessageType.EXPORT_REQUEST).requestId("remaining").build()); assertEquals("keep", a.type(MessageType.EXPORT_PAGE).record().content());
             }
         }
@@ -283,14 +278,23 @@ class HistoryPersistenceTest {
             }
         }
     }
-    @Test void corruptFileDeletionFailureDoesNotPublishOrDamagePreviousFile() throws Exception {
+    @Test void failedClearRollsBackBothWatermarkAndPersonalDeletion() throws Exception {
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.dataDirectory(directory); server.start();
             try (Peer a = Peer.login(server.port(), "alice")) {
-                Path file = directory.resolve("history").resolve(AccountStore.fileKey("alice") + ".jsonl"); Files.writeString(file, "broken\n");
+                a.group("hidden"); Message hidden = a.type(MessageType.GROUP_MESSAGE);
+                a.group("visible"); a.type(MessageType.GROUP_MESSAGE);
+                a.send(Message.of(MessageType.HISTORY_DELETE).requestId("hide").conversationId(ConversationScope.PUBLIC)
+                        .messageId(hidden.messageId()).build());
+                a.type(MessageType.HISTORY_DELETED);
+                SqliteFixtures.edit(directory, """
+                        CREATE TRIGGER fail_clear BEFORE DELETE ON hidden_messages
+                        BEGIN SELECT RAISE(ABORT, 'test write failure'); END
+                        """);
                 a.send(Message.of(MessageType.HISTORY_DELETE).requestId("d").conversationId(ConversationScope.PUBLIC).build()); a.error("STORAGE_ERROR");
-                assertEquals("broken\n", Files.readString(file));
-                try (var files = Files.list(file.getParent())) { assertFalse(files.anyMatch(p -> p.toString().endsWith(".tmp"))); }
+                assertEquals(List.of("visible"), records(a).stream().map(ChatRecord::content).toList());
+                assertEquals(0, SqliteFixtures.count(directory, "SELECT count(*) FROM history_clears"));
+                assertEquals(1, SqliteFixtures.count(directory, "SELECT count(*) FROM hidden_messages"));
             }
         }
     }
