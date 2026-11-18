@@ -359,3 +359,9 @@
 - 专项 **35 项通过**。查询计划检查发现会话分页的单行参数查询会额外排序，改用绑定参数直接约束会话与序号，复核确认由会话索引提供顺序。首轮全量有一条 Swing 用例在异步摘要到达前打开历史菜单，补充等待入口就绪并保留原断言。另覆盖导出打开后重新入群时旧快照的授权范围。
 - 完整 `build.ps1 -o package` **146 项通过，0 失败、错误或跳过**，约 2:18，日志 `.tools/sqlite-final.log`。本机用打包 JAR 启动空库，注册与发送成功后终止进程，重启并核对同账号与同消息 ID。SQLite 完整性和外键检查通过。[测试报告](test-report.md#sqlite-存储2026-11-18阶段-41)
 - 关键词匹配沿用正文、用户名和当前昵称子串语义，仍可能扫描较大范围。Ubuntu 云端和独立 Java 17 运行时待验证。云端切换前备份文件版数据，使用新目录演练和复测。[部署手册](deployment.md#从文件版切换到-sqlite)
+
+## 阶段 42 简化 SQLite 服务端启动（2026-11-18，本轮记录）
+
+- 从 `2f56c09` 接续。用户截图显示 Java 25 在 SQLite JDBC 加载原生库时提示权限，服务端随后启动且账号登录成功。给含依赖 JAR 添加 `Enable-Native-Access: ALL-UNNAMED`，由 `java -jar` 启动时应用。[Java JAR 规范](https://docs.oracle.com/en/java/javase/25/docs/specs/jar/jar.html)
+- 无显式目录时优先使用工作目录下的 `data-sqlite/`。该目录尚无数据库且早期 SQLite 默认位置有 `data/ltalk.db` 时，沿用早期数据库。显式 `-Dltalk.dataDir` 优先。本机核对了原文件版目录和当前 SQLite 数据库的位置，验证使用独立目录。
+- 完整 `build.ps1 -o package` **147 项通过，0 失败、错误或跳过**，约 2:21。用打包 JAR 验证显式启动后改用短命令可恢复同账号、同消息，早期 SQLite 库可回退使用，旧文件数据留在原位置。Java 25 严格原生访问模式启动成功，日志没有截图中的警告。Windows 重定向日志采用本地编码，启动检查改用 ASCII 标识；Ubuntu 和独立 Java 17 运行时仍待验证。[测试报告](test-report.md#sqlite-启动简化2026-11-18阶段-42)

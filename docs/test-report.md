@@ -1,5 +1,12 @@
 # 测试报告与验收记录
 
+## SQLite 启动简化（2026-11-18，阶段 42）
+
+Windows、JDK 25.0.4、Maven 3.9.9，编译目标 Java 17。完整离线打包 **147 项通过，0 失败、错误或跳过**，约 2:21。日志 `.tools/sqlite-startup-final.log`。
+
+- 自动测试覆盖文件版目录与新 SQLite 目录的区分、早期 SQLite 默认目录兼容、两处都有数据库时的优先级、显式绝对与相对路径。
+- 用打包 JAR 在隔离目录先显式选择 `data-sqlite` 注册与发消息，再省略数据路径启动，核对原账号及消息 ID。另测仅有 `data/ltalk.db` 的情况。用 `--illegal-native-access=deny` 启动成功，运行日志没有 SQLite 原生访问警告。启动日志保存在 `.tools/sqlite-startup-jo1id7bh/`。
+
 ## SQLite 存储（2026-11-18，阶段 41）
 
 Windows、JDK 25.0.4、Maven 3.9.9，编译目标 Java 17。完整离线 `build.ps1 -o package` **146 项通过，0 失败、错误或跳过**，约 2:18，产物 `target/ltalk-1.0.0.jar`。日志 `.tools/sqlite-final.log`，专项日志 `.tools/sqlite-targeted.log`。

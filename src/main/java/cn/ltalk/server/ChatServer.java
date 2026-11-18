@@ -326,6 +326,18 @@ public final class ChatServer implements AutoCloseable {
         return task -> new Thread(task, prefix + sequence.incrementAndGet());
     }
 
+    static Path cliDataDirectory(Path workingDirectory, String configured) {
+        if (configured != null) return workingDirectory.resolve(configured);
+        Path preferred = workingDirectory.resolve("data-sqlite");
+        Path previous = workingDirectory.resolve("data");
+        // Retain access to databases created with the first SQLite release's CLI default.
+        if (Files.notExists(preferred.resolve(SqliteDatabase.FILE_NAME), LinkOption.NOFOLLOW_LINKS)
+                && Files.isRegularFile(previous.resolve(SqliteDatabase.FILE_NAME))) {
+            return previous;
+        }
+        return preferred;
+    }
+
     public static void main(String[] args) {
         if (args.length > 3) { usage(); System.exit(1); }
         try {
@@ -338,7 +350,7 @@ public final class ChatServer implements AutoCloseable {
             boolean tls = Boolean.parseBoolean(tlsMode);
             int max = args.length > 2 ? Integer.parseInt(args[2]) : tls ? 140 : 20;
             ChatServer server = new ChatServer(bind, port, max, Duration.ofSeconds(10));
-            server.dataDirectory(java.nio.file.Path.of(System.getProperty("ltalk.dataDir", "data")));
+            server.dataDirectory(cliDataDirectory(Path.of(""), System.getProperty("ltalk.dataDir")));
             if (tls) {
                 String keyStore = System.getProperty("ltalk.tls.keyStore");
                 String passwordFile = System.getProperty("ltalk.tls.passwordFile");

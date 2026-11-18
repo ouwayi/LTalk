@@ -17,6 +17,23 @@ import static org.junit.jupiter.api.Assertions.*;
 class SqlitePersistenceTest {
     @TempDir Path directory;
 
+    @Test void cliUsesPreferredSqliteDirectoryAndRetainsEarlierDatabaseAsFallback() throws Exception {
+        Path preferred = directory.resolve("data-sqlite");
+        Path previous = Files.createDirectory(directory.resolve("data"));
+        Path legacy = Files.createDirectory(previous.resolve("accounts"));
+        assertEquals(preferred, ChatServer.cliDataDirectory(directory, null));
+        Files.delete(legacy);
+        try (SqliteDatabase ignored = new SqliteDatabase(previous)) {
+            assertEquals(previous, ChatServer.cliDataDirectory(directory, null));
+        }
+        Files.createDirectory(preferred);
+        try (SqliteDatabase ignored = new SqliteDatabase(preferred)) {
+            assertEquals(preferred, ChatServer.cliDataDirectory(directory, null));
+            assertEquals(previous, ChatServer.cliDataDirectory(directory, previous.toString()));
+            assertEquals(directory.resolve("custom"), ChatServer.cliDataDirectory(directory, "custom"));
+        }
+    }
+
     @Test void refusesLegacyDirectoryAndCanStartFromAnIndependentEmptyDirectory() throws Exception {
         Path legacy = Files.createDirectory(directory.resolve("legacy"));
         Path original = Files.writeString(legacy.resolve("social.json"), "{\"legacy\":true}");

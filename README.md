@@ -52,7 +52,9 @@ java -jar target/ltalk-1.0.0.jar
 java -jar target/ltalk-1.0.0.jar 9000 0.0.0.0 20
 ```
 
-服务端首次启动在数据目录创建 `ltalk.db`。默认目录是启动时工作目录的 `data/`。从文件版升级时，用 `-Dltalk.dataDir` 指定独立的新目录，用户在新库重新注册。示例使用 `data-sqlite/`，以后重启继续指定同一目录以恢复账号与历史。
+在项目根目录运行上面的短命令，服务端会打开 `data-sqlite/ltalk.db`，首次启动时自动创建。如果早期 SQLite 版本已在 `data/` 建库，且 `data-sqlite/` 中还没有数据库，服务端会继续使用 `data/ltalk.db`。从文件版切换时在新库重新注册。
+
+要使用其他目录，在 `-jar` 前传入 `-Dltalk.dataDir`。含依赖 JAR 已为 SQLite 驱动声明 Java 原生库访问权限，常规启动使用上面的短命令即可。
 
 ```powershell
 java "-Dltalk.dataDir=D:\Agent\AllProjects\LTalk\data-sqlite" -jar target/ltalk-1.0.0.jar
@@ -169,7 +171,7 @@ java "-Dltalk.discovery.enabled=false" -jar target/ltalk-1.0.0.jar
 
 ## 测试
 
-最近一次完整功能回归为 2026-11-18 的 `build.ps1 -o package`。**146 项通过，0 失败、错误或跳过**。覆盖 SQLite 空库初始化、重启恢复、事务回滚、群历史与个人删除，以及原有 Swing、聊天、TLS、附件和导出流程。另以打包 JAR 验证空库启动和进程重启后登录、历史恢复。云端 SQLite 版本待复测。[测试报告](docs/test-report.md#sqlite-存储2026-11-18阶段-41)
+最近一次完整功能回归为 2026-11-18 的 `build.ps1 -o package`。**147 项通过，0 失败、错误或跳过**。覆盖 SQLite 数据目录选择、空库初始化、重启恢复、事务回滚，以及原有 Swing、聊天、TLS、附件和导出流程。另以打包 JAR 验证短命令启动、账号与历史恢复及 Java 原生访问。云端 SQLite 版本待复测。[测试报告](docs/test-report.md#sqlite-启动简化2026-11-18阶段-42)
 
 运行完整测试需允许本机回环 TCP，并提供图形桌面环境。平时回归可使用 `build.ps1 test` 或 `mvn test`。
 

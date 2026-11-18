@@ -2,25 +2,25 @@
 
 更新于 **2026-11-18（Asia/Shanghai）**。工作目录为 `D:\Agent\AllProjects\LTalk`，核对时分支为 `master`，未配置远端。使用 **Java 17 目标字节码、Swing、Maven、SQLite、TCP 协议 v6 和 UDP 发现 v1**，提供可选 TLS 公网模式。接续时先核对 Git 状态和提交。
 
-最近功能阶段为阶段 41（SQLite 服务端存储）。此前功能基线包括 `e3b9846`（群聊和用户信息卡片、回到最新消息和会话分类）、`26286d3`（图片和文件发送确认）与 `497522b`（按昵称和用户名片段查找用户）。完整回归和打包使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。
+最近阶段为阶段 42（简化 SQLite 服务端启动），接续 `2f56c09`（SQLite 服务端存储）。此前功能基线包括 `e3b9846`（群聊和用户信息卡片、回到最新消息和会话分类）、`26286d3`（图片和文件发送确认）与 `497522b`（按昵称和用户名片段查找用户）。完整回归和打包使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。
 
 ## 从哪里接手
 
 1. 阅读 [AGENTS.md](../AGENTS.md) 和本页，再看 [README](../README.md) 的构建与操作。通过 `git status --short` 和 `git log -5 --oneline` 核对现场。
 2. 改功能前按需查 [需求与用户流程](requirements.md)、[架构](design.md)、[界面设计](ui-design.md) 和 [协议](protocol.md)，再核对对应代码与测试。
 3. [测试报告](test-report.md) 以日期和阶段区分证据，[开发日志](DEVLOG.md) 保留决策与变更详情。根目录的[任务拆解](../局域网聊天项目任务拆解.md)和[早期草稿](devlog-early-draft.md)属于历史资料。
-4. `target/`、`.tools/`、`data/` 和 `data-sqlite/` 为本机构建、证据或数据目录。验证使用独立临时目录。从文件版切换时通过 `-Dltalk.dataDir` 指定新目录；以后用同一个 SQLite 数据目录恢复账号和记录。[部署手册](deployment.md#从文件版切换到-sqlite)
+4. `target/`、`.tools/`、`data/` 和 `data-sqlite/` 为本机构建、证据或数据目录。验证使用独立临时目录。在项目根目录运行 `java -jar target/ltalk-1.0.0.jar` 默认使用 `data-sqlite/`；有早期 SQLite 库时按兼容规则找到 `data/ltalk.db`。显式 `-Dltalk.dataDir` 优先。[启动说明](../README.md#启动与操作)
 5. 选择下一项开发工作时，查阅 [后续开发路线图](ROADMAP.md)。下一项功能由用户指定。云端复测按[更新 JAR 与复测](deployment.md#更新-jar-与复测)操作。
 
 新对话可以直接发送：
 
-> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 `AGENTS.md` 阅读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。最近功能阶段为阶段 41（SQLite 服务端存储），本机完整回归 146 项通过。请按我接下来指定的功能继续。
+> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 `AGENTS.md` 阅读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。最近阶段为阶段 42（简化 SQLite 服务端启动），本机完整回归 147 项通过。请按我接下来指定的功能继续。
 
 ## 当前功能
 
 | 范围 | 行为与边界 |
 | --- | --- |
-| 服务端存储 | 首次在新数据目录创建 `ltalk.db`，账号、社交关系、群授权、历史与附件元数据入库，原始附件存于 `attachments/`。文件版数据目录需单独保留，新库从空库开始。 |
+| 服务端存储 | 首次在新数据目录创建 `ltalk.db`，账号、社交关系、群授权、历史与附件元数据入库，原始附件存于 `attachments/`。文件版数据目录单独保留，新库从空库开始。打包 JAR 声明 SQLite 驱动所需的原生访问权限。 |
 | 连接与登录 | 启动页先连接服务器，再注册或登录。预填地址自动连接，注册成功后自动登录。双向心跳检测静默失联。断线后聊天页可按原地址重新连接，预填原用户名并重新验证密码。同址同账号登录恢复所选会话与窗口内草稿。 |
 | 启动与发现 | Windows 构建附带 `start-client.cmd`。未指定地址时后台查找约 2 秒，一台自动尝试连接，多台可选择。手动地址优先，最近列表保存 6 个通过握手的地址。命令行服务端默认监听发现 UDP 9001，可关闭。 |
 | 公网连接 | TLS 在发送认证数据前校验证书信任链及主机名。公网模式限制接入、未认证连接和认证频率。服务端按连接设置有界发送队列，拥塞时关闭对应连接。提供 Linux 单机服务配置及部署、备份恢复步骤。 |
@@ -80,6 +80,7 @@
 
 ## 已有验证与后续核对
 
+- SQLite 启动简化于 2026-11-18 完整离线打包，**147 项通过，0 失败、错误或跳过**，约 2:21。打包 JAR 在独立目录用短命令恢复账号与历史，并在 Java 25 严格原生访问模式下成功启动。日志 `.tools/sqlite-startup-final.log`。[测试报告](test-report.md#sqlite-启动简化2026-11-18阶段-42)
 - SQLite 服务端存储于 2026-11-18 完整离线打包，**146 项通过，0 失败、错误或跳过**，约 2:18。验证新库和版本检查、事务回滚、权限及备份恢复，并使用打包 JAR 在独立目录验证注册、发消息和进程重启后恢复。日志 `.tools/sqlite-final.log`。Ubuntu 云端及独立 Java 17 运行时待验证。[测试报告](test-report.md#sqlite-存储2026-11-18阶段-41)
 - 信息卡片和会话导航于 2026-11-18 执行 `build.ps1 -o package`，**143 项通过，0 失败、错误或跳过**。验证覆盖群成员分页和权限、上下线与退群刷新、好友申请和删除、会话分类、旧记录入口、回到最新消息箭头，以及宽屏浅色与窄屏深色预览。日志 `.tools/conversation-details-package.log`。本阶段真实高 DPI 和跨设备、云端操作待复测。[测试报告](test-report.md)
 - 发送确认及用户搜索于 2026-11-18 执行 `build.ps1 -o package`，**141 项通过，0 失败、错误或跳过**。图片与文件均验证选择后等待确认、取消后无附件消息、明确发送后完成上传。日志 `.tools/user-search-upload-confirm.log`。[测试报告](test-report.md)
