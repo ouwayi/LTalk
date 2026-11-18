@@ -9,7 +9,7 @@
 | R-03 在线列表 | 上下线推送全量快照，版本递增，重连重置本地版本。公共聊天室分类显示公共会话与其他在线账号 | ChatServerTest、ChatWindowTest |
 | R-04 群聊 | 公共消息发给所有就绪账号，独立群消息只发给就绪的当前成员，均含发送者回显。公共归档可查登录前和离线期间的共享记录 | ChatServerTest、HistoryPersistenceTest、SocialIntegrationTest |
 | R-05 私聊 | 已有好友关系，或已获私聊许可且对方在线时允许发送。在线投递只涉及发送者和目标，离线好友从本人历史查阅 | ChatServerTest、SocialIntegrationTest |
-| R-06 消息展示 | 纯文本、当地时间、当前会话标识，接收气泡按发送者连续分组，显示同步昵称和头像 | ChatWindowTest、MessageTimelineTest |
+| R-06 消息展示 | 显示正文、图片缩略图或文件卡片，以及当地时间和当前会话标识。接收气泡按发送者连续分组，显示同步昵称和头像 | ChatWindowTest、MessageTimelineTest |
 | R-07 边界与协议 | 2000 UTF-16 单元正文、普通帧 16 KiB、指定头像帧 176 KiB，换行转义，错误按连接处理 | MessageCodecTest、ChatServerTest |
 | R-08 清理与手动重连 | EOF/RST/读写失败清理；服务端停止关闭会话；旧连接不能影响新连接 | ChatServerTest / ChatClientTest |
 | R-09 桌面响应 | 后台连接/收发、EDT 更新、连接中禁重复提交、断线禁发送 | ChatClientTest + Swing 人工验收 |
@@ -19,12 +19,12 @@
 | X1 心跳与失联 | HELLO 或直接登录成功后双向 PING/PONG，间隔/响应期限可配置，正常空闲不踢，静默失联清理并允许手动重连 | HeartbeatIntegrationTest / HeartbeatSettingsTest 本机通过；2026-10-28 用户反馈虚拟机断网后自动检测断开正常，实际测试日期/配置/精确耗时未提供 |
 | X2 当前会话导出 | 从群聊信息卡片或私聊更多菜单选择 JSON/CSV、文件名和位置，覆盖旧文件需确认 | AuthenticationExportTest、HistoryExportTest、FileDialogsTest |
 | X3 账号与资料 | 注册登录、资料编辑与同步、本人改密。改密成功后当前会话继续，下次用新密码登录 | AccountFlowTest、ProfileConnectionTest、PasswordChangeTest、ChatWindowTest |
-| X4 授权历史 | 服务端重启后保留本人可见记录，登录恢复会话摘要及当前会话最近一页，上滚取旧记录，搜索可定位到原消息，支持逐条删除或清空本人当前会话 | HistoryPersistenceTest、HistoryClientTest、HistoryStoreTest、ChatWindowTest |
+| X4 授权历史 | 服务端重启后保留本人可见记录，登录恢复会话摘要及当前会话最近一页，上滚取旧记录，搜索可定位到原消息。支持逐条删除和「删除所有聊天记录」，范围均为本人的当前会话 | HistoryPersistenceTest、HistoryClientTest、HistoryStoreTest、ChatWindowTest |
 | SQLite 存储 | 首启创建数据库，服务端事务保存账号、社交关系、群成员权限、消息及附件元数据，文件版切换使用独立空库 | SqlitePersistenceTest、HistoryPersistenceTest、SocialIntegrationTest、PublicConnectionTest |
 | X5 私聊离线投递 | 已互为好友时可发送离线消息，接收人通过本人历史查阅 | SocialIntegrationTest、ChatWindowTest |
 | X6 聊天文件传输 | 图片专用入口接受 PNG、JPEG、GIF 与 BMP，最多 12 MiB 和 2400 万像素。普通附件支持任意类型，最多 50 MiB。选中文件后确认目标才上传，支持取消和保存，下载按本人历史权限授权 | AttachmentTransferTest、AttachmentIntegrationTest、ChatWindowTest、FileDialogsTest |
-| 好友与独立群组 | 按昵称或用户名片段查找，双方确认好友关系，支持独立私聊许可、加群审核与邀请、管理员移交或解散。独立群的当前成员可查看成员名单，退群后保留已授权的历史 | SocialIntegrationTest、ChatWindowTest |
-| 会话导航与资料 | 「好友与群聊」显示好友与已加入的独立群，其余会话可从「列表外的会话」打开。点列表空白保持当前会话。点击标题、群消息头像或成员可打开对应信息卡片。离开最新消息或查看定位结果时显示返回箭头 | ChatWindowTest |
+| 好友与独立群组 | 按昵称或用户名片段查找，双方确认好友关系，支持独立私聊许可、加群审核与邀请、管理员移交或解散。管理员从完整名单点选或搜索接任者，服务端核对资格。退群后保留已授权的历史 | SocialIntegrationTest、ChatWindowTest |
+| 会话导航与资料 | 「好友与群聊」显示好友与已加入的独立群，其余会话可从「列表外的会话」打开。点列表空白保持当前会话。点击标题、群消息头像或成员可打开对应信息卡片，从卡片可复制群号或用户名。离开最新消息或查看定位结果时显示返回箭头 | ChatWindowTest |
 | 消息撤回 | 本人发出的消息 60 秒内可撤回。原位置显示提示，后续搜索和下载沿用撤回状态 | MessageRecallTest、AttachmentTransferTest、ChatWindowTest |
 | 未读定位与引用 | 进入会话定位本窗口的首条未读。右键可复制完整正文或引用，点击引用按本人历史权限定位 | ChatWindowTest、ConversationStoreTest、MessageTimelineTest、HistoryPersistenceTest |
 
@@ -59,7 +59,7 @@ stateDiagram-v2
 
 自动化测试用隔离数据目录和本机回环连接，通过第三方 Socket 的收包验证私聊隔离，并用 10 个客户端进行课程规模短负载测试。SQLite 回归验证空库初始化、事务失败回滚、按本人权限读取，以及用同一目录重启后恢复账号和聊天历史。
 
-用户已报告 SQLite 版本的局域网试用和双设备公网基本试用。心跳前的宿主机与虚拟机人工测试、后续的单向丢包自动化和虚拟机断网反馈各有独立记录。[测试报告](test-report.md)
+用户报告的 SQLite 局域网试用和双设备公网基本试用对应 `f89dc23`（v6）。当前 v7 的验证来源为本机回归。心跳前的宿主机与虚拟机人工测试、后续的单向丢包自动化和虚拟机断网反馈按各自版本记录。[测试报告](test-report.md)
 
 ## 账号与导出验收（2026-10-29，历史阶段）
 

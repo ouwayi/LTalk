@@ -2,11 +2,11 @@
 
 更新于 **2026-11-18（Asia/Shanghai）**。工作目录为 `D:\Agent\AllProjects\LTalk`，核对时分支为 `master`，未配置远端。使用 **Java 17 目标字节码、Swing、Maven、SQLite 表结构 v2、TCP 协议 v7 和 UDP 发现 v1**，提供可选 TLS 公网模式。接续时先核对 Git 状态和提交。
 
-当前功能基线为阶段 47，支持从群成员列表搜索和选择新管理员。阶段 46 增加了点击信息卡片上的群号或用户名复制。阶段 44 改进了会话列表和附件展示，新增 60 秒撤回与 10 位群号。阶段 43 记录上一版 SQLite 的云端基本验收。完整回归和打包使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。
+当前功能基线为 `8bc1f94`（阶段 47），阶段 48 更新交接文档。近期功能包括 60 秒撤回、10 位群号、信息卡片复制群号和用户名，以及从完整群成员名单筛选和选择新管理员。该基线的本机完整离线回归 **152 项通过**。完整构建使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。[最新测试报告](test-report.md#近期桌面交互回归)
 
 ## 从哪里接手
 
-1. 阅读 [AGENTS.md](../AGENTS.md) 和本页，再看 [README](../README.md) 的构建与操作。通过 `git status --short` 和 `git log -5 --oneline` 核对现场。
+1. 阅读 [AGENTS.md](../AGENTS.md) 和本页，再看 [README](../README.md) 的构建与操作。用 `git status --short --branch` 和 `git log -5 --oneline` 核对分支、工作区和功能基线。
 2. 改功能前按需查 [需求与用户流程](requirements.md)、[架构](design.md)、[界面设计](ui-design.md) 和 [协议](protocol.md)，再核对对应代码与测试。
 3. [测试报告](test-report.md) 以日期和阶段区分证据，[开发日志](DEVLOG.md) 保留决策与变更详情。根目录的[任务拆解](../局域网聊天项目任务拆解.md)和[早期草稿](devlog-early-draft.md)属于历史资料。
 4. `target/`、`.tools/`、`data/` 和 `data-sqlite/` 为本机构建、证据或数据目录。验证使用独立临时目录。在项目根目录运行 `java -jar target/ltalk-1.0.0.jar` 默认使用 `data-sqlite/`；有早期 SQLite 库时按兼容规则找到 `data/ltalk.db`。显式 `-Dltalk.dataDir` 优先。[启动说明](../README.md#启动与操作)
@@ -14,7 +14,7 @@
 
 新对话可以直接发送：
 
-> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 `AGENTS.md` 阅读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。当前功能基线为阶段 47。请按我接下来指定的功能继续。
+> 请继续开发 `D:\Agent\AllProjects\LTalk`。按 `AGENTS.md` 先读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。最近功能提交为 `8bc1f94`（阶段 47），本机完整回归 152 项通过。当前协议为 v7，SQLite 表结构为 v2，已记录的 Oracle Cloud 双设备基本试用对应较早的 `f89dc23`（v6）。请按我接下来指定的功能继续。
 
 ## 当前功能
 
@@ -33,7 +33,7 @@
 | 个人信息 | 左下角本人头像 →「个人信息」。能改昵称、上传或重置头像、修改密码。改密码需验证当前密码和确认新密码，成功后本次连接继续，下次使用新密码。 |
 | 头像和昵称 | 登录、资料修改和本人历史加载同步展示资料。联系人、私聊标题、气泡和群聊摘要读取当前资料。连续消息组首显示昵称，末尾显示一个头像，滚动到边缘时一起裁切。 |
 | 头像规格 | 原图限 12 MiB 和 2400 万像素。短边至少 512 像素则裁剪为 512×512，否则为 256×256，编码上限 128 KiB。旧 48/144 像素头像仍可用，重新上传原图可提高分辨率。 |
-| 历史和删除 | 登录显示会话摘要与当前会话最近 20 条，进入其他会话再加载其历史。上滚到顶部或点击按钮加载旧记录，保留阅读位置。公共历史含登录前和离线期间消息，删除只影响本人。 |
+| 历史和删除 | 登录显示会话摘要与当前会话最近 20 条，进入其他会话再加载其历史。上滚到顶部或点击按钮加载旧记录，保留阅读位置。公共历史含登录前和离线期间消息。「删除所有聊天记录」的范围是本人的当前会话。 |
 | 搜索定位 | 从当前会话搜索本人可见归档，匹配正文、昵称和用户名。定位显示原消息及前后各最多 9 条。查看定位结果或离开最新消息时，输入框右上方显示回到最新消息的箭头。 |
 | 未读定位 | 打开会话自动跳到本窗口收到的第一条未读，显示未读分隔。阅读旧消息期间可点击「有 N 条新消息」定位。历史加载不累加实时未读。 |
 | 引用回复和复制 | 右键可引用回复或复制完整正文。引用草稿可单独取消，发送后点击引用可定位本人有权查看的原文。 |
@@ -67,7 +67,7 @@
 | common/LanDiscovery、server/DiscoveryResponder、client/DiscoveryClient、ServerSelection、RecentServers | UDP 发现帧、后台应答与查找、启动页选择、最近地址保存 |
 | client/ChatClient、ClientSessions、HistoryChannel、HistoryExport | 后台连接、候选账号交接、历史分页和导出 |
 | client/ChatWindow、HistorySearchDialog、client/ui/WelcomePanel、ConnectionPanel、AuthenticationPanel | 窗口组装、历史浏览与定位、连接及认证界面 |
-| client/SocialChannel、SocialDialog、ChatWindow | 社交请求分页、好友及群组目录、收件箱、信息卡片的群成员查询 |
+| client/SocialChannel、SocialDialog、ChatWindow、GroupTransferDialog | 社交请求分页、好友及群组目录、收件箱、卡片的群成员查询与管理员转让弹窗 |
 | client/ContactProfile、AvatarImporter、client/ui/ProfileAvatar、ProfilePanel、PasswordChangePanel | 头像导入、展示资料、本人资料编辑及改密 |
 | client/ui/ConversationStore、ConversationId、ConversationList、ConversationInfoPanel、MessageTimeline、ResponsiveShell | EDT 展示、会话选择、信息卡片、分组气泡与布局 |
 | client/ui/Appearance*、ColorPicker、ChatTheme、ThemePalette、FileDialogs、WindowsFilePicker | 外观与色盘、主题、系统文件对话框 |
@@ -75,13 +75,13 @@
 
 ## 云端测试交接
 
-- 2026-11-18，用户将 Oracle Cloud 上的文件版服务切换到 SQLite 版。截图显示 TLS 服务监听 TCP 9000，并已创建 `/var/lib/ltalk/ltalk.db`。用户报告在局域网试用以及用两台设备通过公网测试时均未发现问题。[云端验证范围](test-report.md#sqlite-云端部署与双设备验证)
+- 2026-11-18，用户在 Oracle Cloud 将文件版切换到 `f89dc23`（协议 v6、SQLite 表结构 v1）。截图显示 TLS 服务监听 TCP 9000，已创建 `/var/lib/ltalk/ltalk.db`。用户报告局域网试用及双设备公网基本试用正常。[云端验证范围](test-report.md#sqlite-云端部署与双设备验证)
 - 公网服务由 `ltalk.service` 管理，使用 `/opt/ltalk/ltalk-1.0.0.jar`、`/var/lib/ltalk` 和 `/etc/ltalk/server.p12`。关停后复测可核对进程状态、来源 IP、Ubuntu 防火墙规则和证书有效期。更换版本时让服务端和测试客户端使用同版 JAR。[部署手册](deployment.md#更新-jar-与复测)
-- 云端基本验证已完成。逐项功能范围、两台设备是否使用独立接入网络、云端停服重启后的数据恢复、长期证书续签和实际云规格的百人容量待单独核对。旧版本的 Oracle Cloud 私网和公网验收另有记录。[旧版验收](test-report.md#oracle-cloud-私网与公网验收)
+- 当前 v7 的云端部署及双设备复测仍待记录，包括旧群换号、重启恢复、消息撤回和管理员转让。历史反馈中的逐项功能范围与设备接入网络未单独记录。长期证书续签和实际云规格的百人容量待专项验收。[旧版验收](test-report.md#oracle-cloud-私网与公网验收)
 
 ## 已有验证与后续核对
 
-- 管理员转让与会话文案于 2026-11-18 完整离线打包，**152 项通过，0 失败、错误或跳过**。窗口回归覆盖多页名单、用户名搜索、退群后撤销选择、取消操作和离线成员接任。日志 `.tools/group-transfer-package.log`。
+- 管理员转让与会话文案于 2026-11-18 完整离线打包，**152 项通过，0 失败、错误或跳过**。窗口回归覆盖多页名单、用户名搜索、退群后清除选择、取消操作和离线成员接任。日志 `.tools/group-transfer-package.log`。[测试报告](test-report.md#近期桌面交互回归)
 - 信息卡片复制于 2026-11-18 完整离线打包，**151 项通过，0 失败、错误或跳过**。窗口回归核对原始群号和用户名、切换卡片、公共聊天室和剪贴板失败提示，检查了浅色与窄屏深色预览。日志 `.tools/info-copy-verified.log`。
 - 弹窗图标调整于 2026-11-18 完整离线打包，**151 项通过，0 失败、错误或跳过**。窗口回归覆盖图片、文件及建群弹窗的无图标样式和确认、取消流程。日志 `.tools/dialog-icons-package.log`。
 - 聊天体验改进于 2026-11-18 完整离线打包，**151 项通过，0 失败、错误或跳过**。覆盖 60 秒边界、撤回授权与持久化、旧群关联迁移、菜单、空白点击及图片和文件。Windows 打包 JAR 在隔离目录启动并重启后保留撤回结果。日志 `.tools/chat-details-verified.log`。[测试报告](test-report.md#聊天体验改进2026-11-18阶段-44)
