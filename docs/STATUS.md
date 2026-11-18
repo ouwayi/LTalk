@@ -4,7 +4,7 @@
 
 当前功能基线为 `8bc1f94`（阶段 47），阶段 48 更新交接文档。近期功能包括 60 秒撤回、10 位群号、信息卡片复制群号和用户名，以及从完整群成员名单筛选和选择新管理员。该基线的本机完整离线回归 **152 项通过**。完整构建使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。[最新测试报告](test-report.md#近期桌面交互回归)
 
-课程交付包含 [LTalk 规格驱动开发技能](../ltalk-sdd/SKILL.md)。阶段 49 将项目意图、实现边界、11 条验收规格和评测入口整理为可复用的 Markdown 技能，已通过技能格式及引用检查。产品回归数据沿用阶段 47。
+课程交付包含可独立分享的 [Java 多人聊天室开发与验证技能](../.agents/skills/java-chatroom-engineering/SKILL.md)。阶段 50 将它移入 Codex 的项目技能目录。开发流程可用于其他 Java 聊天室，随附的 LTalk 案例提供真实类名、通信约束和评测入口。
 
 ## 从哪里接手
 
