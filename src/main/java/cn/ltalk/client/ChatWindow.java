@@ -20,6 +20,11 @@ import java.util.function.Consumer;
 
 /** Swing presentation adapter; account and export operations stay in the background client. */
 public final class ChatWindow extends JFrame implements ClientSessions.Listener {
+    @FunctionalInterface
+    interface UploadPicker {
+        void choose(Component owner, FileDialogs.Kind kind, Consumer<Path> completed, Consumer<String> failed);
+    }
+
     private final ConversationStore store = new ConversationStore();
     private final ClientSessions client = new ClientSessions(this);
     private final ConnectionPanel connection;
@@ -95,6 +100,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private ClientSessions.Address signedInAddress;
     private boolean refreshingList, restoringDraft;
     private final AppearancePreferences appearancePreferences;
+    private final UploadPicker uploadPicker;
     private AppearanceSettings appearance;
     private final WallpaperPanel background;
 
@@ -106,7 +112,12 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
     ChatWindow(String initialHost, String initialPort, String initialUser, Path appearanceFile,
                Callable<List<DiscoveryClient.Candidate>> discover) {
+        this(initialHost, initialPort, initialUser, appearanceFile, discover, new FileDialogs()::choose);
+    }
+    ChatWindow(String initialHost, String initialPort, String initialUser, Path appearanceFile,
+               Callable<List<DiscoveryClient.Candidate>> discover, UploadPicker uploadPicker) {
         super("LTalk · 局域网聊天室");
+        this.uploadPicker = uploadPicker;
         appearancePreferences = new AppearancePreferences(appearanceFile); appearance = appearancePreferences.load();
         connection = new ConnectionPanel(initialHost, initialPort);
         serverSelection = new ServerSelection(connection, new RecentServers(appearanceFile.resolveSibling("recent-servers.properties")),
@@ -383,22 +394,35 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private void chooseAttachment(Attachment.Kind kind) {
         if (!send.isEnabled() || !canStartAttachment()) return;
         long revision = sessionRevision;
-        ConversationId selected = store.selectedId();
+        ConversationStore.Summary destination = store.selected();
         choosingAttachment = true;
         FileDialogs.Kind picker = kind == Attachment.Kind.IMAGE ? FileDialogs.Kind.CHAT_IMAGE : FileDialogs.Kind.FILE;
-        new FileDialogs().choose(this, picker, path -> {
-            choosingAttachment = false;
-            if (path == null || !attachmentSession(revision)) return;
-            String groupScope = selected.kind() == ConversationId.Kind.GROUP
-                    ? selected.equals(ConversationId.PUBLIC) ? ConversationScope.PUBLIC : ConversationScope.group(selected.key())
-                    : null;
-            String target = selected.kind() == ConversationId.Kind.PRIVATE ? selected.key() : null;
-            startTransfer(kind == Attachment.Kind.IMAGE ? "发送图片" : "发送附件",
-                    AttachmentChannel.Request.upload(groupScope, target, path, kind));
+        uploadPicker.choose(this, picker, path -> {
+            try {
+                if (path == null || !attachmentSession(revision)) return;
+                confirmUpload(kind, destination, path, revision);
+            } finally {
+                choosingAttachment = false;
+            }
         }, detail -> {
             choosingAttachment = false;
             if (attachmentSession(revision)) feedback(detail, true);
         });
+    }
+
+    private void confirmUpload(Attachment.Kind kind, ConversationStore.Summary destination, Path path, long revision) {
+        ConversationId selected = destination.id();
+        String target = selected.kind() == ConversationId.Kind.PRIVATE ? selected.key() : null;
+        String recipientLabel = target == null ? destination.title() : destination.title() + " (@" + target + ")";
+        String filename = Attachment.safeName(path.getFileName().toString());
+        Object[] options = {"发送", "取消"};
+        int confirmed = JOptionPane.showOptionDialog(this, "发送到：" + recipientLabel + "\n文件：" + filename,
+                "确认发送", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[1]);
+        if (confirmed != 0 || !attachmentSession(revision)) return;
+        String groupScope = target != null ? null
+                : selected.equals(ConversationId.PUBLIC) ? ConversationScope.PUBLIC : ConversationScope.group(selected.key());
+        startTransfer(kind == Attachment.Kind.IMAGE ? "发送图片" : "发送附件",
+                AttachmentChannel.Request.upload(groupScope, target, path, kind));
     }
 
     private void receiveAttachment(ConversationStore.Entry entry, boolean preview) {

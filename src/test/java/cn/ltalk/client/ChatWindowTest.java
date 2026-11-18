@@ -1,6 +1,7 @@
 package cn.ltalk.client;
 
 import cn.ltalk.common.MessageType;
+import cn.ltalk.common.Attachment;
 import cn.ltalk.common.Message;
 import cn.ltalk.common.MessageCodec;
 import cn.ltalk.common.ConversationScope;
@@ -37,6 +38,66 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Exercises our own non-visible Swing component tree on the EDT, without OS input automation. */
 class ChatWindowTest {
     @TempDir Path appearanceDirectory;
+
+    @Test @Timeout(25)
+    void imageAndFileUploadsRequireExplicitConfirmation() throws Exception {
+        Path imageFile = appearanceDirectory.resolve("测试图片.png");
+        assertTrue(ImageIO.write(new BufferedImage(40, 40, BufferedImage.TYPE_INT_RGB), "png", imageFile.toFile()));
+        Path file = Files.writeString(appearanceDirectory.resolve("测试文档.txt"), "测试文件");
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start();
+            server.accounts().register("alice", "Alice", "test123!", false);
+            try (Peer observer = Peer.login(server.port(), "bob")) {
+                onEdt(() -> ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice",
+                        appearanceDirectory.resolve("upload-confirm.properties"), List::of, (owner, kind, done, failed) -> {
+                            Path selected = switch (kind) {
+                                case CHAT_IMAGE -> imageFile;
+                                case FILE -> file;
+                                default -> throw new AssertionError(kind);
+                            };
+                            SwingUtilities.invokeLater(() -> done.accept(selected));
+                        })));
+                ChatWindow window = ref.get();
+                login(window);
+                awaitEdt(() -> button(window, "send").isEnabled());
+                for (Attachment.Kind kind : Attachment.Kind.values()) {
+                    String buttonName = kind == Attachment.Kind.IMAGE ? "sendImage" : "attach";
+                    Path selected = kind == Attachment.Kind.IMAGE ? imageFile : file;
+                    onEdt(() -> button(window, buttonName).doClick());
+                    awaitEdt(() -> uploadConfirmation(window) != null);
+                    onEdt(() -> {
+                        JOptionPane pane = uploadConfirmation(window);
+                        assertTrue(pane.getMessage().toString().contains("公共聊天室"));
+                        assertTrue(pane.getMessage().toString().contains(selected.getFileName().toString()));
+                        assertEquals("取消", pane.getInitialValue());
+                    });
+                    observer.assertNo(message -> message.attachment() != null, 100);
+                    onEdt(() -> uploadConfirmation(window).setValue("取消"));
+                    awaitEdt(() -> uploadConfirmation(window) == null);
+                    observer.assertNo(message -> message.attachment() != null, 100);
+
+                    onEdt(() -> button(window, buttonName).doClick());
+                    awaitEdt(() -> uploadConfirmation(window) != null);
+                    onEdt(() -> uploadConfirmation(window).setValue("发送"));
+                    Message uploaded = observer.await(message -> message.type() == MessageType.GROUP_MESSAGE
+                            && message.attachment() != null);
+                    assertEquals(kind, uploaded.attachment().kind());
+                    assertEquals(selected.getFileName().toString(), uploaded.attachment().name());
+                    awaitEdt(() -> java.util.Arrays.stream(window.getOwnedWindows())
+                            .noneMatch(child -> child.isVisible() && "attachmentTransfer".equals(child.getName())));
+                }
+            }
+        } finally { closeWindow(ref); }
+    }
+
+    private static JOptionPane uploadConfirmation(ChatWindow window) {
+        for (Window child : window.getOwnedWindows()) {
+            if (child instanceof JDialog dialog && dialog.isVisible() && "确认发送".equals(dialog.getTitle()))
+                return findOptionPane(dialog);
+        }
+        return null;
+    }
 
     @Test @Timeout(20)
     void oneDiscoveredServerConnectsWithoutLoggingInAndIsAvailableAfterRelaunch() throws Exception {
