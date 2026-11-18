@@ -70,6 +70,18 @@ public final class AccountStore {
         Account account = accounts.get(id);
         return account == null ? null : account.nickname();
     }
+    synchronized List<SocialItem> findUsers(String user, String query) throws ProtocolException {
+        String term = query.strip();
+        if (term.isEmpty()) throw new ProtocolException("MISSING_FIELD", "请输入昵称或用户名");
+        if (term.length() > 40) throw new ProtocolException("BAD_MESSAGE", "用户搜索最多 40 个字符");
+        String keyword = term.toLowerCase(Locale.ROOT);
+        return accounts.values().stream()
+                .filter(account -> !account.userId().equals(user))
+                .filter(account -> account.userId().toLowerCase(Locale.ROOT).contains(keyword)
+                        || account.nickname().toLowerCase(Locale.ROOT).contains(keyword))
+                .map(account -> SocialItem.user(SocialItem.Kind.USER, account.userId(), account.nickname()))
+                .toList();
+    }
     synchronized DisplayProfile displayProfile(String id) {
         Account account = accounts.get(id);
         return account == null ? null : new DisplayProfile(account.nickname(), Objects.toString(account.avatar(), ""), account.profileRevision());

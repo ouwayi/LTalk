@@ -253,8 +253,12 @@ final class MessageRouter {
             case STATE -> rows = server.social().items(session.userId, server.accounts());
             case FIND_GROUP -> rows = server.social().directory(request.content(), session.userId);
             case FIND_USER -> {
-                String user = SocialStore.existingUser(server.accounts(), request.to());
-                rows = List.of(SocialItem.user(SocialItem.Kind.USER, user, server.accounts().nickname(user)));
+                if (request.content() != null) {
+                    rows = server.accounts().findUsers(session.userId, request.content());
+                } else {
+                    String user = SocialStore.existingUser(server.accounts(), request.to());
+                    rows = List.of(SocialItem.user(SocialItem.Kind.USER, user, server.accounts().nickname(user)));
+                }
             }
             default -> {
                 Set<String> affected = server.social().change(session.userId, action, request, server.accounts(),

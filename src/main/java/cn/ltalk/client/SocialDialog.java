@@ -163,9 +163,9 @@ final class SocialDialog extends JDialog {
         next = null;
         query.setText("");
         boolean userSearch = view.getSelectedItem() == View.USERS;
-        query.putClientProperty("placeholder", userSearch ? "输入完整用户名" : "群名或群组编号");
+        query.putClientProperty("placeholder", userSearch ? "昵称或用户名" : "群名或群组编号");
         queryBar.setVisible(browsing());
-        if (browsing()) status.setText(userSearch ? "按用户名查找已注册用户" : "留空可浏览群组");
+        if (browsing()) status.setText(userSearch ? "可输入昵称或用户名的一部分" : "留空可浏览群组");
         else {
             fillState();
             status.setText(rows.isEmpty() ? (view.getSelectedItem() == View.FRIENDS ? "暂无好友" : "暂无请求") : " ");
@@ -214,8 +214,13 @@ final class SocialDialog extends JDialog {
             rows.clear();
         }
         boolean users = view.getSelectedItem() == View.USERS;
+        if (users && searched.isEmpty()) {
+            status.setText("请输入昵称或用户名");
+            buttons();
+            return;
+        }
         request(users ? SocialAction.FIND_USER : SocialAction.FIND_GROUP,
-                builder -> { if (users) builder.to(searched); else builder.content(searched).cursor(next); },
+                builder -> builder.content(searched).cursor(next),
                 result -> {
                     result.rows().forEach(rows::addElement);
                     next = result.next();

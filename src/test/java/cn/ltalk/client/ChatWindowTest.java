@@ -901,7 +901,7 @@ class ChatWindowTest {
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.start();
             server.accounts().register("alice", "Alice", "test123!", false);
-            server.accounts().register("bob", "Bob", "test123!", false);
+            server.accounts().register("bob", "北辰小队", "test123!", false);
             String port = Integer.toString(server.port());
             onEdt(() -> alice.set(new ChatWindow("127.0.0.1", port, "alice", appearanceDirectory.resolve("social-alice.properties"))));
             ChatWindow a = alice.get();
@@ -910,7 +910,7 @@ class ChatWindowTest {
             onEdt(() -> ((JMenuItem) find(a.socialMenu(), "socialFindUser")).doClick());
             JDialog lookup = ownedDialog(a, "socialDialog");
             onEdt(() -> {
-                ((JTextField) find(lookup, "socialQuery")).setText("bob");
+                ((JTextField) find(lookup, "socialQuery")).setText("辰小");
                 ((JButton) find(lookup, "socialSearch")).doClick();
             });
             awaitEdt(() -> ((JList<?>) find(lookup, "socialRows")).getModel().getSize() == 1);

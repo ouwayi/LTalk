@@ -17,6 +17,36 @@ import static org.junit.jupiter.api.Assertions.*;
 class SocialIntegrationTest {
     @TempDir Path data;
 
+    @Test void userDirectoryFindsPartialNamesAndPaginatesRegisteredAccounts() throws Exception {
+        try (ChatServer server = start(); Peer alice = Peer.login(server.port(), "alice")) {
+            List<String> registered = new ArrayList<>();
+            for (int i = 0; i <= SocialAction.PAGE_SIZE; i++) {
+                String username = String.format(Locale.ROOT, "Team_%02d", i);
+                registered.add(username);
+                server.accounts().register(username, i < 2 ? "北辰 Team 小队" : "成员 " + i, "test123!", false);
+            }
+            assertEquals(registered.subList(0, 2), ok(alice, SocialAction.FIND_USER, m -> m.content(" 辰 TEAM "))
+                    .stream().map(SocialItem::user).toList());
+            Reply first = call(alice, SocialAction.FIND_USER, m -> m.content("eAm"));
+            assertNull(first.error());
+            assertEquals(registered.subList(0, SocialAction.PAGE_SIZE), first.rows().stream().map(SocialItem::user).toList());
+            assertEquals(first.rows().get(SocialAction.PAGE_SIZE - 1).key(), first.next());
+            Reply last = call(alice, SocialAction.FIND_USER, m -> m.content("eAm").cursor(first.next()));
+            assertNull(last.error());
+            assertNull(last.next());
+            assertEquals(List.of(registered.get(SocialAction.PAGE_SIZE)), last.rows().stream().map(SocialItem::user).toList());
+
+            assertEquals(1, server.onlineCount());
+            server.accounts().updateProfile(registered.get(0), "夜航小队", "");
+            assertEquals(registered.get(0), ok(alice, SocialAction.FIND_USER, m -> m.content("航小")).get(0).user());
+            assertTrue(ok(alice, SocialAction.FIND_USER, m -> m.content("alice")).isEmpty());
+            assertTrue(ok(alice, SocialAction.FIND_USER, m -> m.content("不存在")).isEmpty());
+            assertEquals("MISSING_FIELD", call(alice, SocialAction.FIND_USER, m -> m.content("  ")).error());
+            assertEquals("BAD_MESSAGE", call(alice, SocialAction.FIND_USER, m -> m.content("字".repeat(41))).error());
+            assertEquals("NOT_FOUND", call(alice, SocialAction.FRIEND_REQUEST, m -> m.to("Team")).error());
+        }
+    }
+
     @Test void offlineFriendRequestAndMessagesPersistAndStrangerConsentIsSeparate() throws Exception {
         try (ChatServer server = start(); Peer alice = Peer.login(server.port(), "alice")) {
             server.accounts().register("bob", "Bob", "test123!", false);
@@ -183,7 +213,7 @@ class SocialIntegrationTest {
                 .filter(row -> row.kind() == kind && other.equals(row.user())).findFirst().orElseThrow();
     }
 
-    private record Reply(List<SocialItem> rows, String error) { }
+    private record Reply(List<SocialItem> rows, String error, String next) { }
 
     private static List<SocialItem> ok(Peer peer, SocialAction action, Consumer<Message.Builder> fields) throws IOException {
         Reply reply = call(peer, action, fields);
@@ -199,8 +229,8 @@ class SocialIntegrationTest {
         List<SocialItem> result = new ArrayList<>();
         while (true) {
             Message frame = peer.await(message -> id.equals(message.requestId()));
-            if (frame.type() == MessageType.SOCIAL_END) return new Reply(result, null);
-            if (frame.type() == MessageType.ERROR) return new Reply(result, frame.code());
+            if (frame.type() == MessageType.SOCIAL_END) return new Reply(result, null, frame.cursor());
+            if (frame.type() == MessageType.ERROR) return new Reply(result, frame.code(), null);
             assertEquals(MessageType.SOCIAL_ROW, frame.type());
             result.add(frame.socialItem());
         }
