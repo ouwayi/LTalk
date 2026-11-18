@@ -25,6 +25,8 @@ import java.util.function.Supplier;
 
 /** Swing presentation adapter; account and export operations stay in the background client. */
 public final class ChatWindow extends JFrame implements ClientSessions.Listener {
+    private static final String DELETE_ALL_HISTORY = "删除所有聊天记录";
+
     @FunctionalInterface
     interface UploadPicker {
         void choose(Component owner, FileDialogs.Kind kind, Consumer<Path> completed, Consumer<String> failed);
@@ -61,6 +63,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private boolean contactsTab, infoRefreshQueued;
     private String infoUser;
     private GroupRoster groupRoster;
+    private GroupTransferDialog groupTransferDialog;
     private final JTextField search = ChatTheme.field("", "conversationSearch");
     private final ComposerInput input = new ComposerInput();
     private final JLabel status = ChatTheme.label("未连接 · 点击连接聊天室开始", 11, ChatTheme.MUTED, false);
@@ -1459,6 +1462,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
 
     private void closeInfo() {
+        if (groupTransferDialog != null) groupTransferDialog.dispose();
         groupRoster = null;
         infoUser = null;
         if (!info.isVisible()) return;
@@ -1519,6 +1523,12 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         });
     }
 
+    private void retryGroupRoster() {
+        if (groupRoster == null) return;
+        groupRoster.dirty = true;
+        refreshGroupRoster();
+    }
+
     private void updateInfo(boolean resetScroll) {
         if (infoUser != null) {
             String user = infoUser;
@@ -1549,9 +1559,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
                 if (groupRoster.error != null) {
                     if (members.isEmpty()) counts = "成员人数暂不可用";
                     status = groupRoster.error;
-                    actions.add(new ConversationInfoPanel.Action("retryGroupMembers", "重试成员名单", true, () -> {
-                        if (groupRoster != null) { groupRoster.dirty = true; refreshGroupRoster(); }
-                    }));
+                    actions.add(new ConversationInfoPanel.Action("retryGroupMembers", "重试成员名单", true, this::retryGroupRoster));
                 } else if ((groupRoster.loading || groupRoster.dirty) && members.isEmpty()) {
                     counts = "正在加载成员人数…";
                     status = "正在加载成员…";
@@ -1560,6 +1568,11 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             String groupNumber = publicRoom ? null : id.key();
             info.showGroup(new ConversationInfoPanel.Identity(name, publicRoom ? "公共聊天室无固定群号" : "群号 " + groupNumber,
                     groupNumber, counts, new Avatar(name, true, 72)), actions, members, status, resetScroll);
+            if (groupTransferDialog != null) {
+                if (canTransferGroup(group)) groupTransferDialog.updateMembers(members,
+                        groupRoster.loading || groupRoster.dirty, groupRoster.error);
+                else groupTransferDialog.dispose();
+            }
         }
     }
 
@@ -1610,16 +1623,16 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         boolean connected = connectionState == ChatClient.State.CONNECTED;
         List<ConversationInfoPanel.Action> actions = new ArrayList<>();
         actions.add(new ConversationInfoPanel.Action("infoExport", "导出聊天记录", connected, this::exportHistory));
-        actions.add(new ConversationInfoPanel.Action("infoClearHistory", "清空本人记录", connected && !deletingHistory, this::clearHistory));
-        actions.add(new ConversationInfoPanel.Action("infoReloadHistory", "重新加载记录", connected && !deletingHistory, this::reloadHistory));
+        actions.add(new ConversationInfoPanel.Action("infoClearHistory", DELETE_ALL_HISTORY, connected && !deletingHistory, this::clearHistory));
+        actions.add(new ConversationInfoPanel.Action("infoReloadHistory", "重新加载聊天记录", connected && !deletingHistory, this::reloadHistory));
         if (group == null || !Boolean.TRUE.equals(group.member())) return actions;
         String scope = ConversationScope.group(id.key());
         actions.add(new ConversationInfoPanel.Action("groupInvite", "邀请好友", connected, () -> inviteFriend(scope)));
         if (store.self().equals(group.admin())) {
             boolean review = Boolean.TRUE.equals(group.review());
-            actions.add(new ConversationInfoPanel.Action("groupReview", review ? "改为直接入群" : "启用入群审核", connected,
+            actions.add(new ConversationInfoPanel.Action("groupReview", review ? "取消入群审核" : "启用入群审核", connected,
                     () -> socialChange(SocialAction.GROUP_REVIEW, b -> b.conversationId(scope).content(review ? "OPEN" : "REVIEW"), "入群设置已保存")));
-            actions.add(new ConversationInfoPanel.Action("groupTransfer", "转让管理员", connected, () -> transferGroup(scope)));
+            actions.add(new ConversationInfoPanel.Action("groupTransfer", "转让管理员", connected, () -> transferGroup(id)));
             actions.add(new ConversationInfoPanel.Action("groupDisband", "解散群组", connected, () -> confirmGroupExit(scope, true)));
         } else actions.add(new ConversationInfoPanel.Action("groupLeave", "退出群聊", connected, () -> confirmGroupExit(scope, false)));
         return actions;
@@ -1639,11 +1652,29 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             socialChange(SocialAction.GROUP_INVITE, b -> b.conversationId(scope).to(value.toString()), "邀请已发送，等待好友接受");
     }
 
-    private void transferGroup(String scope) {
+    private boolean canTransferGroup(SocialItem group) {
+        return connectionState == ChatClient.State.CONNECTED && group != null
+                && Boolean.TRUE.equals(group.member()) && store.self().equals(group.admin());
+    }
+
+    private void transferGroup(ConversationId id) {
+        GroupRoster roster = groupRoster;
+        if (groupTransferDialog != null || roster == null || !roster.id.equals(id) || !canTransferGroup(store.groupInfo(id.key()))) return;
         long revision = sessionRevision;
-        String user = JOptionPane.showInputDialog(this, "输入新管理员的用户名（须为当前群成员）", "转让管理员", JOptionPane.PLAIN_MESSAGE);
-        if (user != null && revision == sessionRevision)
-            socialChange(SocialAction.GROUP_TRANSFER, b -> b.conversationId(scope).to(user), "管理员已转让");
+        var dialog = new GroupTransferDialog(this, ThemePalette.of(appearance), store.self(), this::retryGroupRoster);
+        groupTransferDialog = dialog;
+        try {
+            updateInfo(false);
+            refreshGroupRoster();
+            dialog.setVisible(true);
+        } finally {
+            groupTransferDialog = null;
+            dialog.dispose();
+        }
+        String user = dialog.recipient();
+        if (user != null && !closed && revision == sessionRevision && roster == groupRoster && canTransferGroup(store.groupInfo(id.key()))) {
+            socialChange(SocialAction.GROUP_TRANSFER, b -> b.conversationId(ConversationScope.group(id.key())).to(user), "管理员已转让");
+        }
     }
 
     private void confirmGroupExit(String scope, boolean disband) {
@@ -1702,7 +1733,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         if (selected.kind() == ConversationId.Kind.GROUP) return popup;
         JMenuItem export = popup.action("chatExport", "导出聊天记录", LineIcon.Kind.SETTINGS, this::exportHistory);
         export.setEnabled(connectionState == ChatClient.State.CONNECTED);
-        JMenuItem clear = popup.action("chatClearHistory", "清空当前会话记录（仅本人）", LineIcon.Kind.CLOSE, this::clearHistory);
+        JMenuItem clear = popup.action("chatClearHistory", DELETE_ALL_HISTORY, LineIcon.Kind.CLOSE, this::clearHistory);
         clear.setEnabled(connectionState == ChatClient.State.CONNECTED && !deletingHistory);
         JMenuItem reload = popup.action("chatReloadHistory", "重新加载聊天记录", LineIcon.Kind.BACK, this::reloadHistory);
         reload.setEnabled(connectionState == ChatClient.State.CONNECTED && !deletingHistory);

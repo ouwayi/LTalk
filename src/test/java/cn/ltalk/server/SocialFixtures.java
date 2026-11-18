@@ -19,4 +19,9 @@ public final class SocialFixtures {
         social.change(second, SocialAction.PRIVATE_ACCEPT, Message.of(MessageType.SOCIAL_REQUEST).messageId(request).build(),
                 server.accounts(), user -> true);
     }
+
+    public static void joinOpenGroup(ChatServer server, String user, String scope) throws IOException {
+        server.social().change(user, SocialAction.GROUP_REQUEST, Message.of(MessageType.SOCIAL_REQUEST).conversationId(scope).build(),
+                server.accounts(), ignored -> false);
+    }
 }

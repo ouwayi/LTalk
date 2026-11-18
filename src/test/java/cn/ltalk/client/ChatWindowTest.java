@@ -10,6 +10,7 @@ import cn.ltalk.common.SocialAction;
 import cn.ltalk.common.SocialItem;
 import cn.ltalk.client.ui.*;
 import cn.ltalk.server.ChatServer;
+import cn.ltalk.server.SocialFixtures;
 import cn.ltalk.support.Peer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -1110,6 +1111,8 @@ class ChatWindowTest {
                     assertEquals("已复制到剪贴板", label(window, "infoFeedback").getText());
                     assertTrue(button(window, "infoExport").isEnabled());
                     assertTrue(button(window, "infoClearHistory").isEnabled());
+                    assertEquals("删除所有聊天记录", button(window, "infoClearHistory").getText());
+                    assertEquals("重新加载聊天记录", button(window, "infoReloadHistory").getText());
                     assertTrue(button(window, "groupLeave").isEnabled());
                     assertNull(find(window, "groupDisband"));
                     render(window, 1280, 760, "group-information.png");
@@ -1146,6 +1149,7 @@ class ChatWindowTest {
                         assertEquals("小波", label(window, "infoName").getText());
                         button(window, "infoSendMessage").doClick();
                         assertEquals("小波", label(window, "conversationTitle").getText());
+                        assertEquals("删除所有聊天记录", ((JMenuItem) find(window.conversationMenu(), "chatClearHistory")).getText());
                         assertFalse(button(window, "send").isEnabled());
                         assertTrue(button(window, "requestPrivate").isVisible());
                         button(window, "conversationIdentity").doClick();
@@ -1212,6 +1216,112 @@ class ChatWindowTest {
     private static List<ConversationId> sidebarIds(ChatWindow window) {
         var rows = list(window).getModel();
         return java.util.stream.IntStream.range(0, rows.getSize()).mapToObj(rows::getElementAt).map(ConversationStore.Summary::id).toList();
+    }
+
+    @Test @Timeout(40)
+    void administratorCanBrowseAllRosterPagesSearchAndTransferToAnOfflineMember() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start();
+            String groupId;
+            try (Peer admin = Peer.login(server.port(), "alice")) {
+                social(admin, Message.of(MessageType.SOCIAL_REQUEST).socialAction("GROUP_CREATE").nickname("转让测试群").content("OPEN"));
+                admin.send(Message.of(MessageType.SOCIAL_REQUEST).requestId("find-transfer-group").socialAction("FIND_GROUP")
+                        .content("转让测试群").build());
+                groupId = admin.await(frame -> "find-transfer-group".equals(frame.requestId()) && frame.type() == MessageType.SOCIAL_ROW)
+                        .socialItem().id();
+                String scope = ConversationScope.group(groupId);
+                for (int i = 0; i < SocialAction.PAGE_SIZE; i++) {
+                    String user = "member_%02d".formatted(i);
+                    server.accounts().register(user, "成员 " + i, "test123!", false);
+                    SocialFixtures.joinOpenGroup(server, user, scope);
+                }
+                social(admin, Message.of(MessageType.SOCIAL_REQUEST).socialAction("GROUP_REVIEW").conversationId(scope).content("REVIEW"));
+            }
+            try (Peer leaving = Peer.login(server.port(), "member_00")) {
+                onEdt(() -> ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice",
+                        appearanceDirectory.resolve("transfer-admin.properties"))));
+                ChatWindow window = ref.get();
+                ConversationId group = ConversationId.group(groupId);
+                login(window);
+                awaitEdt(() -> button(window, "send").isEnabled());
+                onEdt(() -> ((JToggleButton) find(window, "contactsTab")).doClick());
+                awaitEdt(() -> sidebarIds(window).contains(group));
+                onEdt(() -> {
+                    list(window).setSelectedValue(summary(window, group), true);
+                    button(window, "conversationIdentity").doClick();
+                    assertEquals("取消入群审核", button(window, "groupReview").getText());
+                });
+
+                JDialog first = openGroupTransfer(window);
+                JList<ConversationInfoPanel.Member> firstRows = transferMembers(first);
+                JButton firstConfirm = (JButton) find(first, "groupTransferConfirm");
+                awaitEdt(() -> firstRows.getModel().getSize() == SocialAction.PAGE_SIZE + 1);
+                onEdt(() -> {
+                    assertFalse(firstConfirm.isEnabled());
+                    JTextField query = (JTextField) find(first, "groupTransferSearch");
+                    query.setText("BER_23");
+                    assertEquals(1, firstRows.getModel().getSize());
+                    assertEquals("member_23", firstRows.getModel().getElementAt(0).user());
+                    query.setText("");
+                    for (int i = 0; i < firstRows.getModel().getSize(); i++) {
+                        if ("member_00".equals(firstRows.getModel().getElementAt(i).user())) firstRows.setSelectedIndex(i);
+                    }
+                    assertTrue(firstConfirm.isEnabled());
+                });
+                social(leaving, Message.of(MessageType.SOCIAL_REQUEST).socialAction("GROUP_LEAVE")
+                        .conversationId(ConversationScope.group(groupId)));
+                awaitEdt(() -> firstRows.getModel().getSize() == SocialAction.PAGE_SIZE && !firstConfirm.isEnabled());
+                onEdt(() -> {
+                    for (int i = 0; i < firstRows.getModel().getSize(); i++) {
+                        if ("member_01".equals(firstRows.getModel().getElementAt(i).user())) firstRows.setSelectedIndex(i);
+                    }
+                    assertTrue(firstConfirm.isEnabled());
+                    ((JButton) find(first, "groupTransferCancel")).doClick();
+                });
+                awaitEdt(() -> !first.isDisplayable());
+
+                JDialog second = openGroupTransfer(window);
+                JList<ConversationInfoPanel.Member> secondRows = transferMembers(second);
+                awaitEdt(() -> secondRows.getModel().getSize() == SocialAction.PAGE_SIZE);
+                onEdt(() -> {
+                    JTextField query = (JTextField) find(second, "groupTransferSearch");
+                    JButton confirm = (JButton) find(second, "groupTransferConfirm");
+                    query.setText("@ALIC");
+                    assertEquals(1, secondRows.getModel().getSize());
+                    secondRows.setSelectedIndex(0);
+                    assertFalse(confirm.isEnabled());
+                    query.setText("unmatched");
+                    assertEquals(0, secondRows.getModel().getSize());
+                    assertFalse(confirm.isEnabled());
+                    query.setText("BER_23");
+                    assertEquals(1, secondRows.getModel().getSize());
+                    assertEquals("member_23", secondRows.getModel().getElementAt(0).user());
+                    renderContainer(second.getContentPane(), 360, 370, "group-transfer-search.png");
+                    secondRows.setSelectedIndex(0);
+                    assertTrue(confirm.isEnabled());
+                    confirm.doClick();
+                });
+                awaitEdt(() -> find(window, "groupTransfer") == null && find(window, "groupLeave") != null);
+                onEdt(() -> assertEquals("管理员已转让", label(window, "infoFeedback").getText()));
+                leaving.send(Message.of(MessageType.SOCIAL_REQUEST).requestId("transferred").socialAction("FIND_GROUP")
+                        .content(groupId).build());
+                assertEquals("member_23", leaving.await(frame -> "transferred".equals(frame.requestId())
+                        && frame.type() == MessageType.SOCIAL_ROW).socialItem().admin());
+            }
+        } finally { closeWindow(ref); }
+    }
+
+    private static JDialog openGroupTransfer(ChatWindow window) throws Exception {
+        SwingUtilities.invokeLater(() -> button(window, "groupTransfer").doClick());
+        awaitEdt(() -> java.util.Arrays.stream(window.getOwnedWindows())
+                .anyMatch(dialog -> "groupTransferDialog".equals(dialog.getName()) && dialog.isShowing()));
+        return ownedDialog(window, "groupTransferDialog");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static JList<ConversationInfoPanel.Member> transferMembers(JDialog dialog) {
+        return (JList<ConversationInfoPanel.Member>) find(dialog, "groupTransferMembers");
     }
 
     private static void clickMessageAvatar(ChatWindow window, String content) {
