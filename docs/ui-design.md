@@ -63,7 +63,7 @@
 - 后台窗口、未选中的会话、窄屏列表页和翻阅旧消息时收到的对方实时消息计入未读。进入会话定位首条未读时确认当时的一批消息。自己发送和历史加载的消息不计入未读。
 - 输入框支持 Enter/Ctrl+Enter 发送、Shift+Enter 换行，随文本增高并在达到上限后内部滚动。发送后清空已提交文本、滚动到最新消息；输入校验失败保留草稿。
 - 草稿按会话保存。好友离线时仍能发留言；已获许可的陌生人离线时保留聊天页与草稿，重新上线后需明确重选。切换身份成功后清除上一身份的窗口历史和草稿。
-- 搜索框右侧的「好友与群组」打开查找用户、好友、请求、查找群组和创建群组。「查找用户」支持昵称和用户名片段，结果显示完整用户名，可继续翻页。会话列表在有待处理的入站请求时显示数量。在线陌生人的聊天标题下提供「申请私聊」。群聊更多菜单根据成员权限显示邀请、审核设置、转让、退群或解散。
+- 搜索框右侧的「好友与群组」打开查找用户、好友、请求、查找群组、创建群组及历史会话。「查找用户」支持昵称和用户名片段，结果显示完整用户名，可继续翻页。会话列表在有待处理的入站请求时显示数量。在线陌生人的聊天标题下提供「申请私聊」。群聊信息卡片根据成员权限显示邀请、审核设置、转让、退群或解散。私聊更多菜单提供历史操作和陌生人屏蔽设置。
 - 连接设置在独立启动页显示。登录后可从左上菜单返回连接页，侧栏底部为本人资料入口。
 - 登录显示会话摘要和当前会话最近 20 条。切入其他会话时请求其最近消息。时间线上滚至顶端会继续加载，顶部「加载更早消息」也可触发。补入记录以首个可见消息的正文位置为锚点。
 - 当前会话的放大镜打开搜索窗口，搜索服务器上本人有权查看的正文、昵称或用户名。可继续加载结果，双击或选中后按 Enter 定位。时间线显示目标及相邻消息，以蓝色边框标记目标。输入框右上方的向下箭头返回持续接收新消息的原时间线。
@@ -95,17 +95,19 @@ AppearanceSettings 分别保存浅色和深色背景色，模式切换不覆盖�
 界面发送 / 工具动作   → ChatWindow 适配 → 既有 ChatClient
 ```
 
-1. **好友关系**：客户端通过 SocialChannel 与 SocialDialog 加载和操作好友、请求及群组状态，ConversationStore 按稳定用户名关联 ContactProfile。访问权限由服务端的 SocialStore 与 MessageRouter 校验。
-2. **多个群聊**：ConversationId 的 GROUP 键区分公共聊天室和每个 UUID 群组。列表、时间线、草稿与历史分页沿用对应键，服务端依据群组成员权限选择实时接收者。已退出或解散的群聊在列表保留旧记录。
+1. **好友关系**。客户端通过 SocialChannel 加载和操作好友、请求及群组状态，SocialDialog 展示目录与收件箱，ConversationInfoPanel 展示信息卡片。ConversationStore 按稳定用户名关联 ContactProfile，服务端通过 SocialStore 与 MessageRouter 校验权限。
+2. **多个群聊**。ConversationId 的 GROUP 键区分公共聊天室和每个 UUID 群组。列表、时间线、草稿与历史分页沿用对应键，服务端依据群组成员权限选择实时接收者。已退或解散的群聊可从「历史会话」打开本人已授权的旧记录。
 3. **附件和 Emoji**。图片与文件接入独立传输连接，`MessageTimeline` 呈现缩略图或文件名，数据由会话历史提供。Emoji 面板操作草稿，使用既有文本发送入口。
 4. **历史容量**：本人授权归档由 ChatArchive 持久化，客户端按需分页，ConversationStore 在 EDT 保存已加载的展示状态。已展开的页面保留至本轮会话重载或身份切换。
-5. **主题/布局**：颜色角色改 ThemePalette，样式绑定改 ChatTheme，外观选项与持久化分别改 AppearanceSettings/AppearancePreferences，背景绘制改 WallpaperPanel，菜单改 ChatPopupMenu，气泡改 MessageTimeline/MessageText，窄屏断点改 ResponsiveShell；不需要改 TCP 线程或服务端路由。
+5. **主题与布局**。颜色角色在 ThemePalette，样式绑定在 ChatTheme，外观选项与持久化分别在 AppearanceSettings 和 AppearancePreferences，背景绘制在 WallpaperPanel，菜单在 ChatPopupMenu，气泡在 MessageTimeline 和 MessageText。ResponsiveShell 决定会话列表何时切换为单列，ChatWindow 的 `layoutChatArea` 决定信息卡片并排或覆盖。
 
 ## 运行与验收
 
 按 README 构建 `powershell -NoProfile -File .\build.ps1`，然后分别运行服务端和 `cn.ltalk.client.ChatWindow`。客户端先连接服务器，再注册或登录。登录后显示本人授权历史和实时消息。
 
 自动化生成的界面预览位于 `target/ui-preview/ui-desktop.png`、`ui-narrow-chat.png`、`ui-narrow-list.png`，它们使用测试会话数据，不提交 Git。真实 Windows 窗口的 computer-use 验收过程与最终测试数见 [测试报告](test-report.md)。
+
+阶段 39 的离屏预览还包括 `group-information.png`（宽屏群聊信息）、`user-information-narrow.png`（窄屏深色用户信息）与 `history-location-narrow.png`（搜索定位和返回箭头）。
 
 另有暗色与菜单预览：`ui-dark-desktop.png`、`ui-dark-narrow.png`、`menu-light.png`、`menu-dark.png`、`appearance-settings.png`，均在同一预览目录。
 
@@ -115,7 +117,7 @@ ConnectionPanel 新增密码输入与注册按钮；注册弹窗填写昵称，�
 
 组件回归已通过；本轮未执行注册/导出原生弹窗和多机操作，未改变主题、背景或现有占位功能。协议已扩展至 v2，旧版无密码客户端须升级。
 
-## 会话菜单调整（2026-10-30）
+## 会话菜单调整（2026-10-30，历史阶段）
 
 导出入口移至聊天上方会话菜单，只导出发起时选定的群聊或私聊。主菜单保留连接、外观设置，移除导出；会话菜单移除连接、外观入口，保留回到最新消息。外观设置移除顶部两句介绍文字，保留预览及所有配色操作。
 

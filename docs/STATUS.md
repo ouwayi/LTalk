@@ -2,7 +2,7 @@
 
 更新于 **2026-11-18（Asia/Shanghai）**。工作目录为 `D:\Agent\AllProjects\LTalk`，核对时分支为 `master`，未配置远端。含可选 TLS 公网模式，使用 **Java 17 目标字节码、Swing、Maven、TCP 协议 v6 和 UDP 发现 v1**。接续时先检查实际 Git 状态和提交，再按用户的新需求继续。
 
-最近调整为群聊和用户信息卡片、回到最新消息箭头及左侧会话分类，接续 `26286d3`（图片和文件发送确认）与 `497522b`（按昵称和用户名片段查找用户）。此前的功能基线包括 `96e6bd0`（末尾 Emoji 与会话列表显示）、`f9c8fb3`（Emoji、图片和文件传输）、`d62a428`（未读定位、引用回复与复制）、`5ba1538`（好友、私聊许可与独立群组）和 `5585290`（历史按需加载与搜索定位）。完整回归和打包使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。
+最近功能基线是 `e3b9846`（群聊和用户信息卡片、回到最新消息箭头及左侧会话分类），接续 `26286d3`（图片和文件发送确认）与 `497522b`（按昵称和用户名片段查找用户）。此前的功能基线包括 `96e6bd0`（末尾 Emoji 与会话列表显示）、`f9c8fb3`（Emoji、图片和文件传输）、`d62a428`（未读定位、引用回复与复制）、`5ba1538`（好友、私聊许可与独立群组）和 `5585290`（历史按需加载与搜索定位）。完整回归和打包使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。
 
 ## 从哪里接手
 
@@ -14,7 +14,7 @@
 
 新对话可以直接发送：
 
-> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 AGENTS.md 阅读 docs/STATUS.md、README.md 和 docs/DEVLOG.md、docs/ROADMAP.md 的相关部分，核对 Git 状态。最近调整为信息卡片、回到最新消息和会话分类。请按我接下来指定的功能继续。
+> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 `AGENTS.md` 阅读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。最近功能基线是 `e3b9846`（信息卡片、回到最新消息和会话分类），本机完整回归 143 项通过。请按我接下来指定的功能继续。
 
 ## 当前功能
 
@@ -64,7 +64,7 @@
 | common/LanDiscovery、server/DiscoveryResponder、client/DiscoveryClient、ServerSelection、RecentServers | UDP 发现帧、后台应答与查找、启动页选择、最近地址保存 |
 | client/ChatClient、ClientSessions、HistoryChannel、HistoryExport | 后台连接、候选账号交接、历史分页和导出 |
 | client/ChatWindow、HistorySearchDialog、client/ui/WelcomePanel、ConnectionPanel、AuthenticationPanel | 窗口组装、历史浏览与定位、连接及认证界面 |
-| client/SocialChannel、SocialDialog | 社交请求、好友及群组目录和收件箱 |
+| client/SocialChannel、SocialDialog、ChatWindow | 社交请求分页、好友及群组目录、收件箱、信息卡片的群成员查询 |
 | client/ContactProfile、AvatarImporter、client/ui/ProfileAvatar、ProfilePanel、PasswordChangePanel | 头像导入、展示资料、本人资料编辑及改密 |
 | client/ui/ConversationStore、ConversationId、ConversationList、ConversationInfoPanel、MessageTimeline、ResponsiveShell | EDT 展示、会话选择、信息卡片、分组气泡与布局 |
 | client/ui/Appearance*、ColorPicker、ChatTheme、ThemePalette、FileDialogs、WindowsFilePicker | 外观与色盘、主题、系统文件对话框 |
@@ -72,7 +72,7 @@
 
 ## 云端测试交接
 
-- 用户于 2026-11-18 反馈，阶段 36 版本的当前功能在局域网和云端服务器均可正常使用。该反馈未逐项列举验证步骤。阶段 28 在 Oracle Cloud 的 Tailscale 私网和公网 TLS 环境的验收另有记录。[测试报告](test-report.md#oracle-cloud-私网与公网验收)
+- 用户于 2026-11-18 反馈，阶段 36（`96e6bd0`）的当前功能在局域网和云端服务器均可正常使用。该反馈未逐项列举验证步骤。阶段 37～39 的新增行为已通过本机验证，仍待新版多设备和云端复测。阶段 28 在 Oracle Cloud 的 Tailscale 私网和公网 TLS 环境的验收另有记录。[测试报告](test-report.md#oracle-cloud-私网与公网验收)
 - 公网服务由 `ltalk.service` 管理，使用 `/opt/ltalk/ltalk-1.0.0.jar`、`/var/lib/ltalk` 和 `/etc/ltalk/server.p12`。用户计划停掉服务并保留云端 `ltalk-public-test` 的 TCP 9000 测试入站规则。复测先核对进程状态、来源 IP、Ubuntu 临时防火墙规则和证书有效期。更换版本时让服务端和测试客户端使用同版 JAR。[部署手册](deployment.md#更新-jar-与复测)
 - 不同物理设备和独立接入网络、长期证书续签、实际云规格的百人容量仍待验收。当前反馈足以接续新功能开发。
 
@@ -94,4 +94,4 @@
 - 此前功能提交包括 `74aa291` 改密、`d629d5e` 高清头像、`c4840f3` 资料同步、`984cb5b` 消息组头像裁切。各阶段的结果与历史人工反馈见 [测试报告](test-report.md)。
 - 当前 v6 的多设备资料同步等完整流程、独立 JDK 17 自动化回归、各档 DPI、其他客户端系统和长时间负载仍待验收。早期宿主机＋虚拟机的局域网反馈保持原版本归属。
 - 跨账号私聊归档写入没有事务保证。JSONL 深页和搜索会扫描归档，社交数据每次修改原子替换 `social.json`。完整备份还须包含群组日志与 `attachments/`。附件随历史保留，默认 1 GiB，总配额可配置。改密、资料、历史删除、社交操作或上传确认超时可能已生效，可刷新或重登核对。
-- 云部署或多设备复测时同步更新两端 JAR，重点核对登录后首批公共消息出现的时间、离线好友留言、群组历史权限，以及首条未读和引用跳转。通过授权测试账号验证，操作顺序见 [部署手册](deployment.md#更新-jar-与复测)。
+- 云部署或多设备复测时同步更新两端 JAR，复测昵称查找、图片和文件的发送确认，以及独立群成员名单与会话分类。首屏历史、离线留言、群历史权限、首条未读与引用定位继续沿用部署手册中的回归步骤。[部署手册](deployment.md#更新-jar-与复测)

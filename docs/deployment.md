@@ -106,7 +106,11 @@ sudo journalctl -u ltalk -n 20 --no-pager
 
 4. Windows 宿主机和虚拟机都退出旧客户端，将各自的 JAR 换成同一份新版，再双击 `start-client.cmd`。连接失败时，先在 Windows PowerShell 执行 `Test-NetConnection -ComputerName <公网地址> -Port 9000`（将 `<公网地址>` 换成实际地址）。如果 TCP 已通，继续检查证书有效期、地址匹配和客户端 TLS 选项。
 
-5. 用演示账号复测登录后首批公共消息出现的时间、离线好友留言、独立群加入前与退出后的权限，以及在两个会话间切换时的未读和引用跳转。记录服务端与客户端所用提交、网络环境、复现步骤和耗时。旧版公网验收范围见 [测试报告](test-report.md#oracle-cloud-私网与公网验收)。
+5. 用演示账号复测以下场景，并记录服务端与客户端所用提交、网络环境、复现步骤和耗时。已完成的旧版公网验收见 [测试报告](test-report.md#oracle-cloud-私网与公网验收)。
+
+   - 登录后记录首批公共消息出现的时间。核对离线好友留言、首条未读、引用定位和输入框右上方的返回箭头。
+   - 用昵称和用户名片段查找账号。切换「公共聊天室」和「好友与群聊」，查看独立群的在线人数、离线成员和用户资料。成员上下线或退群后核对名单，退群后从「历史会话」核对原有历史权限。
+   - 分别选择图片与普通文件，先取消一次，再确认发送并从对端预览或保存。公网传输使用聊天同一端口上的独立 TLS 连接。
 
 6. 测试结束可运行 `sudo systemctl stop ltalk`，用 `sudo systemctl is-active ltalk` 确认显示 `inactive`。若要关闭测试端口，在云控制台移除 `ltalk-public-test`，并执行 `sudo iptables -D INPUT -p tcp --dport 9000 -m comment --comment ltalk-public-test -j ACCEPT`。账号和聊天记录保存在 `/var/lib/ltalk`。
 

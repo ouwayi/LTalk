@@ -1,12 +1,12 @@
 # 当前需求与操作流程
 
-基线为根目录的[课程任务拆解](../局域网聊天项目任务拆解.md)。原课程目标为单服务端、单公共聊天室和 5～10 个桌面客户端。当前版本还支持独立群组、好友离线留言、按需浏览和搜索历史、未读定位与引用回复，以及可选的单机公网 TLS 模式。功能总览与验证范围见 [STATUS](STATUS.md)。
+基线为根目录的[课程任务拆解](../局域网聊天项目任务拆解.md)。原课程目标为单服务端、单公共聊天室和 5～10 个桌面客户端。当前版本还支持独立群组、好友离线留言、会话分类与信息卡片、按需浏览和搜索历史、未读定位与引用回复、Emoji 与附件，以及可选的单机公网 TLS 模式。功能总览与验证范围见 [STATUS](STATUS.md)。
 
 | 需求 | 实现与约束 | 验证入口 |
 | --- | --- | --- |
 | R-01 配置并启动 | CLI 端口/IP/连接上限，默认 9000/0.0.0.0/20 | ChatServerTest.occupiedPortAndShutdownAreObservable |
 | R-02 账号注册登录 | 昵称/用户名/密码，或随机用户名；密码验证后加入。用户名 strip 后 `[A-Za-z0-9_]{1,20}`；重名保留原会话；LOGIN_OK 最先返回 | duplicateLogin / concurrentSameName 测试 |
-| R-03 在线列表 | 加入/离开推送全量快照；版本递增；重连重置本地版本 | userListVersions / logoutAbruptClose 测试 |
+| R-03 在线列表 | 上下线推送全量快照，版本递增，重连重置本地版本。公共聊天室分类显示公共会话与其他在线账号 | ChatServerTest、ChatWindowTest |
 | R-04 群聊 | 公共消息发给所有就绪账号，独立群消息只发给就绪的当前成员，均含发送者回显。公共归档可查登录前和离线期间的共享记录 | ChatServerTest、HistoryPersistenceTest、SocialIntegrationTest |
 | R-05 私聊 | 已有好友关系，或已获私聊许可且对方在线时允许发送。在线投递只涉及发送者和目标，离线好友从本人历史查阅 | ChatServerTest、SocialIntegrationTest |
 | R-06 消息展示 | 纯文本、当地时间、当前会话标识，接收气泡按发送者连续分组，显示同步昵称和头像 | ChatWindowTest、MessageTimelineTest |
@@ -17,12 +17,13 @@
 | R-11 资源限制 | 局域网模式默认 20 连接；TLS 模式默认 140 个总连接、24 个未认证连接和单独的认证期限。初始握手 10 秒，HELLO 后心跳保活，逐连接有界发送队列 | ChatServerTest、LoadTest、PublicCapacityTest |
 | R-12 局域网交付 | 跨系统群聊、私聊、上下线；说明真实环境与证据来源 | docs/test-report.md 的 Q16，宿主机＋虚拟机人工通过（用户反馈）；双物理设备未测 |
 | X1 心跳与失联 | HELLO 或直接登录成功后双向 PING/PONG，间隔/响应期限可配置，正常空闲不踢，静默失联清理并允许手动重连 | HeartbeatIntegrationTest / HeartbeatSettingsTest 本机通过；2026-10-28 用户反馈虚拟机断网后自动检测断开正常，实际测试日期/配置/精确耗时未提供 |
-| X2 当前会话导出 | 本人可选择 JSON/CSV、文件名和位置，旧文件覆盖需确认 | AuthenticationExportTest、HistoryExportTest、FileDialogsTest |
+| X2 当前会话导出 | 从群聊信息卡片或私聊更多菜单选择 JSON/CSV、文件名和位置，覆盖旧文件需确认 | AuthenticationExportTest、HistoryExportTest、FileDialogsTest |
 | X3 账号与资料 | 注册登录、资料编辑与同步、本人改密。改密成功后当前会话继续，下次用新密码登录 | AccountFlowTest、ProfileConnectionTest、PasswordChangeTest、ChatWindowTest |
 | X4 授权历史 | 服务端重启后保留本人可见记录，登录恢复会话摘要及当前会话最近一页，上滚取旧记录，搜索可定位到原消息，支持逐条删除或清空本人当前会话 | HistoryPersistenceTest、HistoryClientTest、HistoryStoreTest、ChatWindowTest |
 | X5 私聊离线投递 | 已互为好友时可发送离线消息，接收人通过本人历史查阅 | SocialIntegrationTest、ChatWindowTest |
-| X6 聊天文件传输 | 待实现 | 预留范围见课程任务拆解 |
-| 好友与独立群组 | 用户名查找、双方确认好友关系、独立私聊许可、加群审核与邀请、管理员移交或解散、授权群历史 | SocialIntegrationTest、ChatWindowTest |
+| X6 聊天文件传输 | 图片专用入口接受 PNG、JPEG、GIF 与 BMP，最多 12 MiB 和 2400 万像素。普通附件支持任意类型，最多 50 MiB。选中文件后确认目标才上传，支持取消和保存，下载按本人历史权限授权 | AttachmentTransferTest、AttachmentIntegrationTest、ChatWindowTest、FileDialogsTest |
+| 好友与独立群组 | 按昵称或用户名片段查找，双方确认好友关系，支持独立私聊许可、加群审核与邀请、管理员移交或解散。独立群的当前成员可查看成员名单，退群后保留已授权的历史 | SocialIntegrationTest、ChatWindowTest |
+| 会话导航与资料 | 「好友与群聊」显示好友与已加入的独立群，两个分类之外的旧记录可从「历史会话」打开。点击标题、群消息头像或成员可打开对应信息卡片。离开最新消息或查看定位结果时显示返回箭头 | ChatWindowTest |
 | 未读定位与引用 | 进入会话定位本窗口的首条未读。右键可复制完整正文或引用，点击引用按本人历史权限定位 | ChatWindowTest、ConversationStoreTest、MessageTimelineTest、HistoryPersistenceTest |
 
 ## 用户流程
@@ -48,6 +49,7 @@ stateDiagram-v2
 - 加入失败：聊天功能保持禁用，错误原因可见，修正名称/地址后重试。
 - 群聊：确认目标为群聊 → 输入 → 提交 → 等待服务端回显，不在按钮处理时添加正式聊天消息。
 - 私聊选择目标后查看标题状态。好友离线时可留言。陌生人需在线接受请求，获许可后重新上线仍需重选会话。
+- 发送图片或文件时，先选择文件，再核对确认窗口里的文件名和目标会话。确认后可查看进度或取消传输。接收方可在本人可见的消息气泡中保存附件。
 - 故障或普通断开后，保留本窗口记录和草稿，禁用发送。重新登录会重新加载摘要和所选会话最近一页。明确退出登录清理窗口身份、历史、草稿和密码。切换账号在独立连接验证成功后才交接，失败或返回时保留原会话。
 - 关闭窗口：关闭 Socket、发送任务、登录及心跳计时器；客户端后台线程设为 daemon，但仍显式清理。
 
