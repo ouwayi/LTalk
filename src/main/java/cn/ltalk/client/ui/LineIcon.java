@@ -6,7 +6,7 @@ import java.awt.geom.*;
 
 /** Small vector icons stay sharp at desktop display scaling, without remote or font assets. */
 public record LineIcon(Kind kind, Color color, int size) implements Icon {
-    public enum Kind { MENU, COMPOSE, SEARCH, MORE, SEND, ATTACH, IMAGE, EMOJI, BACK, DOWN, COPY, CLOSE, USERS, LOGOUT, CHECK, SETTINGS, PALETTE, SUN, MOON }
+    public enum Kind { MENU, PLUS, SEARCH, MORE, SEND, ATTACH, FILE, IMAGE, EMOJI, BACK, DOWN, COPY, CLOSE, USERS, LOGOUT, CHECK, SETTINGS, PALETTE, SUN, MOON }
     @Override public int getIconWidth() { return size; }
     @Override public int getIconHeight() { return size; }
     @Override public void paintIcon(Component component, Graphics graphics, int x, int y) {
@@ -19,10 +19,7 @@ public record LineIcon(Kind kind, Color color, int size) implements Icon {
             case MENU -> { line(g, 4, 6, 20, 6); line(g, 4, 12, 20, 12); line(g, 4, 18, 20, 18); }
             case SEARCH -> { g.draw(new Ellipse2D.Double(3, 3, 13, 13)); line(g, 14, 14, 21, 21); }
             case MORE -> { for (int n = 5; n <= 19; n += 7) g.fill(new Ellipse2D.Double(10.5, n - 1.5, 3, 3)); }
-            case COMPOSE -> {
-                Path2D p = new Path2D.Double(); p.moveTo(5, 15); p.lineTo(16, 4); p.lineTo(20, 8); p.lineTo(9, 19); p.lineTo(4, 20); p.closePath(); g.draw(p);
-                line(g, 14, 6, 18, 10);
-            }
+            case PLUS -> { line(g, 5, 12, 19, 12); line(g, 12, 5, 12, 19); }
             case SEND -> {
                 Path2D p = new Path2D.Double(); p.moveTo(3, 3); p.lineTo(22, 12); p.lineTo(3, 21); p.lineTo(7, 12); p.closePath(); g.draw(p); line(g, 7, 12, 21, 12);
             }
@@ -36,6 +33,11 @@ public record LineIcon(Kind kind, Color color, int size) implements Icon {
                 g.drawRoundRect(2, 3, 20, 18, 4, 4);
                 g.drawOval(6, 7, 4, 4);
                 g.drawPolyline(new int[]{3, 9, 13, 17, 21}, new int[]{17, 12, 16, 11, 16}, 5);
+            }
+            case FILE -> {
+                g.drawPolygon(new int[]{5, 14, 19, 19, 5}, new int[]{2, 2, 7, 22, 22}, 5);
+                g.drawPolyline(new int[]{14, 14, 19}, new int[]{2, 7, 7}, 3);
+                line(g, 8, 12, 16, 12); line(g, 8, 16, 14, 16);
             }
             case BACK -> { line(g, 20, 12, 4, 12); line(g, 4, 12, 11, 5); line(g, 4, 12, 11, 19); }
             case DOWN -> { line(g, 12, 4, 12, 20); line(g, 5, 13, 12, 20); line(g, 12, 20, 19, 13); }

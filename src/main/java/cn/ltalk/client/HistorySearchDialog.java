@@ -109,6 +109,15 @@ final class HistorySearchDialog extends JDialog {
         results.setSelectionForeground(palette.text());
     }
 
+    void removeRecalled(String id) {
+        for (int i = matches.size() - 1; i >= 0; i--) {
+            if (!id.equals(matches.get(i).record().messageId())) continue;
+            matches.remove(i);
+            if (results.isEnabled()) status.setText(matches.isEmpty() ? "没有找到消息" : "已显示 " + matches.size() + " 条结果");
+            return;
+        }
+    }
+
     private static String preview(HistoryPage.Row row) {
         var record = row.record();
         String name = ContactProfile.displayName(record.sender(), row.nickname());

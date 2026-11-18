@@ -109,6 +109,9 @@ class SocialIntegrationTest {
             SocialItem group = ok(alice, SocialAction.STATE, b -> {}).stream().filter(row -> row.kind() == SocialItem.Kind.GROUP)
                     .findFirst().orElseThrow();
             String scope = ConversationScope.group(group.id());
+            assertTrue(group.id().matches("[0-9]{10}"));
+            assertEquals(group.id(), ok(bob, SocialAction.FIND_GROUP, b -> b.content(group.id())).get(0).id());
+            assertEquals("BAD_MESSAGE", call(alice, SocialAction.GROUP_MEMBERS, b -> b.conversationId("GROUP:123456789")).error());
             assertEquals("BAD_MESSAGE", call(alice, SocialAction.GROUP_MEMBERS, b -> b.conversationId(ConversationScope.PUBLIC)).error());
             assertEquals("FORBIDDEN", call(bob, SocialAction.GROUP_MEMBERS, b -> b.conversationId(scope)).error());
             ok(bob, SocialAction.GROUP_REQUEST, b -> b.conversationId(scope));

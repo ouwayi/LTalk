@@ -110,6 +110,7 @@ public final class ChatTheme {
     }
     public static JButton pill(String title) {
         JButton button = iconButton(LineIcon.Kind.USERS, title); button.setIcon(null); button.setText(title);
+        button.setToolTipText(null);
         button.setPreferredSize(null); button.setFont(FONT.deriveFont(Font.BOLD, 12f));
         button.setBorder(new EmptyBorder(8, 14, 8, 14)); foreground(button, Role.ACCENT);
         button.setUI(new TextButtonUI() {

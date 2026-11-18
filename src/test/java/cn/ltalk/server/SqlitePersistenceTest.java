@@ -9,6 +9,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -49,7 +51,7 @@ class SqlitePersistenceTest {
             server.dataDirectory(fresh);
             server.start();
             assertTrue(Files.isRegularFile(fresh.resolve(SqliteDatabase.FILE_NAME)));
-            assertEquals(1, SqliteFixtures.count(fresh, "PRAGMA user_version"));
+            assertEquals(2, SqliteFixtures.count(fresh, "PRAGMA user_version"));
             try (Peer raw = new Peer(server.port())) {
                 raw.send(Message.of(MessageType.LOGIN).requestId("empty").userId("alice").password("test123!").build());
                 raw.error("LOGIN_FAILED");
@@ -58,13 +60,70 @@ class SqlitePersistenceTest {
                 assertTrue(HistoryPersistenceTest.records(alice).isEmpty());
             }
         }
-        SqliteFixtures.edit(fresh, "PRAGMA user_version = 2");
+        SqliteFixtures.edit(fresh, "PRAGMA user_version = 3");
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.dataDirectory(fresh);
             assertTrue(assertThrows(IOException.class, server::start).getMessage().contains("表结构版本"));
         }
-        assertEquals(2, SqliteFixtures.count(fresh, "PRAGMA user_version"));
+        assertEquals(3, SqliteFixtures.count(fresh, "PRAGMA user_version"));
         assertEquals(1, SqliteFixtures.count(fresh, "SELECT count(*) FROM accounts"));
+    }
+
+    @Test void upgradesUuidGroupsWithTheirMessagesPermissionsAndPendingRequests() throws Exception {
+        String oldId = "d291b960-605c-4f55-ae9e-db5b3e063906";
+        String first = "e291b960-605c-4f55-ae9e-db5b3e063906";
+        String second = "f291b960-605c-4f55-ae9e-db5b3e063906";
+        String date = Instant.now().toString();
+        try (var schema = SqliteDatabase.class.getResourceAsStream("sqlite-schema-v1.sql");
+             var connection = SqliteFixtures.connect(directory);
+             var statement = connection.createStatement()) {
+            for (String ddl : new String(schema.readAllBytes(), StandardCharsets.UTF_8).split(";"))
+                if (!ddl.isBlank()) statement.execute(ddl);
+            statement.execute("PRAGMA application_id = 0x4c544c4b");
+            statement.execute("PRAGMA user_version = 1");
+            for (String user : List.of("alice", "bob", "carol")) {
+                SqliteDatabase.execute(connection, "INSERT INTO accounts VALUES (?, ?, ?, ?, '', ?, 0)", user, user,
+                        "AAAAAAAAAAAAAAAAAAAAAA==", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", date);
+            }
+            SqliteDatabase.execute(connection, "INSERT INTO chat_groups VALUES (?, '旧群', 'alice', 1, 0)", oldId);
+            SqliteDatabase.execute(connection, "INSERT INTO group_memberships VALUES (?, 'alice', 0, 1, NULL), (?, 'bob', 0, 1, 2)", oldId, oldId);
+            SqliteDatabase.execute(connection, "INSERT INTO social_requests VALUES (?, 'JOIN', 'carol', NULL, ?)",
+                    "a291b960-605c-4f55-ae9e-db5b3e063906", oldId);
+            SqliteDatabase.execute(connection, """
+                    INSERT INTO messages (seq, message_id, conversation_id, group_id, sender, content, sent_at)
+                    VALUES (1, ?, ?, ?, 'alice', '原消息', ?)
+                    """, first, ConversationScope.group(oldId), oldId, date);
+            SqliteDatabase.execute(connection, """
+                    INSERT INTO messages (seq, message_id, conversation_id, group_id, sender, content, sent_at, reply_to,
+                                          attachment_kind, attachment_name, attachment_size)
+                    VALUES (2, ?, ?, ?, 'alice', '历史图片.jpg', ?, ?, 'IMAGE', '历史图片.jpg', 1)
+                    """, second, ConversationScope.group(oldId), oldId, date, first);
+            SqliteDatabase.execute(connection, "INSERT INTO history_clears VALUES ('bob', ?, 1)", ConversationScope.group(oldId));
+            SqliteDatabase.execute(connection, "INSERT INTO hidden_messages VALUES ('bob', 2)");
+        }
+        String groupId;
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.dataDirectory(directory);
+            server.start();
+            List<SocialItem> state = server.social().items("alice", server.accounts());
+            groupId = state.stream().filter(row -> row.kind() == SocialItem.Kind.GROUP).findFirst().orElseThrow().group();
+            assertTrue(groupId.matches("[0-9]{10}"));
+            assertTrue(state.stream().anyMatch(row -> !row.id().equals(groupId) && groupId.equals(row.group())));
+            String scope = ConversationScope.group(groupId);
+            ChatRecord photo = server.archive().visibleRecord("alice", scope, second);
+            assertEquals(first, photo.replyTo());
+            assertEquals("[图片]", photo.content());
+            assertEquals("图片.jpg", photo.attachment().name());
+            assertNull(server.archive().visibleRecord("bob", scope, first));
+            assertNull(server.archive().visibleRecord("bob", scope, second));
+            assertEquals("FORBIDDEN", assertThrows(ProtocolException.class,
+                    () -> server.archive().visibleRecord("carol", scope, first)).code());
+        }
+        assertEquals(2, SqliteFixtures.count(directory, "PRAGMA user_version"));
+        assertEquals(0, SqliteFixtures.count(directory, "SELECT count(*) FROM pragma_foreign_key_check"));
+        try (SqliteDatabase database = new SqliteDatabase(directory)) {
+            assertEquals("原消息", new ChatArchive(database).visibleRecord("alice", ConversationScope.group(groupId), first).content());
+        }
     }
 
     @Test void privateMessageAndBothVisibilityRowsCommitOrRollBackTogether() throws Exception {

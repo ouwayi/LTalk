@@ -4,6 +4,7 @@ import cn.ltalk.common.*;
 import java.io.IOException;
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Predicate;
 
 /** Persists relationships, requests and group membership together before acknowledging changes. */
@@ -56,7 +57,7 @@ final class SocialStore {
         try (Statement query = connection.createStatement();
              ResultSet rows = query.executeQuery("SELECT group_id, title, admin, review, closed FROM chat_groups")) {
             while (rows.next()) {
-                String id = ConversationScope.uuid(rows.getString(1));
+                String id = ConversationScope.groupNumber(rows.getString(1));
                 loaded.groups.put(id, new Group(id, rows.getString(2), rows.getString(3),
                         rows.getBoolean(4), rows.getBoolean(5), new HashMap<>()));
             }
@@ -337,7 +338,10 @@ final class SocialStore {
             String title = message.nickname() == null ? "" : message.nickname().strip();
             if (title.isEmpty() || title.length() > 40 || title.codePoints().anyMatch(Character::isISOControl))
                 throw error("BAD_MESSAGE", "群名须为 1～40 个字符");
-            String id = UUID.randomUUID().toString();
+            String id;
+            do {
+                id = Long.toString(ThreadLocalRandom.current().nextLong(1_000_000_000L, 10_000_000_000L));
+            } while (next.groups.containsKey(id));
             Group group = new Group(id, title, user, review(message), false, new HashMap<>());
             join(next, group, user, affected);
             return;

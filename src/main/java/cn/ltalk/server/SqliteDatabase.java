@@ -15,7 +15,7 @@ import java.sql.*;
 final class SqliteDatabase implements AutoCloseable {
     static final String FILE_NAME = "ltalk.db";
     private static final int APPLICATION_ID = 0x4c544c4b;
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
     private final SQLiteDataSource source;
     private final Connection writer;
 
@@ -45,17 +45,13 @@ final class SqliteDatabase implements AutoCloseable {
                 int version = pragma(statement, "user_version");
                 int applicationId = pragma(statement, "application_id");
                 if (version == VERSION && applicationId == APPLICATION_ID) return null;
-                if (version != 0 || applicationId != 0 || pragma(statement, "schema_version") != 0) {
+                if (version == 0 && applicationId == 0 && pragma(statement, "schema_version") == 0) {
+                    runScript(statement, "sqlite-schema-v1.sql");
+                    statement.execute("PRAGMA application_id = " + APPLICATION_ID);
+                } else if (version != 1 || applicationId != APPLICATION_ID) {
                     throw new IOException("数据库类型或表结构版本不受支持");
                 }
-                try (InputStream schema = SqliteDatabase.class.getResourceAsStream("sqlite-schema-v1.sql")) {
-                    if (schema == null) throw new IOException("缺少 SQLite 表结构资源");
-                    String sql = new String(schema.readAllBytes(), StandardCharsets.UTF_8);
-                    for (String ddl : sql.split(";")) {
-                        if (!ddl.isBlank()) statement.execute(ddl);
-                    }
-                }
-                statement.execute("PRAGMA application_id = " + APPLICATION_ID);
+                runScript(statement, "sqlite-migrate-v2.sql");
                 statement.execute("PRAGMA user_version = " + VERSION);
                 return null;
             }
@@ -65,6 +61,16 @@ final class SqliteDatabase implements AutoCloseable {
             if (!mode.next() || !"wal".equalsIgnoreCase(mode.getString(1))) throw new IOException("无法启用 SQLite WAL");
         } catch (SQLException ex) {
             throw failure(ex);
+        }
+    }
+
+    private static void runScript(Statement statement, String resource) throws IOException, SQLException {
+        try (InputStream schema = SqliteDatabase.class.getResourceAsStream(resource)) {
+            if (schema == null) throw new IOException("缺少 SQLite 表结构资源：" + resource);
+            String sql = new String(schema.readAllBytes(), StandardCharsets.UTF_8);
+            for (String command : sql.split(";")) {
+                if (!command.isBlank()) statement.execute(command);
+            }
         }
     }
 

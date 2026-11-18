@@ -305,6 +305,12 @@ public final class ChatClient implements AutoCloseable {
                 emit(connection, () -> listener.onDisplayProfile(profile));
             }
             case SYSTEM -> emit(connection, () -> listener.onSystem(message));
+            case MESSAGE_RECALLED -> {
+                if (message.conversationId() == null) throw new IOException("撤回事件缺少会话");
+                ConversationScope.validate(connection.userId, message.conversationId());
+                ConversationScope.uuid(message.messageId());
+                emit(connection, () -> listener.onMessageRecalled(message));
+            }
             case SOCIAL_CHANGED -> emit(connection, () -> listener.onSocialChanged(message));
             case ERROR -> {
                 if (message.requestId() != null && message.requestId().startsWith(CHAT_REQUEST_PREFIX)) {
@@ -352,6 +358,14 @@ public final class ChatClient implements AutoCloseable {
     public void deleteHistory(String scope, String id) throws IOException {
         // The server invalidates affected export cursors; their background response/timeout path cleans files.
         Connection c = authenticated(); c.history.delete(scope, id);
+    }
+    public void recallMessage(String scope, String id) throws IOException {
+        Connection c = authenticated();
+        if (scope == null) throw new IOException("撤回必须指定会话");
+        ConversationScope.validate(c.userId, scope);
+        ConversationScope.uuid(id);
+        submitControl(c, Message.of(MessageType.MESSAGE_RECALL).requestId("recall-" + UUID.randomUUID())
+                .conversationId(scope).messageId(id).build());
     }
     private void submitControl(Connection c, Message message) throws IOException {
         if (c.closed.get()) throw new IOException("连接已关闭"); MessageCodec.encode(message);

@@ -1,8 +1,8 @@
-# LTalk 协议 v6
+# LTalk 协议 v7
 
 ## 帧与状态
 
-聊天使用 TCP 长连接，**UTF-8 编码，每行一个 JSON 对象，以 LF (`0x0A`) 结尾**。可接受 CRLF（CR 计入帧字节数，JSON 解析时视为空白）。JSON 字符串中的换行由 Gson 转义。一连接串行写帧并 flush。v6 需要双方使用同一版本，连接过程没有版本协商。独立文件连接在控制帧之间按声明长度传输原始字节。
+聊天使用 TCP 长连接，**UTF-8 编码，每行一个 JSON 对象，以 LF (`0x0A`) 结尾**。可接受 CRLF（CR 计入帧字节数，JSON 解析时视为空白）。JSON 字符串中的换行由 Gson 转义。一连接串行写帧并 flush。v7 支持消息撤回及 10 位数字群号，双方须同时升级，连接过程没有版本协商。独立文件连接在控制帧之间按声明长度传输原始字节。
 
 普通帧上限为 **16 KiB**（不含 LF）。`LOGIN_OK`、`PROFILE_UPDATE`、`PROFILE_OK`、`DISPLAY_PROFILE` 可使用 **176 KiB** 上限。超过 16 KiB 时必须把字面 `"type"` 作为 JSON 首字段，类型名不得使用转义，编码器按此顺序输出。读取时先检查类型前缀，再校验解码后的类型与长度。非法 UTF-8、非法 JSON、未知类型或字段类型错误返回 `BAD_MESSAGE`，可继续下一帧。超长帧返回 `FRAME_TOO_LARGE` 后关闭连接。末尾无 LF 的残帧遇到 EOF 直接关闭。未定义额外字段被忽略。
 
@@ -14,7 +14,7 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 
 ## 字段与消息类型
 
-所有对象必有字符串 `type`，未使用字段不输出。HELLO、REGISTER、LOGIN、PROFILE_GET、PROFILE_UPDATE、PASSWORD_CHANGE、EXPORT_REQUEST、HISTORY_REQUEST、HISTORY_VIEW_REQUEST、HISTORY_DELETE、GROUP_SEND、PRIVATE_SEND 和 SOCIAL_REQUEST 均需携带非空白、最多 64 个字符的 `requestId`。PING/PONG 也需要编号。客户端按连接生成请求编号，不同用户的编号可以相同。聊天的消息 ID 由服务端生成，请求编号只用于关联请求和响应。
+所有对象必有字符串 `type`，未使用字段不输出。HELLO、REGISTER、LOGIN、PROFILE_GET、PROFILE_UPDATE、PASSWORD_CHANGE、EXPORT_REQUEST、HISTORY_REQUEST、HISTORY_VIEW_REQUEST、HISTORY_DELETE、MESSAGE_RECALL、GROUP_SEND、PRIVATE_SEND 和 SOCIAL_REQUEST 均需携带非空白、最多 64 个字符的 `requestId`。PING/PONG 也需要编号。客户端按连接生成请求编号，不同用户的编号可以相同。聊天的消息 ID 由服务端生成，请求编号只用于关联请求和响应。
 
 | 类型 | 方向 | 字段 | 结果 |
 | --- | --- | --- | --- |
@@ -24,6 +24,8 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 | GROUP_MESSAGE | S → 在线 C | messageId, conversationId, from, content, serverTime, 可选 requestId、nickname、replyTo、attachment | 群聊展示，以服务端事件为唯一正式回显 |
 | PRIVATE_SEND | C → S | requestId, to, content, 可选 replyTo | 必须是好友，或已获许可且目标在线。归档后在线目标先入投递队列，离线好友从其归档收取。最后回显发送者 |
 | PRIVATE_MESSAGE | S → 私聊双方的就绪连接 | messageId, conversationId, from, to, content, serverTime, 可选 requestId、nickname、replyTo、attachment | 仅双方接收，离线好友通过历史读取 |
+| MESSAGE_RECALL | C → S | requestId, conversationId, messageId | 发送者撤回本人消息，服务端校验 60 秒时限 |
+| MESSAGE_RECALLED | S → 该会话相关的就绪连接 | conversationId, messageId, 可选 requestId | 发送者确认带请求编号，其他连接收到同一消息编号 |
 | USER_LIST | S → 在线 C | users: string[], revision: 非负 long | 全量列表，按较新版本覆盖 |
 | SYSTEM | S → 在线 C | content, serverTime | 上下线提示，不作为列表数据来源 |
 | ERROR | S → 当前 C | code, message, requestId（可选） | 本次请求失败；能识别合法 requestId 时附回 |
@@ -41,7 +43,7 @@ HELLO 后允许 REGISTER/LOGIN 和 PING/PONG；其他业务返回 NOT_AUTHENTICA
 
 ## TLS 与公网准入
 
-TLS 模式对监听端口统一启用 TLS 1.2/1.3，服务端从 PKCS12 加载私钥与证书链。客户端在发送 HELLO 或凭据前验证证书信任链与输入的主机名。握手失败即关闭连接，不尝试明文回退。TLS 完成后仍使用原有 v6 LF 分帧和请求类型。TLS 模式关闭 UDP 发现。
+TLS 模式对监听端口统一启用 TLS 1.2/1.3，服务端从 PKCS12 加载私钥与证书链。客户端在发送 HELLO 或凭据前验证证书信任链与输入的主机名。握手失败即关闭连接，不尝试明文回退。TLS 完成后使用同样的 LF 分帧和请求类型。TLS 模式关闭 UDP 发现。
 
 服务端在接受连接时限制总连接、未认证数量及同 IP 接入次数，达到上限的连接直接关闭。登录、注册和改密受每分钟频率限制与密码散列并发限制。属性和启动示例见 [部署手册](deployment.md)。
 
@@ -70,7 +72,7 @@ TLS 模式对监听端口统一启用 TLS 1.2/1.3，服务端从 PKCS12 加载�
 
 可在各端启动 JVM 时设置正整数毫秒系统属性 `ltalk.heartbeat.intervalMillis`（默认 10000）与 `ltalk.heartbeat.timeoutMillis`（默认 20000，均不超过 2147483647）；两端可独立配置，无需交换时长。非法配置拒绝创建网络客户端/服务端。过短配置可能受调度/延迟影响误判，应根据网络环境保留余量。
 
-应用层心跳独立于聊天和在线列表路由。运行时使用同一 v6 版本的客户端与服务端。
+应用层心跳独立于聊天和在线列表路由。运行时使用同一版本的客户端与服务端。
 
 ## 错误码
 
@@ -91,6 +93,7 @@ TLS 模式对监听端口统一启用 TLS 1.2/1.3，服务端从 PKCS12 加载�
 | SERVER_BUSY | 密码散列并发达到上限，等候超时 | HELLO 模式可稍后重试 |
 | SELF_PRIVATE_NOT_ALLOWED | 私聊目标为自己 | 保留连接 |
 | WRONG_PASSWORD | 修改密码时当前密码不匹配 | 保留连接，可重新填写 |
+| RECALL_EXPIRED | 本人消息已超过撤回时限 | 保留连接 |
 
 连接上限已满时新 TCP 连接直接关闭，避免在接受线程同步写错误阻塞。未登录超时、EOF、RST、关闭服务端以关闭连接表示，无额外必需 ERROR 帧。客户端本地的空白/超长等校验不会发出网络请求，也不会关闭已有连接。
 
@@ -139,7 +142,7 @@ nickname strip 后 1～40 char；userId 沿用 1～20 ASCII 字母/数字/下划
 
 新增错误：MISSING_FIELD 缺必填参数；INVALID_NICKNAME 昵称越界；INVALID_PASSWORD 密码长度非法；INVALID_USER_ID 用户名非法；USER_EXISTS 注册重名或已有在线会话；LOGIN_FAILED 统一用户名或密码错误（不区分不存在与密码错误）；NOT_AUTHENTICATED 未认证；FORBIDDEN 他人历史或无效/过期/跨连接游标；STORAGE_ERROR 服务端存储失败；EXPORT_FAILED 历史读取失败。原 BAD_MESSAGE 继续处理未知模式、方向/类型/帧错误。客户端本地文件错误或逐页响应超时也提示 EXPORT_FAILED，不自动重试或断开健康聊天连接。
 
-record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC、GROUP:群组 UUID 或 PRIVATE:按用户名排序的双方）、sender、recipient（群聊为 null）、content、messageType、sentAt（ISO 8601 UTC）。聊天回显也携带 messageId 和 conversationId。服务端给新消息分配递增时间，时钟回拨或重复时在上次时间上增加一纳秒。已认证账号可按本人删除状态读取公共共享归档，包含登录前和离线期间的消息。独立群组按入群、退群和本人删除状态查询。私聊归档仅双方可读，向离线陌生人发送返回 USER_OFFLINE。
+record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC、GROUP:10 位数字群号或 PRIVATE:按用户名排序的双方）、sender、recipient（群聊为 null）、content、messageType、sentAt（ISO 8601 UTC）。聊天回显也携带 messageId 和 conversationId。服务端给新消息分配递增时间，时钟回拨或重复时在上次时间上增加一纳秒。已认证账号可按本人删除状态读取公共共享归档，包含登录前和离线期间的消息。独立群组按入群、退群和本人删除状态查询。私聊归档仅双方可读，向离线陌生人发送返回 USER_OFFLINE。
 
 游标为原认证连接私有的随机标识。打开快照时固定当时的消息序号上界，独立群组还固定当时已获授权的区间。导出和历史查询各有一个独立快照，同类新请求替换旧游标，完成或连接结束时关闭。客户端消费一页后再请求下一页。导出为 JSON UTF-8 数组（保留 null recipient），或带七列表头和双引号转义的 CSV。客户端负责本地文件路径，发布失败会清理临时文件。
 
@@ -211,15 +214,15 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 | --- | --- |
 | STATE | 可选 cursor；本人好友、私聊许可、待处理请求与已获历史授权的群组 |
 | FIND_USER | content 为昵称或用户名片段，去首尾空白后 1～40 个 UTF-16 单元，忽略大小写。可选 cursor。返回除本人外的匹配账号，包含完整用户名与当前昵称。无匹配时返回空页。省略 content 时仍接受旧客户端用 to 精确查询完整用户名。 |
-| FIND_GROUP | content 为可选群名片段或群 UUID，最长 64 字符；可选 cursor；返回存续群组的目录元数据 |
-| GROUP_MEMBERS | conversationId 为 `GROUP:<UUID>`，可选 cursor；仅当前群成员可查询，返回该群的当前成员（含离线成员） |
+| FIND_GROUP | content 为可选群名片段或完整 10 位群号，最长 64 字符；可选 cursor；返回存续群组的目录元数据 |
+| GROUP_MEMBERS | conversationId 为 `GROUP:<10 位群号>`，可选 cursor；仅当前群成员可查询，返回该群的当前成员（含离线成员） |
 | FRIEND_REQUEST / FRIEND_REMOVE | to 为对方用户名，允许离线；申请需要对方确认 |
 | FRIEND_ACCEPT / FRIEND_REJECT | messageId 为申请 ID；只有接收方可处理 |
 | PRIVATE_REQUEST | to 为对方用户名，须在线；每对账号至多一个在途请求 |
 | PRIVATE_ACCEPT / PRIVATE_REJECT | messageId 为请求 ID；只有接收方可处理 |
 | PRIVATE_BLOCK / PRIVATE_UNBLOCK | to 为对方用户名；屏蔽会撤销独立私聊许可和待处理私聊请求 |
 | GROUP_CREATE | nickname 为 1～40 字符群名，content 为 `OPEN` 或 `REVIEW` |
-| GROUP_REQUEST | conversationId 为 `GROUP:<UUID>`；开放群直接进入，需审核的群产生申请 |
+| GROUP_REQUEST | conversationId 为 `GROUP:<10 位群号>`；开放群直接进入，需审核的群产生申请 |
 | GROUP_APPROVE / GROUP_REJECT | messageId 为入群申请 ID；由当前管理员处理 |
 | GROUP_INVITE | conversationId、to；在群成员可邀请自己的好友 |
 | INVITE_ACCEPT / INVITE_REJECT | messageId 为邀请 ID；接收方决定。接受当前管理员的邀请直接入群，其他邀请沿用群的审核设置 |
@@ -227,17 +230,17 @@ v6 的 `avatar` 为 Base64 编码的 256×256 或 512×512 PNG/JPEG，兼容旧�
 | GROUP_TRANSFER | conversationId、to；管理员指定另一位当前成员 |
 | GROUP_LEAVE / GROUP_DISBAND | conversationId；普通成员可退出，管理员可解散，或先转让再退出 |
 
-`socialItem` 包含 `kind` 和 `id`。用户类可带 `user`、`title`。请求项使用请求 UUID，`user` 为对端，涉及群组时附带 `group`、`title`、`admin` 和 `review`。群目录项附带群 UUID、群名、当前管理员、审核开关和本人的 `member`。已解散群组仅保留在曾获授权成员的 STATE 中，管理员字段省略。
+`socialItem` 包含 `kind` 和 `id`。用户类可带 `user`、`title`。请求项使用请求 UUID，`user` 为对端，涉及群组时附带 `group`、`title`、`admin` 和 `review`。群目录项附带 10 位群号、群名、当前管理员、审核开关和本人的 `member`。已解散群组仅保留在曾获授权成员的 STATE 中，管理员字段省略。
 
 `GROUP_MEMBERS` 的行使用 `GROUP_MEMBER`，`id` 和 `user` 均为完整用户名，`title` 为当前昵称。需要同步的展示资料通过 `DISPLAY_PROFILE` 先于对应行发送。客户端结合 `USER_LIST` 计算在线人数。加入或退出独立群组时，服务端也向其余当前成员发送 `SOCIAL_CHANGED`，打开名单的客户端可刷新各页。每次翻页重新校验当前成员身份。非成员返回 `FORBIDDEN`，不存在或已解散的群返回 `NOT_FOUND`。公共聊天室使用登录后已有的 `USER_LIST`，其范围不适用于本查询。
 
-仅当前群成员可通过带群组会话 ID 的 `GROUP_SEND` 发消息。成员加入时记录当时最近 100 条的起点，退出或解散时关闭授权区间，再次入群增加新的区间。浏览、搜索定位、导出、删除和摘要共同使用这些区间。从未加入的账号无法获取群消息。独立群组使用服务端 UUID，公共聊天室保留 `GROUP:PUBLIC`。
+仅当前群成员可通过带群组会话 ID 的 `GROUP_SEND` 发消息。成员加入时记录当时最近 100 条的起点，退出或解散时关闭授权区间，再次入群增加新的区间。浏览、搜索定位、导出、删除和摘要共同使用这些区间。从未加入的账号无法获取群消息。服务端为独立群组分配唯一的 10 位 ASCII 数字串，SQLite 表结构从 v1 升到 v2 时为已有群组改号并更新关联记录。公共聊天室使用 `GROUP:PUBLIC`。
 
 缺少历史权限或操作身份不符返回 `FORBIDDEN`，无私聊许可返回 `PRIVATE_FORBIDDEN`，重复待处理请求返回 `REQUEST_PENDING`，已有关系或成员返回 `ALREADY_EXISTS`，请求失效返回 `NOT_FOUND`。管理员直接退群返回 `ADMIN_REQUIRED`。
 
 ## 图片和文件传输（v6 扩展）
 
-Emoji 使用普通文字的 `content`。图片和附件沿用 `GROUP_MESSAGE`、`PRIVATE_MESSAGE` 和历史记录格式。消息的 `content` 为文件名，`messageId` 也是附件的标识。新增可选对象 `attachment`，含 `kind`（`IMAGE` 或 `FILE`）、`name` 和非负整数 `size`（字节）。图片的实时消息和历史行另含 `thumbnail`，为 Base64 JPEG，边长最多 160 像素，编码前的 JPEG 最多 6000 字节。JSON 导出保留元数据，CSV 沿用七列。
+Emoji 使用普通文字的 `content`。图片和附件沿用 `GROUP_MESSAGE`、`PRIVATE_MESSAGE` 和历史记录格式，`messageId` 同时是附件标识。普通文件的 `content` 为文件名，图片的 `content` 为 `[图片]`。可选的 `attachment` 含 `kind`（`IMAGE` 或 `FILE`）、`name` 和非负整数 `size`（字节）。图片的实时消息和历史行另含 `thumbnail`，为 Base64 JPEG，边长最多 160 像素，编码前的 JPEG 最多 6000 字节。JSON 导出保留元数据，CSV 沿用七列。
 
 | 类型 | 连接 | 方向和字段 |
 | --- | --- | --- |
@@ -253,7 +256,7 @@ Emoji 使用普通文字的 `content`。图片和附件沿用 `GROUP_MESSAGE`、
 
 收到 `ATTACH_READY` 后，发送端紧接着传输恰好 `size` 个原始字节，随后恢复 LF 分隔的 JSON。上传方提交完成帧后，服务端验证图片并再次检查会话发送权限，保存原文件后按既有聊天规则归档与路由。下载方通过开始下载时本人的可见归档授权访问相应附件。退群、解散和本人删除沿用历史的权限规则。取消、断线或失败时清理未完成的文件。提交上传完成帧后连接断开时，客户端提示核对聊天记录。
 
-图片入口接受 PNG、JPEG、GIF 和 BMP，最大 12 MiB、2400 万像素。普通附件不限类型，最大 50 MiB，可为空文件。服务端以消息 UUID 保存原文件。文件名供展示与建议保存名使用，长度不超过 160 个 Unicode 码点，并清理路径分隔符、控制字符和 Windows 保留名称。
+图片入口接受 PNG、JPEG、GIF 和 BMP，最大 12 MiB、2400 万像素。客户端上传图片前将 `attachment.name` 改为通用名称（如 `图片.jpg`），服务端发布和读取历史时也使用通用名称，保留原扩展名。普通附件不限类型，最大 50 MiB，可为空文件。服务端以消息 UUID 保存原文件。普通附件名供展示与建议保存名使用，长度不超过 160 个 Unicode 码点，并清理路径分隔符、控制字符和 Windows 保留名称。
 
 | 错误码 | 条件 |
 | --- | --- |
@@ -269,7 +272,13 @@ Emoji 使用普通文字的 `content`。图片和附件沿用 `GROUP_MESSAGE`、
 
 `GROUP_SEND` 和 `PRIVATE_SEND` 可携带 `replyTo`，值为原消息的规范 UUID。服务端只接受发送账号在同一会话中仍可查看的记录，编号无效返回 `BAD_MESSAGE`，原消息已删除、跨会话或超出可见范围返回 `NOT_FOUND`。正式消息事件、数据库和 JSON 导出保留该编号，普通消息省略该字段。CSV 使用原七列。
 
-引用仅传递编号。客户端从当前可见消息取预览，按现有 `CONTEXT` 查询定位未加载原文。原消息可见性取决于查看者本人的群组历史区间和删除设置。客户端匹配发送回显时同时核对引用编号。未读定位使用客户端窗口状态。
+引用仅传递编号。客户端从当前可见消息取预览，图片引用使用「用户名：[图片]」。按现有 `CONTEXT` 查询定位未加载原文。原消息可见性取决于查看者本人的群组历史区间和删除设置。客户端匹配发送回显时同时核对引用编号。未读定位使用客户端窗口状态。
+
+## 消息撤回（v7）
+
+`MESSAGE_RECALL` 须指向同一会话中本人发送的规范消息 UUID。服务端以归档时间为起点，接受 60 秒内（含第 60 秒）的首次撤回。越权私聊范围返回 `FORBIDDEN`，会话中找不到该发送者的消息返回 `NOT_FOUND`，超时返回 `RECALL_EXPIRED`。重复提交已撤回的本人消息只回确认。
+
+存储事务提交后，服务端确认发送者并通知公共聊天室的就绪连接、私聊的对方或具备该条群消息历史授权的就绪成员。通知只含会话和消息编号。历史、摘要、定位和导出保留消息编号、时间及发送者，将正文显示为 `[消息已撤回]`，历史和 JSON 记录另含 `recalled: true`。新搜索跳过撤回的记录，新引用和新下载由服务端拒绝。已有引用可定位到撤回提示。已经收到的内容、副本、备份和开始传输的附件仍可能在原处保留。
 
 ## 消息展示昵称（2026-11-15，v4 可选扩展）
 

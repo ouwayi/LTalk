@@ -3,6 +3,7 @@ package cn.ltalk.server;
 import cn.ltalk.common.*;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -19,7 +20,8 @@ final class MessageRouter {
 
     void handle(ClientSession session, Message request) {
         if (request.type() == MessageType.GROUP_SEND || request.type() == MessageType.PRIVATE_SEND
-                || request.type() == MessageType.HISTORY_DELETE
+                || request.type() == MessageType.HISTORY_DELETE || request.type() == MessageType.MESSAGE_RECALL
+                || request.type() == MessageType.HISTORY_REQUEST || request.type() == MessageType.EXPORT_REQUEST
                 || (request.type() == MessageType.SOCIAL_REQUEST && !SocialAction.GROUP_MEMBERS.name().equals(request.socialAction()))) {
             // A deleted record's earlier live delivery must not overtake the deletion acknowledgement.
             synchronized (mutationOrder) { handleRequest(session, request); }
@@ -63,6 +65,7 @@ final class MessageRouter {
                 case HISTORY_REQUEST -> history(session, request);
                 case HISTORY_VIEW_REQUEST -> historyView(session, request);
                 case SOCIAL_REQUEST -> social(session, request);
+                case MESSAGE_RECALL -> recall(session, request);
                 case HISTORY_DELETE -> {
                     Validation.requestId(request.requestId()); ownArchive(session, request);
                     server.archive().delete(session.userId, request.conversationId(), request.messageId());
@@ -126,6 +129,23 @@ final class MessageRouter {
     }
 
     private record ChatRoute(List<ClientSession> group, ClientSession target) { }
+
+    private void recall(ClientSession session, Message request) throws IOException {
+        Validation.requestId(request.requestId());
+        ownArchive(session, request);
+        ChatArchive.Recall recall = server.archive().recall(session.userId, request.conversationId(), request.messageId(), Instant.now());
+        Message.Builder event = Message.of(MessageType.MESSAGE_RECALLED)
+                .conversationId(request.conversationId()).messageId(request.messageId());
+        server.deliver(session, event.requestId(request.requestId()).build());
+        if (!recall.changed()) return;
+        Message notification = event.requestId(null).build();
+        String recipient = recall.record().recipient();
+        for (ClientSession peer : registry.readySessions()) {
+            if (peer != session && (ConversationScope.PUBLIC.equals(request.conversationId())
+                    || peer.userId.equals(recipient) || recall.groupAudience().contains(peer.userId)))
+                server.deliver(peer, notification);
+        }
+    }
 
     private ChatRoute routeChat(ClientSession session, Message request) throws IOException {
         if (request.type() == MessageType.GROUP_SEND) {
@@ -333,7 +353,9 @@ final class MessageRouter {
         catch (IllegalArgumentException | NullPointerException ex) {
             throw new ProtocolException("BAD_MESSAGE", "无效的历史浏览方式");
         }
-        ArchiveView.Page page = new ArchiveView(server.archive(), server.accounts()).read(session.userId, mode, request);
+        long recallRevision = server.archive().recallRevision();
+        ArchiveView view = new ArchiveView(server.archive(), server.accounts());
+        ArchiveView.Page page = view.read(session.userId, mode, request);
         if (mode != HistoryQuery.SEARCH) {
             Set<String> profiles = new HashSet<>();
             for (ChatRecord row : page.rows()) {
@@ -348,11 +370,21 @@ final class MessageRouter {
                 }
             }
         }
-        for (ChatRecord row : page.rows()) {
-            if (!server.deliver(session, Message.of(MessageType.HISTORY_VIEW_ROW).requestId(request.requestId())
-                    .record(row).nickname(server.accounts().nickname(row.sender())).build())) return;
+        synchronized (mutationOrder) {
+            List<ChatRecord> rows = page.rows();
+            if (recallRevision != server.archive().recallRevision()) {
+                if (mode == HistoryQuery.SEARCH) {
+                    // Rebuild the search page so a removed match cannot leave an invalid paging cursor.
+                    page = view.read(session.userId, mode, request);
+                    rows = page.rows();
+                } else rows = server.archive().refreshRecalls(rows);
+            }
+            for (ChatRecord row : rows) {
+                if (!server.deliver(session, Message.of(MessageType.HISTORY_VIEW_ROW).requestId(request.requestId())
+                        .record(row).nickname(server.accounts().nickname(row.sender())).build())) return;
+            }
+            server.deliver(session, Message.of(MessageType.HISTORY_VIEW_END).requestId(request.requestId()).cursor(page.next()).build());
         }
-        server.deliver(session, Message.of(MessageType.HISTORY_VIEW_END).requestId(request.requestId()).cursor(page.next()).build());
     }
 
     private static void validateChat(Message request) throws ProtocolException {

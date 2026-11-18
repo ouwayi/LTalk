@@ -4,6 +4,7 @@ import cn.ltalk.common.*;
 
 import java.io.IOException;
 import java.sql.*;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 
@@ -16,6 +17,7 @@ final class ChatArchive {
     private final Map<String, Set<Cursor>> cursors = new HashMap<>();
     private long lastSequence;
     private Instant lastTime = Instant.MIN;
+    private volatile long recallRevision;
 
     ChatArchive(SqliteDatabase database) throws IOException {
         this.database = database;
@@ -32,6 +34,7 @@ final class ChatArchive {
     }
 
     synchronized long lastSequence() { return lastSequence; }
+    long recallRevision() { return recallRevision; }
 
     synchronized long groupHistoryStart(String id) throws IOException {
         return database.read(connection -> {
@@ -82,9 +85,73 @@ final class ChatArchive {
     }
 
     void requireVisibleReply(String user, String scope, String replyTo) throws IOException {
-        if (replyTo != null && visibleRecord(user, scope, replyTo) == null) {
-            throw new ProtocolException("NOT_FOUND", "引用的原消息在当前会话中不可查看");
+        if (replyTo != null) {
+            ChatRecord original = visibleRecord(user, scope, replyTo);
+            if (original == null || original.isRecalled())
+                throw new ProtocolException("NOT_FOUND", "引用的原消息在当前会话中不可查看");
         }
+    }
+
+    record Recall(ChatRecord record, Set<String> groupAudience, boolean changed) { }
+
+    synchronized Recall recall(String user, String scope, String id, Instant now) throws IOException {
+        if (scope == null) throw new ProtocolException("BAD_MESSAGE", "撤回必须指定会话");
+        ConversationScope.validate(user, scope);
+        ConversationScope.uuid(id);
+        Recall result = database.write(connection -> {
+            ChatRecord original;
+            long sequence;
+            try (PreparedStatement query = prepare(connection, """
+                    SELECT * FROM messages WHERE message_id = ? AND conversation_id = ? AND sender = ?
+                    """, id, scope, user);
+                 ResultSet rows = query.executeQuery()) {
+                if (!rows.next()) throw new ProtocolException("NOT_FOUND", "此会话中没有可撤回的本人消息");
+                original = record(rows);
+                sequence = rows.getLong("seq");
+            }
+            if (original.isRecalled()) return new Recall(original, Set.of(), false);
+            Duration age = Duration.between(Instant.parse(original.sentAt()), now);
+            if (age.isNegative() || age.compareTo(Duration.ofSeconds(ChatRecord.RECALL_SECONDS)) > 0)
+                throw new ProtocolException("RECALL_EXPIRED", "只能撤回发送后 60 秒内的消息");
+            Set<String> audience = new HashSet<>();
+            if (ConversationScope.isGroup(scope)) {
+                try (PreparedStatement query = prepare(connection, """
+                        SELECT DISTINCT user_id FROM group_memberships
+                        WHERE group_id = ? AND start_seq <= ? AND (end_seq IS NULL OR end_seq >= ?)
+                        """, ConversationScope.groupId(scope), sequence, sequence);
+                     ResultSet rows = query.executeQuery()) {
+                    while (rows.next()) audience.add(rows.getString(1));
+                }
+            }
+            execute(connection, """
+                    UPDATE messages SET recalled = 1, content = '', reply_to = NULL, attachment_kind = NULL,
+                                        attachment_name = NULL, attachment_size = NULL, thumbnail = NULL
+                    WHERE seq = ?
+                    """, sequence);
+            return new Recall(original.asRecalled(), audience, true);
+        });
+        if (result.changed()) {
+            recallRevision++;
+            for (Set<Cursor> active : cursors.values())
+                for (Cursor cursor : active) cursor.replaceRecalled(result.record());
+        }
+        return result;
+    }
+
+    // History views may have waited to send display profiles while a recall committed.
+    List<ChatRecord> refreshRecalls(List<ChatRecord> records) throws IOException {
+        return database.read(connection -> {
+            List<ChatRecord> updated = new ArrayList<>(records.size());
+            try (PreparedStatement query = connection.prepareStatement("SELECT recalled FROM messages WHERE message_id = ?")) {
+                for (ChatRecord record : records) {
+                    query.setString(1, record.messageId());
+                    try (ResultSet rows = query.executeQuery()) {
+                        updated.add(rows.next() && rows.getBoolean(1) ? record.asRecalled() : record);
+                    }
+                }
+            }
+            return updated;
+        });
     }
 
     ChatRecord visibleRecord(String user, String scope, String id) throws IOException {
@@ -208,11 +275,14 @@ final class ChatArchive {
     static ChatRecord record(ResultSet rows) throws SQLException {
         String kind = rows.getString("attachment_kind");
         Attachment attachment = kind == null ? null : new Attachment(Attachment.Kind.valueOf(kind),
-                rows.getString("attachment_name"), rows.getLong("attachment_size"), rows.getString("thumbnail"));
+                rows.getString("attachment_name"), rows.getLong("attachment_size"), rows.getString("thumbnail"))
+                .withoutOriginalImageName();
         String recipient = rows.getString("recipient");
-        return new ChatRecord(rows.getString("message_id"), rows.getString("conversation_id"), rows.getString("sender"),
-                recipient, rows.getString("content"), recipient == null ? "GROUP_MESSAGE" : "PRIVATE_MESSAGE",
+        ChatRecord record = new ChatRecord(rows.getString("message_id"), rows.getString("conversation_id"), rows.getString("sender"),
+                recipient, attachment == null ? rows.getString("content") : attachment.messageContent(),
+                recipient == null ? "GROUP_MESSAGE" : "PRIVATE_MESSAGE",
                 rows.getString("sent_at"), rows.getString("reply_to"), attachment);
+        return rows.getBoolean("recalled") ? record.asRecalled() : record;
     }
 
     Cursor open(String user) throws IOException { return open(user, null); }
@@ -273,6 +343,13 @@ final class ChatArchive {
             if (closed) throw new IOException("历史快照已失效，请重新加载或导出");
             if (batch.isEmpty() && !done) loadBatch();
             return batch.pollFirst();
+        }
+
+        private synchronized void replaceRecalled(ChatRecord recalled) {
+            for (int i = batch.size(); i > 0; i--) {
+                ChatRecord row = batch.removeFirst();
+                batch.addLast(row.messageId().equals(recalled.messageId()) ? recalled : row);
+            }
         }
 
         private void loadBatch() throws IOException {

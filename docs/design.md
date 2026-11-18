@@ -76,7 +76,7 @@ MessageRouter 对所有业务统一检查 ready（HELLO 与握手后的 PING/PON
 
 ChatServer 独占数据目录文件锁。`SqliteDatabase` 初始化 `ltalk.db`，用应用标识和表结构版本检查数据库，启用外键和 WAL。写事务经同一连接串行提交，查询使用独立读连接。[SQLite WAL](https://sqlite.org/wal.html)
 
-表结构在 `src/main/resources/cn/ltalk/server/sqlite-schema-v1.sql`。命令行优先使用显式 `-Dltalk.dataDir`，省略时默认使用当前目录的 `data-sqlite/`。若 `data-sqlite/` 下尚无数据库，而 `data/ltalk.db` 已存在，则沿用早期 SQLite 库。云端 systemd 单元显式使用 `/var/lib/ltalk`。[启动说明](../README.md#启动与操作)
+表结构由 `sqlite-schema-v1.sql` 和 `sqlite-migrate-v2.sql` 建立。v2 在同一事务中替换旧群号、更新成员、请求和历史中的关联键，并添加撤回标记。命令行优先使用显式 `-Dltalk.dataDir`，省略时默认使用当前目录的 `data-sqlite/`。若 `data-sqlite/` 下尚无数据库，而 `data/ltalk.db` 已存在，则沿用早期 SQLite 库。云端 systemd 单元显式使用 `/var/lib/ltalk`。[启动说明](../README.md#启动与操作)
 
 ChatArchive 对每条消息保存一个 UUID 和内部递增序号，另保存供客户端显示的 UTC 时间。消息提交后才进行实时投递。公共消息由认证账号按本人删除规则读取。私聊在同一事务内写入消息及双方的可见记录。独立群历史按成员授权区间和本人删除规则查询。
 
@@ -112,7 +112,7 @@ ChatArchive 用数据库事务更新当前账号的单条隐藏记录或会话�
 
 ## TLS、公网限制与发送队列（2026-11-17）
 
-服务端先接受原始 Socket，受独立期限约束，在连接工作线程执行 TLS 握手。客户端用填入的主机名进行 JSSE 端点校验，成功后进入原 v6 协议。关闭原始 Socket 能解除连接线程上的阻塞读写。
+服务端先接受原始 Socket，受独立期限约束，在连接工作线程执行 TLS 握手。客户端用填入的主机名进行 JSSE 端点校验，成功后进入聊天协议。关闭原始 Socket 能解除连接线程上的阻塞读写。
 
 每连接 FIFO 上限为 128 帧、512 KiB，另允许一帧在写入。路由的顺序锁保护收发、引用校验、删除和社交请求的处理顺序，消息在锁内入队，由写线程完成网络 I/O。拥塞连接由服务端计时执行器关闭，登录回应和初始资料可在各自读线程有期限地等待该连接写完。认证有独立的未认证连接名额与有界频率表，密码散列在账号写入临界区外计算，提交前再次检查账号或口令材料。[部署手册](deployment.md)
 

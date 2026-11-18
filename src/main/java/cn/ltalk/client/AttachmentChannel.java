@@ -90,6 +90,7 @@ final class AttachmentChannel {
                 if (!Files.isRegularFile(path)) throw new IOException("请选择一个文件");
                 expected = new Attachment(upload, Attachment.safeName(path.getFileName().toString()), Files.size(path), null);
                 expected.validateUpload();
+                expected = expected.withoutOriginalImageName();
             }
             Message prepare = Message.of(upload != null ? MessageType.ATTACH_UPLOAD : MessageType.ATTACH_DOWNLOAD)
                     .requestId(job.id).conversationId(request.scope()).to(request.target()).messageId(request.messageId())

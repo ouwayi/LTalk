@@ -13,7 +13,7 @@ import java.util.*;
 
 /** EDT-confined presentation state; no sockets, protocol changes, persistence or delivery claims. */
 public final class ConversationStore {
-    public enum EntryKind { MESSAGE, OUTGOING, SYSTEM, ERROR }
+    public enum EntryKind { MESSAGE, RECALLED, OUTGOING, SYSTEM, ERROR }
     public enum SendStatus { SENDING, CONFIRMED, FAILED, UNCONFIRMED }
     public record Entry(EntryKind kind, String from, String to, String content, Instant time, String messageId,
                         String nickname, SendStatus sendStatus, String sendDetail, String replyTo, Attachment attachment) {
@@ -26,6 +26,10 @@ public final class ConversationStore {
         }
         public String displayName() {
             return ContactProfile.displayName(from, nickname);
+        }
+        public Entry asRecalled() {
+            if (kind == EntryKind.RECALLED) return this;
+            return new Entry(EntryKind.RECALLED, from, to, ChatRecord.RECALLED_CONTENT, time, messageId, nickname);
         }
     }
     public record Summary(ConversationId id, String title, String preview, Instant time, int unread, boolean online,
@@ -104,7 +108,8 @@ public final class ConversationStore {
     public boolean markRead(Entry through) {
         List<Entry> unread = conversations.get(selected).unread;
         for (int i = 0; i < unread.size(); i++) {
-            if (unread.get(i) != through) continue;
+            if (unread.get(i) != through && (through.messageId() == null || !through.messageId().equals(unread.get(i).messageId())))
+                continue;
             unread.subList(0, i + 1).clear();
             return true;
         }
@@ -178,7 +183,7 @@ public final class ConversationStore {
         if (last != null) {
             String prefix = group ? displayName(last.from(), last.displayName()) + "："
                     : self.equals(last.from()) ? "你：" : "";
-            preview = prefix + last.content();
+            preview = prefix + (last.attachment() == null ? last.content() : last.attachment().messageContent());
         }
         String label = Objects.requireNonNullElse(conversation.label, key);
         String title = conversation.id.equals(ConversationId.PUBLIC) ? "公共聊天室" : group ? label : displayName(key, label);
@@ -265,7 +270,7 @@ public final class ConversationStore {
         return receive(message, true);
     }
     public ConversationId receive(Message message, boolean followingLatest) {
-        return receive(message, false, followingLatest);
+        return receive(message, false, followingLatest, false);
     }
     public void submitted(ConversationId id, String requestId, String content) {
         submitted(id, requestId, content, null);
@@ -291,7 +296,7 @@ public final class ConversationStore {
     public void beginHistory() {
         messageIds.clear();
         for (Conversation conversation : conversations.values()) {
-            conversation.entries.removeIf(e -> e.kind() == EntryKind.MESSAGE);
+            conversation.entries.removeIf(e -> e.kind() == EntryKind.MESSAGE || e.kind() == EntryKind.RECALLED);
             updateSummary(conversation);
         }
     }
@@ -299,20 +304,24 @@ public final class ConversationStore {
         return restore(record, null);
     }
     public ConversationId restore(ChatRecord record, String nickname) {
+        if (record.isRecalled()) recall(record.conversationId(), record.messageId());
         return receive(Message.of(MessageType.valueOf(record.messageType())).messageId(record.messageId()).from(record.sender())
                 .conversationId(record.conversationId()).to(record.recipient()).content(record.content())
-                .serverTime(record.sentAt()).nickname(nickname).replyTo(record.replyTo()).attachment(record.attachment()).build(), true, true);
+                .serverTime(record.sentAt()).nickname(nickname).replyTo(record.replyTo()).attachment(record.attachment()).build(),
+                true, true, record.isRecalled());
     }
     public void summarize(ChatRecord record, String nickname) {
+        if (record.isRecalled()) recall(record.conversationId(), record.messageId());
         Conversation conversation = "GROUP_MESSAGE".equals(record.messageType()) ? groupConversation(record.conversationId())
                 : ensurePrivate(self.equals(record.sender()) ? record.recipient() : record.sender());
         updateLatest(conversation, archivedEntry(record, nickname));
     }
     public static Entry archivedEntry(ChatRecord record, String nickname) {
-        return new Entry(EntryKind.MESSAGE, record.sender(), record.recipient(), record.content(),
-                parseTime(record.sentAt()), record.messageId(), nickname, null, null, record.replyTo(), record.attachment());
+        Entry entry = new Entry(EntryKind.MESSAGE, record.sender(), record.recipient(), record.content(), parseTime(record.sentAt()),
+                record.messageId(), nickname, null, null, record.replyTo(), record.attachment());
+        return record.isRecalled() ? entry.asRecalled() : entry;
     }
-    private ConversationId receive(Message message, boolean historical, boolean followingLatest) {
+    private ConversationId receive(Message message, boolean historical, boolean followingLatest, boolean recalled) {
         boolean group = message.type() == MessageType.GROUP_MESSAGE;
         String peer = self.equals(message.from()) ? message.to() : message.from();
         Conversation conversation = group ? groupConversation(message.conversationId()) : ensurePrivate(peer);
@@ -334,6 +343,7 @@ public final class ConversationStore {
         Instant time = parseTime(message.serverTime());
         Entry entry = new Entry(EntryKind.MESSAGE, message.from(), message.to(), message.content(), time, message.messageId(), message.nickname(),
                 confirmedSends.contains(message.messageId()) ? SendStatus.CONFIRMED : null, null, message.replyTo(), message.attachment());
+        if (recalled) entry = entry.asRecalled();
         if (firstLive && !self.equals(message.from()) && !(visible && selected.equals(conversation.id) && followingLatest))
             conversation.unread.add(entry);
         if (message.messageId() != null && !messageIds.add(message.messageId())) return conversation.id;
@@ -348,10 +358,24 @@ public final class ConversationStore {
         if (conversation.lastMessage == null || !entry.time().isBefore(conversation.lastMessage.time()))
             conversation.lastMessage = entry;
     }
-    public void deleteHistory(String scope, String id) {
-        ConversationId target = ConversationScope.PUBLIC.equals(scope) ? ConversationId.PUBLIC
-                : ConversationScope.isGroup(scope) ? groupConversation(scope).id
+    private ConversationId fromScope(String scope) {
+        return ConversationScope.PUBLIC.equals(scope) ? ConversationId.PUBLIC
+                : ConversationScope.isGroup(scope) ? ConversationId.group(scope.substring("GROUP:".length()))
                 : ConversationId.privateWith(Arrays.stream(scope.split(":" )).skip(1).filter(p -> !p.equals(self)).findFirst().orElseThrow());
+    }
+    public ConversationId recall(String scope, String id) {
+        ConversationId target = fromScope(scope);
+        Conversation conversation = conversations.get(target);
+        if (conversation == null) return target;
+        java.util.function.UnaryOperator<Entry> replace = entry -> id.equals(entry.messageId()) ? entry.asRecalled() : entry;
+        conversation.entries.replaceAll(replace);
+        conversation.unread.replaceAll(replace);
+        if (conversation.lastMessage != null) conversation.lastMessage = replace.apply(conversation.lastMessage);
+        if (id.equals(conversation.replyDraft)) conversation.replyDraft = null;
+        return target;
+    }
+    public void deleteHistory(String scope, String id) {
+        ConversationId target = fromScope(scope);
         Conversation conversation = conversations.get(target); if (conversation == null) return;
         conversation.entries.removeIf(entry -> {
             boolean remove = entry.kind() != EntryKind.OUTGOING && (id == null || id.equals(entry.messageId()));
@@ -366,7 +390,8 @@ public final class ConversationStore {
     }
     private void updateSummary(Conversation conversation) {
         Entry last = null;
-        for (Entry entry : conversation.entries) if (entry.kind() == EntryKind.MESSAGE) last = entry;
+        for (Entry entry : conversation.entries)
+            if (entry.kind() == EntryKind.MESSAGE || entry.kind() == EntryKind.RECALLED) last = entry;
         conversation.lastMessage = last;
         conversation.emptyPreview = "";
     }

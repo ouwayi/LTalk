@@ -80,10 +80,12 @@ sudo journalctl -u ltalk -n 20 --no-pager
 
 同一版本复测时执行 `sudo systemctl start ltalk`，然后从第 2 步核对网络和证书。换版本时从第 1 步开始。
 
-1. Windows 构建新版并上传 `target/ltalk-1.0.0.jar` 到 `/home/ubuntu/`。以下命令适用于两个 SQLite 版本之间更新。首次从文件版切换时，先按专节准备新数据目录。[从文件版切换到 SQLite](#从文件版切换到-sqlite)
+1. Windows 构建新版并上传 `target/ltalk-1.0.0.jar` 到 `/home/ubuntu/`。SQLite 表结构 v1 升到 v2 会在首次启动时自动更换旧群号，保留原群成员、请求和历史。先停服备份完整数据目录，再换 JAR。首次从文件版切换时，先按专节准备新数据目录。[从文件版切换到 SQLite](#从文件版切换到-sqlite)
 
    ```bash
    sudo systemctl stop ltalk
+   sudo install -d -m 0700 /var/backups/ltalk
+   sudo tar -C /var/lib -czf "/var/backups/ltalk/ltalk-before-upgrade-$(date +%Y%m%d-%H%M%S).tar.gz" ltalk
    sudo cp -p /opt/ltalk/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar.bak
    sudo install -m 0644 /home/ubuntu/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar
    sudo systemctl start ltalk
@@ -93,7 +95,7 @@ sudo journalctl -u ltalk -n 20 --no-pager
 
    `is-active` 显示 `active` 后，在日志中找本次的「LTalk TLS 已启动」。最近 20 条日志可能同时显示上一轮的启动或退出记录，可按时间和进程号核对。
 
-   如果需要回退，停服务后用 `sudo install -m 0644 /opt/ltalk/ltalk-1.0.0.jar.bak /opt/ltalk/ltalk-1.0.0.jar` 装回旧 JAR。各版本使用对应的数据目录。服务文件有更新时，安装后先运行 `sudo systemctl daemon-reload`。
+   如果需要回退，停服务后用 `sudo install -m 0644 /opt/ltalk/ltalk-1.0.0.jar.bak /opt/ltalk/ltalk-1.0.0.jar` 装回旧 JAR。跨表结构版本回退时，先将升级后的数据目录移到独立位置留存，再恢复升级前备份目录。恢复出的库只包含备份时的数据。服务文件有更新时，安装后先运行 `sudo systemctl daemon-reload`。
 
 2. 核对云端 TCP 9000 入站规则的来源地址。Ubuntu 的测试规则是临时的，实例重启后可用下面一行先检查再添加。
 
@@ -112,8 +114,9 @@ sudo journalctl -u ltalk -n 20 --no-pager
 5. 用演示账号复测以下场景，并记录服务端与客户端所用提交、网络环境、复现步骤和耗时。[当前公网验证范围](test-report.md#sqlite-云端部署与双设备验证)
 
    - 登录后记录首批公共消息出现的时间。核对离线好友留言、首条未读、引用定位和输入框右上方的返回箭头。
-   - 用昵称和用户名片段查找账号。切换「公共聊天室」和「好友与群聊」，查看独立群的在线人数、离线成员和用户资料。成员上下线或退群后核对名单，退群后从「历史会话」核对原有历史权限。
+   - 用昵称和用户名片段查找账号。切换「公共聊天室」和「好友与群聊」，查看独立群的 10 位群号和在线、离线成员。成员上下线或退群后核对名单，从「列表外的会话」核对退群后的历史权限。
    - 分别选择图片与普通文件，先取消一次，再确认发送并从对端预览或保存。公网传输使用聊天同一端口上的独立 TLS 连接。
+   - 60 秒内撤回一条消息，核对对端在原位置显示撤回提示，搜索结果也随之更新。
    - 重启服务，用相同账号登录，核对资料、好友关系、群历史与附件下载。
 
 6. 测试结束可运行 `sudo systemctl stop ltalk`，用 `sudo systemctl is-active ltalk` 确认显示 `inactive`。若要关闭测试端口，在云控制台移除 `ltalk-public-test`，并执行 `sudo iptables -D INPUT -p tcp --dport 9000 -m comment --comment ltalk-public-test -j ACCEPT`。账号和聊天记录保存在 `/var/lib/ltalk`。

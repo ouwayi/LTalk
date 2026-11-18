@@ -60,12 +60,24 @@ class AttachmentTransferTest {
             social(bob, SocialAction.GROUP_REQUEST, b -> b.conversationId(scope));
             retained = upload(server, alice, scope, bytes);
             assertEquals(retained, bob.type(MessageType.GROUP_MESSAGE).messageId());
+            String seenBeforeLeaving = upload(server, alice, scope, new byte[]{8, 10});
+            assertEquals(seenBeforeLeaving, bob.type(MessageType.GROUP_MESSAGE).messageId());
             carol.assertNo(m -> retained.equals(m.messageId()), 80);
             assertEquals("FORBIDDEN", downloadError(server, carol, scope, retained));
             social(bob, SocialAction.GROUP_LEAVE, b -> b.conversationId(scope));
             String afterLeaving = upload(server, alice, scope, new byte[]{1, 3, 5});
             assertEquals("ATTACHMENT_NOT_FOUND", downloadError(server, bob, scope, afterLeaving));
             assertArrayEquals(bytes, download(server, bob, scope, retained));
+            alice.send(Message.of(MessageType.MESSAGE_RECALL).requestId("recall-before-leave").conversationId(scope)
+                    .messageId(seenBeforeLeaving).build());
+            assertEquals(seenBeforeLeaving, alice.type(MessageType.MESSAGE_RECALLED).messageId());
+            assertEquals(seenBeforeLeaving, bob.type(MessageType.MESSAGE_RECALLED).messageId());
+            assertEquals("ATTACHMENT_NOT_FOUND", downloadError(server, bob, scope, seenBeforeLeaving));
+            String revoked = upload(server, alice, scope, new byte[]{2, 4, 6});
+            alice.send(Message.of(MessageType.MESSAGE_RECALL).requestId("recall-file").conversationId(scope).messageId(revoked).build());
+            assertEquals(revoked, alice.type(MessageType.MESSAGE_RECALLED).messageId());
+            bob.assertNo(m -> m.type() == MessageType.MESSAGE_RECALLED, 80);
+            assertEquals("ATTACHMENT_NOT_FOUND", downloadError(server, alice, scope, revoked));
             bob.send(Message.of(MessageType.HISTORY_DELETE).requestId("delete").conversationId(scope).messageId(retained).build());
             bob.type(MessageType.HISTORY_DELETED);
             assertEquals("ATTACHMENT_NOT_FOUND", downloadError(server, bob, scope, retained));

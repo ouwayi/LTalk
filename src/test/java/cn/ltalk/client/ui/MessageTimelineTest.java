@@ -37,6 +37,7 @@ class MessageTimelineTest {
             var actions = new ArrayList<String>();
             timeline.attachmentActions((entry, preview) -> actions.add(entry.content() + (preview ? "预览" : "保存")));
             var rows = List.of(ConversationStore.archivedEntry(item, "Bob"));
+            assertEquals("bob：[图片]", MessageTimeline.quoteText(rows.get(0)));
             timeline.showEntries(rows, "alice", "", true);
             layout(timeline);
             layout(timeline);

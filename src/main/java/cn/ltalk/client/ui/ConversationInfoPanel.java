@@ -101,6 +101,7 @@ public final class ConversationInfoPanel extends ChatTheme.RoundedPanel {
 
     private JButton memberButton(Member member) {
         JButton button = ChatTheme.iconButton(LineIcon.Kind.USERS, member.name() + " · @" + member.user());
+        button.setToolTipText(null);
         button.setName("groupMember-" + member.user());
         button.setIcon(null);
         button.setLayout(new BorderLayout(9, 0));
@@ -122,7 +123,6 @@ public final class ConversationInfoPanel extends ChatTheme.RoundedPanel {
         label.setName(id);
         label.setHorizontalAlignment(SwingConstants.CENTER);
         label.setAlignmentX(CENTER_ALIGNMENT);
-        label.setToolTipText(text.isEmpty() ? null : text);
         return label;
     }
 

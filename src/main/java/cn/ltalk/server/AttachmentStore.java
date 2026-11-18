@@ -67,7 +67,7 @@ final class AttachmentStore {
             request.attachment().validateUpload();
             upload = Message.of(request.to() == null ? MessageType.GROUP_SEND : MessageType.PRIVATE_SEND)
                     .conversationId(request.to() == null ? request.conversationId() : null)
-                    .to(request.to()).attachment(request.attachment()).build();
+                    .to(request.to()).attachment(request.attachment().withoutOriginalImageName()).build();
             server.router().checkAttachmentUpload(owner, upload);
         } else {
             if (request.conversationId() == null) throw new ProtocolException("BAD_MESSAGE", "下载附件需要会话标识");
@@ -162,7 +162,7 @@ final class AttachmentStore {
             String thumbnail = metadata.kind() == Attachment.Kind.IMAGE ? ChatImage.thumbnail(part) : null;
             Attachment attachment = new Attachment(metadata.kind(), metadata.name(), metadata.size(), thumbnail);
             Message request = Message.of(ticket.upload.type()).to(ticket.upload.to()).conversationId(ticket.upload.conversationId())
-                    .content(metadata.name()).messageId(ticket.id).attachment(attachment).build();
+                    .content(attachment.messageContent()).messageId(ticket.id).attachment(attachment).build();
             server.router().publishAttachment(ticket.owner, ticket.transfer, request,
                     () -> Files.move(part, destination, StandardCopyOption.ATOMIC_MOVE));
             return Message.of(MessageType.ATTACH_COMPLETE).messageId(ticket.id).build();

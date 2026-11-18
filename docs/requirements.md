@@ -24,7 +24,8 @@
 | X5 私聊离线投递 | 已互为好友时可发送离线消息，接收人通过本人历史查阅 | SocialIntegrationTest、ChatWindowTest |
 | X6 聊天文件传输 | 图片专用入口接受 PNG、JPEG、GIF 与 BMP，最多 12 MiB 和 2400 万像素。普通附件支持任意类型，最多 50 MiB。选中文件后确认目标才上传，支持取消和保存，下载按本人历史权限授权 | AttachmentTransferTest、AttachmentIntegrationTest、ChatWindowTest、FileDialogsTest |
 | 好友与独立群组 | 按昵称或用户名片段查找，双方确认好友关系，支持独立私聊许可、加群审核与邀请、管理员移交或解散。独立群的当前成员可查看成员名单，退群后保留已授权的历史 | SocialIntegrationTest、ChatWindowTest |
-| 会话导航与资料 | 「好友与群聊」显示好友与已加入的独立群，两个分类之外的旧记录可从「历史会话」打开。点击标题、群消息头像或成员可打开对应信息卡片。离开最新消息或查看定位结果时显示返回箭头 | ChatWindowTest |
+| 会话导航与资料 | 「好友与群聊」显示好友与已加入的独立群，其余会话可从「列表外的会话」打开。点列表空白保持当前会话。点击标题、群消息头像或成员可打开对应信息卡片。离开最新消息或查看定位结果时显示返回箭头 | ChatWindowTest |
+| 消息撤回 | 本人发出的消息 60 秒内可撤回。原位置显示提示，后续搜索和下载沿用撤回状态 | MessageRecallTest、AttachmentTransferTest、ChatWindowTest |
 | 未读定位与引用 | 进入会话定位本窗口的首条未读。右键可复制完整正文或引用，点击引用按本人历史权限定位 | ChatWindowTest、ConversationStoreTest、MessageTimelineTest、HistoryPersistenceTest |
 
 ## 用户流程

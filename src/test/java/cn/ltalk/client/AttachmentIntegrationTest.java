@@ -51,8 +51,9 @@ class AttachmentIntegrationTest {
                 assertFalse(upload.error(), upload.detail());
                 Message message = events.poll(5, TimeUnit.SECONDS);
                 assertNotNull(message);
-                assertEquals("原图.png", message.content());
+                assertEquals(kind == Attachment.Kind.IMAGE ? "[图片]" : "原图.png", message.content());
                 assertEquals(kind, message.attachment().kind());
+                assertEquals(kind == Attachment.Kind.IMAGE ? "图片.png" : "原图.png", message.attachment().name());
                 if (kind == Attachment.Kind.IMAGE) {
                     assertNotNull(ChatImage.decodeThumbnail(message.attachment().thumbnail()));
                     var preview = run(done -> channel.start(AttachmentChannel.Request.download(ConversationScope.PUBLIC,
@@ -87,9 +88,12 @@ class AttachmentIntegrationTest {
             try (Peer alice = Peer.login(server.port(), "alice")) {
                 alice.send(Message.of(MessageType.HISTORY_VIEW_REQUEST).requestId("image-history")
                         .historyMode("SEARCH").conversationId(ConversationScope.PUBLIC).content("原图").build());
-                assertNotNull(alice.type(MessageType.HISTORY_VIEW_ROW).record().attachment());
-                assertNotNull(alice.type(MessageType.HISTORY_VIEW_ROW).record().attachment());
-                alice.type(MessageType.HISTORY_VIEW_END);
+                assertEquals(Attachment.Kind.FILE, alice.type(MessageType.HISTORY_VIEW_ROW).record().attachment().kind());
+                assertEquals(MessageType.HISTORY_VIEW_END, alice.await(m -> "image-history".equals(m.requestId())).type());
+                alice.send(Message.of(MessageType.HISTORY_VIEW_REQUEST).requestId("image-marker")
+                        .historyMode("SEARCH").conversationId(ConversationScope.PUBLIC).content("[图片]").build());
+                assertEquals(Attachment.Kind.IMAGE, alice.type(MessageType.HISTORY_VIEW_ROW).record().attachment().kind());
+                assertEquals(MessageType.HISTORY_VIEW_END, alice.await(m -> "image-marker".equals(m.requestId())).type());
             }
         }
     }

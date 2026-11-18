@@ -51,6 +51,7 @@ public final class HistoryExport implements AutoCloseable {
             if (!first) writer.write(','); writer.write('\n');
             var json = JSON.toJsonTree(record).getAsJsonObject();
             if (record.replyTo() == null) json.remove("replyTo");
+            if (!record.isRecalled()) json.remove("recalled");
             if (record.attachment() == null) json.remove("attachment");
             else json.getAsJsonObject("attachment").remove("thumbnail");
             writer.write(JSON.toJson(json));

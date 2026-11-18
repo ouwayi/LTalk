@@ -16,14 +16,19 @@ class HistoryExportTest {
             export.append(record);
             export.append(new ChatRecord("reply", "GROUP:PUBLIC", "alice", null, record.content(),
                     "GROUP_MESSAGE", record.sentAt(), record.messageId()));
+            export.append(new ChatRecord("recalled", "GROUP:PUBLIC", "alice", null, "private text",
+                    "GROUP_MESSAGE", record.sentAt()).asRecalled());
             assertFalse(Files.exists(path)); assertEquals(path, export.finish());
         }
-        var lines = Files.readAllLines(path); assertEquals(4, lines.size()); assertEquals("[", lines.get(0)); assertEquals("]", lines.get(3));
+        var lines = Files.readAllLines(path); assertEquals(5, lines.size()); assertEquals("[", lines.get(0)); assertEquals("]", lines.get(4));
         assertTrue(lines.get(1).endsWith(",")); assertTrue(lines.get(2).contains("\\n"));
         var rows = JsonParser.parseString(Files.readString(path)).getAsJsonArray();
-        assertEquals(2, rows.size());
+        assertEquals(3, rows.size());
         assertFalse(rows.get(0).getAsJsonObject().has("replyTo"));
+        assertFalse(rows.get(0).getAsJsonObject().has("recalled"));
         assertEquals(record.messageId(), rows.get(1).getAsJsonObject().get("replyTo").getAsString());
+        assertTrue(rows.get(2).getAsJsonObject().get("recalled").getAsBoolean());
+        assertEquals(ChatRecord.RECALLED_CONTENT, rows.get(2).getAsJsonObject().get("content").getAsString());
     }
     @Test void replacementRequiresConsentAndFailureNeverTruncatesExistingDestination() throws Exception {
         Path path = directory.resolve("existing.json"); Files.writeString(path, "original");

@@ -72,6 +72,7 @@ final class ArchiveView {
     }
 
     private boolean matches(ChatRecord record, String needle, Map<String, String> names) {
+        if (record.isRecalled()) return false;
         return record.content().toLowerCase(Locale.ROOT).contains(needle)
                 || record.sender().toLowerCase(Locale.ROOT).contains(needle)
                 || names.computeIfAbsent(record.sender(), user -> {

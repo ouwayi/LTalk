@@ -16,6 +16,14 @@ public record Attachment(Kind kind, String name, long size, String thumbnail) {
     public static final int IDLE_MILLIS = 15_000;
     public static final int TRANSFER_SECONDS = 120;
 
+    public String messageContent() { return kind == Kind.IMAGE ? "[图片]" : name; }
+
+    public Attachment withoutOriginalImageName() {
+        if (kind != Kind.IMAGE) return this;
+        String suffix = name.substring(name.lastIndexOf('.')).toLowerCase(Locale.ROOT);
+        return new Attachment(kind, "图片" + suffix, size, thumbnail);
+    }
+
     public void validateUpload() throws ProtocolException {
         if (kind == null || name == null || !name.equals(safeName(name)) || thumbnail != null || size < 0)
             throw new ProtocolException("BAD_ATTACHMENT", "无效的文件信息");

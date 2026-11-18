@@ -23,7 +23,7 @@ final class SocialDialog extends JDialog {
     }
 
     enum View {
-        REQUESTS("请求"), FRIENDS("好友"), USERS("查找用户"), GROUPS("查找群组");
+        REQUESTS("通知"), FRIENDS("好友"), USERS("查找用户"), GROUPS("查找群组");
         private final String label;
         View(String label) { this.label = label; }
         @Override public String toString() { return label; }
@@ -168,7 +168,7 @@ final class SocialDialog extends JDialog {
         if (browsing()) status.setText(userSearch ? "可输入昵称或用户名的一部分" : "留空可浏览群组");
         else {
             fillState();
-            status.setText(rows.isEmpty() ? (view.getSelectedItem() == View.FRIENDS ? "暂无好友" : "暂无请求") : " ");
+            status.setText(rows.isEmpty() ? (view.getSelectedItem() == View.FRIENDS ? "暂无好友" : "暂无通知") : " ");
         }
         buttons();
     }

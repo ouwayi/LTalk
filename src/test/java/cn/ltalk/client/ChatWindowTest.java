@@ -84,10 +84,84 @@ class ChatWindowTest {
                     Message uploaded = observer.await(message -> message.type() == MessageType.GROUP_MESSAGE
                             && message.attachment() != null);
                     assertEquals(kind, uploaded.attachment().kind());
-                    assertEquals(selected.getFileName().toString(), uploaded.attachment().name());
+                    if (kind == Attachment.Kind.IMAGE) {
+                        assertEquals("图片.png", uploaded.attachment().name());
+                        awaitEdt(() -> find(window, "previewImage") != null);
+                        onEdt(() -> {
+                            assertFalse(history(window).contains(selected.getFileName().toString()));
+                            assertNull(find(window, "messageText"));
+                        });
+                    } else {
+                        assertEquals(selected.getFileName().toString(), uploaded.attachment().name());
+                        awaitEdt(() -> find(window, "fileAttachmentCard") != null);
+                        onEdt(() -> {
+                            assertTrue(history(window).contains(selected.getFileName().toString()));
+                            render(window, 1100, 760, "attachment-cards-light.png");
+                            window.applyAppearance(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK), false);
+                            window.getContentPane().setSize(420, 680);
+                            layout(window.getContentPane());
+                            openPublic(window);
+                        });
+                        awaitEdt(() -> button(window, "previewImage").getIcon() != null);
+                        onEdt(() -> {
+                            render(window, 420, 680, "attachment-cards-dark-narrow.png");
+                            assertTrue(find(window, "chatPane").isVisible());
+                        });
+                    }
                     awaitEdt(() -> java.util.Arrays.stream(window.getOwnedWindows())
                             .noneMatch(child -> child.isVisible() && "attachmentTransfer".equals(child.getName())));
                 }
+            }
+        } finally { closeWindow(ref); }
+    }
+
+    @Test @Timeout(25)
+    void sidebarMenuBlankClicksAndRecallUseTheirVisibleEntryPoints() throws Exception {
+        AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
+            server.start();
+            server.accounts().register("alice", "Alice", "test123!", false);
+            try (Peer bob = Peer.login(server.port(), "bob")) {
+                onEdt(() -> ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice",
+                        appearanceDirectory.resolve("recall.properties"))));
+                ChatWindow window = ref.get();
+                login(window);
+                awaitEdt(() -> sidebarIds(window).contains(ConversationId.privateWith("bob")));
+                onEdt(() -> {
+                    ChatPopupMenu menu = window.socialMenu();
+                    assertEquals("通知", ((JMenuItem) menu.getComponent(0)).getText());
+                    assertEquals("列表外的会话", ((JMenuItem) find(menu, "archivedConversations")).getText());
+                    assertNull(find(menu, "newPublic"));
+                    assertNull(find(menu, "socialFriends"));
+                    JButton more = button(window, "createConversation");
+                    assertEquals("更多操作", more.getAccessibleContext().getAccessibleName());
+                    assertEquals(LineIcon.Kind.PLUS, ((LineIcon) more.getIcon()).kind());
+                    render(window, 980, 740, "more-operations-sidebar.png");
+                    JList<?> rows = list(window);
+                    int blank = rows.getCellBounds(1, 1).y + rows.getCellBounds(1, 1).height + 15;
+                    assertTrue(blank < rows.getHeight());
+                    for (int event : List.of(MouseEvent.MOUSE_PRESSED, MouseEvent.MOUSE_RELEASED, MouseEvent.MOUSE_CLICKED))
+                        rows.dispatchEvent(new MouseEvent(rows, event, System.currentTimeMillis(), 0, 20, blank, 1, false, MouseEvent.BUTTON1));
+                    assertEquals("公共聊天室", label(window, "conversationTitle").getText());
+                    button(window, "conversationIdentity").doClick();
+                    assertNull(button(window, "infoClearHistory").getToolTipText());
+                    button(window, "closeConversationInfo").doClick();
+                    area(window, "input").setText("通过菜单撤回");
+                    button(window, "send").doClick();
+                });
+                Message sent = bob.type(MessageType.GROUP_MESSAGE);
+                awaitEdt(() -> messageAction(window, "通过菜单撤回", "recallMessage") != null);
+                onEdt(() -> {
+                    assertEquals("删除这条信息", messageDelete(window, "通过菜单撤回").getText());
+                    messageAction(window, "通过菜单撤回", "recallMessage").doClick();
+                });
+                assertEquals(sent.messageId(), bob.type(MessageType.MESSAGE_RECALLED).messageId());
+                awaitEdt(() -> history(window).contains("[消息已撤回]"));
+                onEdt(() -> {
+                    assertFalse(history(window).contains("通过菜单撤回"));
+                    assertNull(messageAction(window, "[消息已撤回]", "recallMessage"));
+                    assertTrue(summary(window, ConversationId.PUBLIC).preview().contains("[消息已撤回]"));
+                });
             }
         } finally { closeWindow(ref); }
     }
@@ -1357,7 +1431,12 @@ class ChatWindowTest {
     }
 
     private static void openPublic(ChatWindow window) {
-        ((JMenuItem) find(window.socialMenu(), "newPublic")).doClick();
+        ((JToggleButton) find(window, "group")).doClick();
+        JList<ConversationStore.Summary> rows = list(window);
+        ConversationStore.Summary room = summary(window, ConversationId.PUBLIC);
+        if (room.equals(rows.getSelectedValue())) {
+            rows.getActionMap().get("open-conversation").actionPerformed(new java.awt.event.ActionEvent(rows, 0, "open-conversation"));
+        } else rows.setSelectedValue(room, true);
     }
 
     private static ConversationStore.Summary openArchived(ChatWindow window, ConversationId id) {

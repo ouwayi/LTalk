@@ -39,12 +39,14 @@ public final class MessageTimeline extends JScrollPane {
     private Consumer<ConversationStore.Entry> onDelete = entry -> { };
     private Consumer<ConversationStore.Entry> onRecover = entry -> { };
     private Consumer<ConversationStore.Entry> onReply = entry -> { };
+    private Consumer<ConversationStore.Entry> onRecall = entry -> { };
     private Consumer<String> onCopy = text -> { }, onLocate = id -> { };
     private Consumer<String> onAvatar;
     private BiConsumer<ConversationStore.Entry, Boolean> onAttachment = (entry, preview) -> { };
     private boolean deletionEnabled, replyEnabled;
     public void deletion(boolean enabled, Consumer<ConversationStore.Entry> action) { deletionEnabled = enabled; onDelete = action; }
     public void onRecover(Consumer<ConversationStore.Entry> action) { onRecover = action; }
+    public void onRecall(Consumer<ConversationStore.Entry> action) { onRecall = action; }
     public void messageActions(Consumer<ConversationStore.Entry> reply, Consumer<String> copy, Consumer<String> locate) {
         onReply = reply;
         onCopy = copy;
@@ -170,7 +172,7 @@ public final class MessageTimeline extends JScrollPane {
             if (message) {
                 boolean own = entry.from().equals(self);
                 BubbleRow bubble = row == null ? new BubbleRow(entry, own, palette,
-                        () -> onDelete.accept(entry), () -> onRecover.accept(entry), () -> onReply.accept(entry),
+                        () -> onDelete.accept(entry), () -> onRecall.accept(entry), () -> onRecover.accept(entry), () -> onReply.accept(entry),
                         () -> onCopy.accept(entry.content()), () -> onLocate.accept(entry.replyTo()),
                         () -> onAttachment.accept(entry, true), () -> onAttachment.accept(entry, false)) : (BubbleRow) row;
                 if (row == null && !own) {
@@ -181,7 +183,8 @@ public final class MessageTimeline extends JScrollPane {
                 bubble.located(highlightedId != null && highlightedId.equals(entry.messageId()));
                 bubble.startsRun(!shownInRun);
                 bubble.delete.setEnabled(deletionEnabled && entry.messageId() != null);
-                bubble.reply.setEnabled(replyEnabled && entry.messageId() != null);
+                bubble.reply.setEnabled(replyEnabled && entry.messageId() != null && entry.kind() != ConversationStore.EntryKind.RECALLED);
+                if (bubble.recall != null) bubble.recall.setEnabled(connected);
                 if (bubble.download != null) bubble.download.setEnabled(connected);
                 if (bubble.preview != null) bubble.preview.setEnabled(connected);
                 if (entry.replyTo() != null) bubble.quoteLabel(quoteText(originals.get(entry.replyTo())));
@@ -205,7 +208,8 @@ public final class MessageTimeline extends JScrollPane {
     }
 
     private static boolean isChat(ConversationStore.Entry entry) {
-        return entry.kind() == ConversationStore.EntryKind.MESSAGE || entry.kind() == ConversationStore.EntryKind.OUTGOING;
+        return entry.kind() == ConversationStore.EntryKind.MESSAGE || entry.kind() == ConversationStore.EntryKind.OUTGOING
+                || entry.kind() == ConversationStore.EntryKind.RECALLED;
     }
 
     private static boolean matches(ConversationStore.Entry entry, String displayName, String needle) {
@@ -244,6 +248,9 @@ public final class MessageTimeline extends JScrollPane {
 
     public static String quoteText(ConversationStore.Entry original) {
         if (original == null) return "查看引用消息";
+        Attachment attachment = original.attachment();
+        if (attachment != null && attachment.kind() == Attachment.Kind.IMAGE)
+            return original.from() + "：" + attachment.messageContent();
         String content = original.content().replaceAll("[\\r\\n\\t]+", " ");
         if (content.codePointCount(0, content.length()) > 72)
             content = content.substring(0, content.offsetByCodePoints(0, 72)) + "…";
@@ -379,61 +386,70 @@ public final class MessageTimeline extends JScrollPane {
         private final MessageText body;
         private final JPanel bodyStack;
         private final JLabel sender;
-        private final JMenuItem delete, reply;
+        private final JMenuItem delete, reply, recall;
+        private final JLabel fileDetails;
         private final JButton quote, preview, download;
         private final JPanel footer = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
         private Dimension measured;
         private int measuredWidth = -1;
         private boolean startsRun = true;
         private boolean located;
-        BubbleRow(ConversationStore.Entry entry, boolean own, ThemePalette palette, Runnable onDelete, Runnable onRecover,
+        BubbleRow(ConversationStore.Entry entry, boolean own, ThemePalette palette, Runnable onDelete, Runnable onRecall, Runnable onRecover,
                   Runnable onReply, Runnable onCopy, Runnable onLocate, Runnable onPreview, Runnable onDownload) {
             super(null); this.own = own; setOpaque(false);
             bubble = new ChatTheme.RoundedPanel(new BorderLayout(0, 3), 20, own ? palette.outgoing() : palette.surface(), true);
             bubble.setBorder(new EmptyBorder(9, 13, 7, 13));
-            body = new MessageText(entry.content(), palette);
-            ChatPopupMenu actions = new ChatPopupMenu(body, "聊天记录");
-            reply = actions.action("replyMessage", "引用回复", LineIcon.Kind.BACK, onReply);
-            actions.action("copyMessage", "复制正文", LineIcon.Kind.COPY, onCopy);
-            actions.addSeparator();
-            delete = actions.action("deleteMessage", "删除这条记录（仅本人）", LineIcon.Kind.CLOSE, onDelete);
-            body.setComponentPopupMenu(actions); bubble.setComponentPopupMenu(actions); setComponentPopupMenu(actions);
             Attachment attachment = entry.attachment();
             boolean image = attachment != null && attachment.kind() == Attachment.Kind.IMAGE;
-            if (entry.replyTo() != null || image) {
+            boolean recalled = entry.kind() == ConversationStore.EntryKind.RECALLED;
+            body = image ? null : new MessageText(attachment == null ? entry.content() : attachment.name(), palette);
+            if (recalled) body.setForeground(palette.muted());
+            ChatTheme.apply(bubble, palette);
+            ChatPopupMenu actions = new ChatPopupMenu(bubble, "聊天记录");
+            reply = actions.action("replyMessage", "引用回复", LineIcon.Kind.BACK, onReply);
+            if (!image && !recalled) actions.action("copyMessage", "复制正文", LineIcon.Kind.COPY, onCopy);
+            actions.addSeparator();
+            recall = own && entry.messageId() != null && !recalled
+                    ? actions.action("recallMessage", "撤回消息", LineIcon.Kind.BACK, onRecall) : null;
+            delete = actions.action("deleteMessage", "删除这条信息", LineIcon.Kind.CLOSE, onDelete);
+            if (body != null) body.setComponentPopupMenu(actions);
+            bubble.setComponentPopupMenu(actions); setComponentPopupMenu(actions);
+            JComponent content = body;
+            if (attachment != null && !image) {
+                body.setFont(ChatTheme.FONT.deriveFont(Font.BOLD, 14f));
+                fileDetails = ChatTheme.label("文件 · " + fileSize(attachment.size()), 11, palette.muted(), false);
+                fileDetails.setInheritsPopupMenu(true);
+                content = fileCard(body, fileDetails, palette);
+            } else fileDetails = null;
+            if (entry.replyTo() != null) {
                 bodyStack = new JPanel(new BorderLayout(0, 4));
                 bodyStack.setOpaque(false);
                 bodyStack.setInheritsPopupMenu(true);
-                bodyStack.add(body, BorderLayout.CENTER);
-                if (entry.replyTo() != null) {
-                    quote = ChatTheme.pill("");
-                    quote.setName("quoteLink");
-                    quote.putClientProperty("html.disable", true);
-                    quote.setHorizontalAlignment(SwingConstants.LEADING);
-                    quote.setBorder(new EmptyBorder(4, 8, 4, 8));
-                    quote.addActionListener(e -> onLocate.run());
-                    quote.setComponentPopupMenu(actions);
-                    ChatTheme.apply(quote, palette);
-                    bodyStack.add(quote, BorderLayout.NORTH);
-                } else quote = null;
-                if (image) {
-                    preview = ChatTheme.pill("查看原图");
-                    preview.setName("previewImage");
-                    preview.setPreferredSize(new Dimension(118, 110));
-                    preview.setToolTipText("查看原图");
-                    preview.addActionListener(e -> onPreview.run());
-                    preview.setComponentPopupMenu(actions);
-                    ChatTheme.apply(preview, palette);
-                    bodyStack.add(preview, BorderLayout.SOUTH);
-                    loadThumbnail(preview, attachment.thumbnail());
-                } else preview = null;
-                bubble.add(bodyStack, BorderLayout.CENTER);
+                quote = ChatTheme.pill("");
+                quote.setName("quoteLink");
+                quote.putClientProperty("html.disable", true);
+                quote.setHorizontalAlignment(SwingConstants.LEADING);
+                quote.setBorder(new EmptyBorder(4, 8, 4, 8));
+                quote.addActionListener(e -> onLocate.run());
+                quote.setComponentPopupMenu(actions);
+                ChatTheme.apply(quote, palette);
+                bodyStack.add(quote, BorderLayout.NORTH);
             } else {
                 bodyStack = null;
                 quote = null;
-                preview = null;
-                bubble.add(body, BorderLayout.CENTER);
             }
+            if (image) {
+                preview = ChatTheme.pill("查看原图");
+                preview.setName("previewImage");
+                preview.setPreferredSize(new Dimension(118, 110));
+                preview.addActionListener(e -> onPreview.run());
+                preview.setComponentPopupMenu(actions);
+                ChatTheme.apply(preview, palette);
+                loadThumbnail(preview, attachment.thumbnail());
+                content = preview;
+            } else preview = null;
+            if (bodyStack != null) bodyStack.add(content, BorderLayout.CENTER);
+            bubble.add(bodyStack == null ? content : bodyStack, BorderLayout.CENTER);
             sender = ChatTheme.label("", 12, avatarColor(entry.from(), palette.dark()), true);
             sender.setInheritsPopupMenu(true);
             if (!own) bubble.add(sender, BorderLayout.NORTH);
@@ -457,7 +473,6 @@ public final class MessageTimeline extends JScrollPane {
                 download = ChatTheme.pill("保存");
                 download.setName("saveAttachment");
                 download.setBorder(new EmptyBorder(2, 5, 2, 5));
-                download.setToolTipText("保存文件 · " + attachment.size() + " 字节");
                 download.addActionListener(e -> onDownload.run());
                 ChatTheme.apply(download, palette);
                 footer.add(download);
@@ -474,6 +489,28 @@ public final class MessageTimeline extends JScrollPane {
             }
             bubble.add(footer, BorderLayout.SOUTH); add(bubble);
         }
+        private static JPanel fileCard(MessageText filename, JLabel details, ThemePalette palette) {
+            JPanel card = new ChatTheme.RoundedPanel(new BorderLayout(8, 0), 14, palette.accentSoft(), false);
+            card.setName("fileAttachmentCard");
+            card.setBorder(new EmptyBorder(8, 9, 8, 9));
+            card.setInheritsPopupMenu(true);
+            JLabel icon = new JLabel(new LineIcon(LineIcon.Kind.FILE, ChatTheme.BLUE, 26));
+            icon.setInheritsPopupMenu(true);
+            card.add(icon, BorderLayout.WEST);
+            JPanel labels = new JPanel(new BorderLayout(0, 3));
+            labels.setOpaque(false);
+            labels.setInheritsPopupMenu(true);
+            labels.add(filename, BorderLayout.CENTER);
+            labels.add(details, BorderLayout.SOUTH);
+            card.add(labels);
+            ChatTheme.apply(card, palette);
+            return card;
+        }
+        private static String fileSize(long bytes) {
+            if (bytes < 1024) return bytes + " 字节";
+            if (bytes < 1024 * 1024) return String.format(Locale.ROOT, "%.1f KiB", bytes / 1024.0);
+            return String.format(Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024));
+        }
         private static void loadThumbnail(JButton button, String thumbnail) {
             if (thumbnail == null) return;
             new SwingWorker<ImageIcon, Void>() {
@@ -484,6 +521,7 @@ public final class MessageTimeline extends JScrollPane {
                     try {
                         button.setIcon(get());
                         button.setText("");
+                        button.setToolTipText("查看原图");
                         button.getAccessibleContext().setAccessibleName("查看原图");
                     } catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
                     catch (java.util.concurrent.ExecutionException ignored) { /* Keep the original-image action. */ }
@@ -493,13 +531,13 @@ public final class MessageTimeline extends JScrollPane {
         void quoteLabel(String label) {
             if (label.equals(quote.getText())) return;
             quote.setText(label);
-            quote.setToolTipText(label + " · 定位原消息");
+            quote.getAccessibleContext().setAccessibleDescription("定位原消息");
             measured = null;
         }
         void setDisplayName(String name) {
             if (name.equals(sender.getText())) return;
             sender.setText(name);
-            body.getAccessibleContext().setAccessibleName((own ? "我" : name) + "的消息");
+            if (body != null) body.getAccessibleContext().setAccessibleName((own ? "我" : name) + "的消息");
             measured = null;
         }
         void startsRun(boolean value) {
@@ -518,17 +556,23 @@ public final class MessageTimeline extends JScrollPane {
         Dimension measure(int availableWidth) {
             if (measured != null && measuredWidth == availableWidth) return measured;
             int maximum = Math.max(120, Math.min(560, availableWidth - 86));
-            int natural = Math.max(100, body.naturalWidth() + 34);
+            int natural = body == null ? 100 : Math.max(100, body.naturalWidth() + 34);
+            if (fileDetails != null) natural = Math.max(natural, fileDetails.getPreferredSize().width + 34) + 52;
             if (quote != null) natural = Math.max(natural, quote.getPreferredSize().width + 26);
             if (preview != null) natural = Math.max(natural, preview.getPreferredSize().width + 26);
             natural = Math.max(natural, footer.getPreferredSize().width + 26);
             boolean showSender = !own && startsRun;
             if (showSender) natural = Math.max(natural, sender.getPreferredSize().width + 26);
             int width = Math.min(maximum, natural);
-            body.setSize(Math.max(70, width - 26), Short.MAX_VALUE);
-            int height = body.getPreferredSize().height + footer.getPreferredSize().height + 22
+            int contentHeight;
+            if (preview != null) contentHeight = preview.getPreferredSize().height;
+            else {
+                body.setSize(Math.max(1, width - 26 - (fileDetails == null ? 0 : 52)), Short.MAX_VALUE);
+                contentHeight = body.getPreferredSize().height;
+                if (fileDetails != null) contentHeight = Math.max(26, contentHeight + fileDetails.getPreferredSize().height + 3) + 16;
+            }
+            int height = contentHeight + footer.getPreferredSize().height + 22
                     + (showSender ? sender.getPreferredSize().height + 3 : 0) + (quote != null ? quote.getPreferredSize().height + 4 : 0);
-            if (preview != null) height += preview.getPreferredSize().height + 4;
             measuredWidth = availableWidth; measured = new Dimension(width, Math.max(52, height)); return measured;
         }
         @Override public void doLayout() {

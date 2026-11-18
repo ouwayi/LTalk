@@ -76,10 +76,11 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private final JButton send = ChatTheme.primary("");
     private final JToggleButton group = ChatTheme.choice("公共聊天室");
     private final JToggleButton contacts = ChatTheme.choice("好友与群聊");
-    private final JButton requestInbox = ChatTheme.pill("请求");
+    private static final String OTHER_CONVERSATIONS = "列表外的会话";
+    private final JButton requestInbox = ChatTheme.pill("通知");
     private final JButton back = ChatTheme.iconButton(LineIcon.Kind.BACK, "返回会话列表");
     private final JButton menu = ChatTheme.iconButton(LineIcon.Kind.MENU, "菜单与连接设置");
-    private final JButton create = ChatTheme.iconButton(LineIcon.Kind.COMPOSE, "好友与群组");
+    private final JButton create = ChatTheme.iconButton(LineIcon.Kind.PLUS, "更多操作");
     private final JButton chatSearch = ChatTheme.iconButton(LineIcon.Kind.SEARCH, "搜索当前会话消息");
     private final JButton more = ChatTheme.iconButton(LineIcon.Kind.MORE, "会话更多操作");
     private final JButton attach = ChatTheme.iconButton(LineIcon.Kind.ATTACH, "发送附件");
@@ -144,6 +145,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         timeline.setContactProfiles(store::profile);
         timeline.onRecover(this::recoverMessage);
         timeline.messageActions(this::startReply, this::copyBody, this::locateOriginal);
+        timeline.onRecall(this::recallMessage);
         timeline.attachmentActions(this::receiveAttachment);
         send.setName("send"); group.setName("group"); back.setName("back"); menu.setName("menu");
         create.setName("createConversation"); attach.setName("attach"); emoji.setName("emoji"); input.setName("input");
@@ -339,8 +341,6 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             tabs.add(tab);
         }
         group.setSelected(true);
-        group.setToolTipText("显示公共聊天室与服务器在线用户");
-        contacts.setToolTipText("显示好友与已加入的群聊");
         requestInbox.setName("requestInbox");
         requestInbox.setVisible(false);
         requestInbox.addActionListener(e -> openSocial(SocialDialog.View.REQUESTS));
@@ -463,7 +463,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
 
     private void receiveAttachment(ConversationStore.Entry entry, boolean preview) {
-        if (!attachmentSession(sessionRevision) || shownMessage(entry.messageId()) == null || !canStartAttachment()) return;
+        ConversationStore.Entry current = shownMessage(entry.messageId());
+        if (!attachmentSession(sessionRevision) || current == null || current.attachment() == null || !canStartAttachment()) return;
         String selectedScope;
         try { selectedScope = scope(store.selectedId()); }
         catch (IOException ex) { feedback(ex.getMessage(), true); return; }
@@ -539,7 +540,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
                 dialog.dispose();
                 if (!attachmentSession(revision)) return;
                 feedback(result.detail(), result.error());
-                if (result.image() != null) showOriginalImage(request.attachment().name(), result.image());
+                if (result.image() != null) showOriginalImage(result.image());
             });
             transferDialog = dialog;
             dialog.pack();
@@ -558,12 +559,12 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         transferDialog = null;
     }
 
-    private void showOriginalImage(String filename, java.awt.image.BufferedImage original) {
+    private void showOriginalImage(java.awt.image.BufferedImage original) {
         JScrollPane view = new JScrollPane(new JLabel(new ImageIcon(original)));
         view.setPreferredSize(new Dimension(Math.min(680, original.getWidth() + 18), Math.min(480, original.getHeight() + 18)));
         ChatTheme.scroll(view, false);
         ChatTheme.apply(view, ThemePalette.of(appearance));
-        JOptionPane.showMessageDialog(this, view, filename, JOptionPane.PLAIN_MESSAGE);
+        JOptionPane.showMessageDialog(this, view, "查看原图", JOptionPane.PLAIN_MESSAGE);
     }
 
     private void recoverMessage(ConversationStore.Entry entry) {
@@ -582,7 +583,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
 
     private void startReply(ConversationStore.Entry entry) {
-        if (entry.messageId() == null || shownMessage(entry.messageId()) == null
+        if (entry.messageId() == null || shownMessage(entry.messageId()) != entry
                 || !store.canSend() || connectionState != ChatClient.State.CONNECTED) return;
         store.replyDraft(entry.messageId());
         refreshQuoteDraft();
@@ -606,7 +607,6 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             if (original == null) original = store.message(id);
             String label = original == null ? "正在引用一条消息" : MessageTimeline.quoteText(original);
             quoteDraftText.setText(label);
-            quoteDraftText.setToolTipText(label);
         }
         chatContent.revalidate();
         chatContent.repaint();
@@ -993,8 +993,14 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private void deleteMessage(ConversationStore.Entry entry) {
         if (entry.messageId() == null) return;
         try {
-            confirmDelete(scope(store.selectedId()), entry.messageId(), "删除这条记录？");
+            confirmDelete(scope(store.selectedId()), entry.messageId(), "删除这条信息？");
         } catch (IOException ex) { showError(ex.getMessage()); }
+    }
+    private void recallMessage(ConversationStore.Entry entry) {
+        if (connectionState != ChatClient.State.CONNECTED || entry.messageId() == null
+                || !store.self().equals(entry.from()) || shownMessage(entry.messageId()) != entry) return;
+        try { client.recallMessage(scope(store.selectedId()), entry.messageId()); }
+        catch (IOException ex) { feedback(ex.getMessage(), true); }
     }
     private void clearHistory() {
         try { confirmDelete(scope(store.selectedId()), null, "清空「" + store.selected().title() + "」的本人聊天记录？"); }
@@ -1049,6 +1055,18 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
     @Override public void onGroup(Message message) { receiveChat(message); }
     @Override public void onPrivate(Message message) { receiveChat(message); }
+    @Override public void onMessageRecalled(Message message) {
+        String id = message.messageId();
+        ConversationId target = store.recall(message.conversationId(), id);
+        refreshList();
+        if (target.equals(store.selectedId())) {
+            if (historyContext != null)
+                historyContext = historyContext.stream().map(entry -> id.equals(entry.messageId()) ? entry.asRecalled() : entry).toList();
+            if (historySearch != null) historySearch.removeRecalled(id);
+            renderTimeline();
+        }
+        if (message.requestId() != null) feedback("消息已撤回", false);
+    }
     private void receiveChat(Message message) {
         ConversationId destination = store.receive(message, historyContext == null && unreadLookup == null && timeline.followingLatest());
         refreshList();
@@ -1071,6 +1089,10 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         store.system(message.content()); if (store.selectedId().equals(ConversationId.PUBLIC)) renderTimeline(true);
     }
     @Override public void onError(Message message) {
+        if (message.requestId() != null && message.requestId().startsWith("recall-")) {
+            feedback(message.message(), true);
+            return;
+        }
         if ("HISTORY_DELETE_FAILED".equals(message.code())) {
             deletingHistory = false;
             chatSearch.setEnabled(connectionState == ChatClient.State.CONNECTED);
@@ -1298,9 +1320,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
 
     private void updateRequestIndicator() {
         long requests = incomingRequests();
-        create.setToolTipText(requests == 0 ? "好友与群组" : "好友与群组 · " + requests + " 条待处理请求");
-        create.getAccessibleContext().setAccessibleName(create.getToolTipText());
-        requestInbox.setText("请求 (" + requests + ")");
+        requestInbox.setText("通知 (" + requests + ")");
         requestInbox.setVisible(requests > 0);
     }
 
@@ -1637,26 +1657,20 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         ChatTheme.scroll(scroll, false);
         ChatTheme.apply(scroll, ThemePalette.of(appearance));
         long revision = sessionRevision;
-        if (JOptionPane.showConfirmDialog(this, scroll, "历史会话", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE)
+        if (JOptionPane.showConfirmDialog(this, scroll, OTHER_CONVERSATIONS, JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE)
                 == JOptionPane.OK_OPTION && revision == sessionRevision && picker.getSelectedValue() != null) {
             selectConversation(picker.getSelectedValue().id());
         }
     }
 
     ChatPopupMenu socialMenu() {
-        ChatPopupMenu popup = new ChatPopupMenu(create, "好友与群组");
-        popup.action("newPublic", "进入公共聊天室", LineIcon.Kind.USERS, () -> {
-            chooseSidebarTab(false);
-            selectConversation(ConversationId.PUBLIC);
-        });
-        JMenuItem archived = popup.action("archivedConversations", "历史会话", LineIcon.Kind.BACK, this::openArchivedConversation);
+        ChatPopupMenu popup = new ChatPopupMenu(create, null);
+        long requests = incomingRequests();
+        socialItem(popup, "socialRequests", requests == 0 ? "通知" : "通知 (" + requests + ")", () -> openSocial(SocialDialog.View.REQUESTS));
+        JMenuItem archived = popup.action("archivedConversations", OTHER_CONVERSATIONS, LineIcon.Kind.BACK, this::openArchivedConversation);
         archived.setEnabled(!archivedConversations().isEmpty());
         popup.addSeparator();
         socialItem(popup, "socialFindUser", "查找用户", () -> openSocial(SocialDialog.View.USERS));
-        socialItem(popup, "socialFriends", "好友", () -> openSocial(SocialDialog.View.FRIENDS));
-        long requests = incomingRequests();
-        socialItem(popup, "socialRequests", requests == 0 ? "请求" : "请求 (" + requests + ")", () -> openSocial(SocialDialog.View.REQUESTS));
-        popup.addSeparator();
         socialItem(popup, "socialFindGroup", "查找群组", () -> openSocial(SocialDialog.View.GROUPS));
         socialItem(popup, "socialCreateGroup", "创建群组", this::createGroup);
         return popup;

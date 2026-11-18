@@ -15,7 +15,7 @@ public final class ConversationScope {
     public static void validate(String self, String scope) throws ProtocolException {
         if (scope == null || PUBLIC.equals(scope)) return; // Legacy full-account export API.
         if (isGroup(scope)) {
-            uuid(groupId(scope));
+            groupId(scope);
             return;
         }
         String[] parts = scope.split(":", -1);
@@ -30,7 +30,11 @@ public final class ConversationScope {
     public static String group(String id) { return GROUP + id; }
     public static String groupId(String scope) throws ProtocolException {
         if (!isGroup(scope)) throw new ProtocolException("BAD_MESSAGE", "请选择群组");
-        return uuid(scope.substring(GROUP.length()));
+        return groupNumber(scope.substring(GROUP.length()));
+    }
+    public static String groupNumber(String id) throws ProtocolException {
+        if (id != null && id.matches("[0-9]{10}")) return id;
+        throw new ProtocolException("BAD_MESSAGE", "群号须为 10 位数字");
     }
     public static String uuid(String id) throws ProtocolException {
         try {

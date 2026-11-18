@@ -22,6 +22,14 @@ public final class ConversationList extends JList<ConversationStore.Summary> {
         });
         addMouseListener(new MouseAdapter() { @Override public void mouseExited(MouseEvent e) { hover = -1; repaint(); } });
     }
+    @Override protected void processMouseEvent(MouseEvent event) {
+        if (event.getID() == MouseEvent.MOUSE_PRESSED || event.getID() == MouseEvent.MOUSE_CLICKED) {
+            int index = locationToIndex(event.getPoint());
+            Rectangle bounds = index < 0 ? null : getCellBounds(index, index);
+            if (bounds == null || !bounds.contains(event.getPoint())) return;
+        }
+        super.processMouseEvent(event);
+    }
     @Override public String getToolTipText(MouseEvent event) {
         int index = locationToIndex(event.getPoint());
         if (index < 0 || !getCellBounds(index, index).contains(event.getPoint())) return null;
