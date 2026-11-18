@@ -2,7 +2,7 @@
 
 更新于 **2026-11-18（Asia/Shanghai）**。工作目录为 `D:\Agent\AllProjects\LTalk`，核对时分支为 `master`，未配置远端。使用 **Java 17 目标字节码、Swing、Maven、SQLite 表结构 v2、TCP 协议 v7 和 UDP 发现 v1**，提供可选 TLS 公网模式。接续时先核对 Git 状态和提交。
 
-当前功能基线为阶段 44，包括左侧菜单和列表交互、图片和文件卡片、60 秒撤回及 10 位群号。阶段 43 记录上一版 SQLite 的云端基本验收。完整回归和打包使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。
+当前功能基线为阶段 45，发送确认和创建群组弹窗采用无图标样式。阶段 44 改进了会话列表和附件展示，新增 60 秒撤回与 10 位群号。阶段 43 记录上一版 SQLite 的云端基本验收。完整回归和打包使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。
 
 ## 从哪里接手
 
@@ -14,7 +14,7 @@
 
 新对话可以直接发送：
 
-> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 `AGENTS.md` 阅读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。当前功能基线为阶段 44，支持 60 秒撤回和 10 位群号。请按我接下来指定的功能继续。
+> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 `AGENTS.md` 阅读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。当前功能基线为阶段 45，支持 60 秒撤回和 10 位群号。请按我接下来指定的功能继续。
 
 ## 当前功能
 
@@ -81,6 +81,7 @@
 
 ## 已有验证与后续核对
 
+- 弹窗图标调整于 2026-11-18 完整离线打包，**151 项通过，0 失败、错误或跳过**。窗口回归覆盖图片、文件及建群弹窗的无图标样式和确认、取消流程。日志 `.tools/dialog-icons-package.log`。
 - 聊天体验改进于 2026-11-18 完整离线打包，**151 项通过，0 失败、错误或跳过**。覆盖 60 秒边界、撤回授权与持久化、旧群关联迁移、菜单、空白点击及图片和文件。Windows 打包 JAR 在隔离目录启动并重启后保留撤回结果。日志 `.tools/chat-details-verified.log`。[测试报告](test-report.md#聊天体验改进2026-11-18阶段-44)
 - SQLite 启动简化于 2026-11-18 完整离线打包，**147 项通过，0 失败、错误或跳过**，约 2:21。打包 JAR 在独立目录用短命令恢复账号与历史，并在 Java 25 严格原生访问模式下成功启动。日志 `.tools/sqlite-startup-final.log`。[测试报告](test-report.md#sqlite-启动简化2026-11-18阶段-42)
 - SQLite 服务端存储于 2026-11-18 完整离线打包，**146 项通过，0 失败、错误或跳过**，约 2:18。验证新库和版本检查、事务回滚、权限及备份恢复，并使用打包 JAR 在独立目录验证注册、发消息和进程重启后恢复。日志 `.tools/sqlite-final.log`。独立 Java 17 回归待验证。[测试报告](test-report.md#sqlite-存储2026-11-18阶段-41)

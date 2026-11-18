@@ -454,7 +454,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         String filename = Attachment.safeName(path.getFileName().toString());
         Object[] options = {"发送", "取消"};
         int confirmed = JOptionPane.showOptionDialog(this, "发送到：" + recipientLabel + "\n文件：" + filename,
-                "确认发送", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[1]);
+                "确认发送", JOptionPane.YES_NO_OPTION, JOptionPane.PLAIN_MESSAGE, null, options, options[1]);
         if (confirmed != 0 || !attachmentSession(revision)) return;
         String groupScope = target != null ? null
                 : selected.equals(ConversationId.PUBLIC) ? ConversationScope.PUBLIC : ConversationScope.group(selected.key());
@@ -1396,7 +1396,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         form.add(name, BorderLayout.CENTER);
         form.add(review, BorderLayout.SOUTH);
         long revision = sessionRevision;
-        if (JOptionPane.showConfirmDialog(this, form, "创建群组", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION
+        if (JOptionPane.showConfirmDialog(this, form, "创建群组",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION
                 || revision != sessionRevision) return;
         socialChange(SocialAction.GROUP_CREATE, b -> b.nickname(name.getText()).content(review.isSelected() ? "REVIEW" : "OPEN"), "群组已创建");
     }

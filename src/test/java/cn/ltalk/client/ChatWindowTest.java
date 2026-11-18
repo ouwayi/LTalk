@@ -71,6 +71,8 @@ class ChatWindowTest {
                         JOptionPane pane = uploadConfirmation(window);
                         assertTrue(pane.getMessage().toString().contains("公共聊天室"));
                         assertTrue(pane.getMessage().toString().contains(selected.getFileName().toString()));
+                        assertEquals(JOptionPane.PLAIN_MESSAGE, pane.getMessageType());
+                        assertNull(pane.getIcon());
                         assertEquals("取消", pane.getInitialValue());
                     });
                     observer.assertNo(message -> message.attachment() != null, 100);
@@ -167,8 +169,12 @@ class ChatWindowTest {
     }
 
     private static JOptionPane uploadConfirmation(ChatWindow window) {
+        return visibleOptionPane(window, "确认发送");
+    }
+
+    private static JOptionPane visibleOptionPane(ChatWindow window, String title) {
         for (Window child : window.getOwnedWindows()) {
-            if (child instanceof JDialog dialog && dialog.isVisible() && "确认发送".equals(dialog.getTitle()))
+            if (child instanceof JDialog dialog && dialog.isVisible() && title.equals(dialog.getTitle()))
                 return findOptionPane(dialog);
         }
         return null;
@@ -1249,22 +1255,19 @@ class ChatWindowTest {
                 button(a, "send").doClick();
             });
             awaitEdt(() -> hasSendStatus(a, "已确认") && history(a).contains("给离线好友留言"));
-            onEdt(() -> {
-                Timer timer = new Timer(30, null);
-                timer.addActionListener(event -> {
-                    for (Window child : a.getOwnedWindows()) if (child instanceof JDialog dialog && dialog.isVisible()) {
-                        var name = find(dialog, "groupName");
-                        if (name instanceof JTextField text) {
-                            timer.stop();
-                            text.setText("UI 设计群");
-                            findOptionPane(dialog).setValue(JOptionPane.OK_OPTION);
-                            break;
-                        }
-                    }
+            for (int choice : List.of(JOptionPane.CANCEL_OPTION, JOptionPane.OK_OPTION)) {
+                SwingUtilities.invokeLater(() -> ((JMenuItem) find(a.socialMenu(), "socialCreateGroup")).doClick());
+                awaitEdt(() -> visibleOptionPane(a, "创建群组") != null);
+                onEdt(() -> {
+                    JOptionPane pane = visibleOptionPane(a, "创建群组");
+                    assertEquals(JOptionPane.PLAIN_MESSAGE, pane.getMessageType());
+                    assertNull(pane.getIcon());
+                    JTextField name = (JTextField) find(pane, "groupName");
+                    name.setText(choice == JOptionPane.OK_OPTION ? "UI 设计群" : "取消创建的群");
+                    pane.setValue(choice);
                 });
-                timer.start();
-                ((JMenuItem) find(a.socialMenu(), "socialCreateGroup")).doClick();
-            });
+                awaitEdt(() -> visibleOptionPane(a, "创建群组") == null);
+            }
             onEdt(() -> ((JToggleButton) find(a, "contactsTab")).doClick());
             awaitEdt(() -> list(a).getModel().getSize() == 2);
             onEdt(() -> {
