@@ -2,7 +2,7 @@
 
 更新于 **2026-11-18（Asia/Shanghai）**。工作目录为 `D:\Agent\AllProjects\LTalk`，核对时分支为 `master`，未配置远端。使用 **Java 17 目标字节码、Swing、Maven、SQLite、TCP 协议 v6 和 UDP 发现 v1**，提供可选 TLS 公网模式。接续时先核对 Git 状态和提交。
 
-最近阶段为阶段 42（简化 SQLite 服务端启动），接续 `2f56c09`（SQLite 服务端存储）。此前功能基线包括 `e3b9846`（群聊和用户信息卡片、回到最新消息和会话分类）、`26286d3`（图片和文件发送确认）与 `497522b`（按昵称和用户名片段查找用户）。完整回归和打包使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。
+当前功能基线为 `f89dc23`（阶段 42，简化 SQLite 服务端启动），接续 `2f56c09`（SQLite 服务端存储）。阶段 43 记录本版的云端基本验收和文档复核。完整回归和打包使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。
 
 ## 从哪里接手
 
@@ -14,7 +14,7 @@
 
 新对话可以直接发送：
 
-> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 `AGENTS.md` 阅读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。最近阶段为阶段 42（简化 SQLite 服务端启动），本机完整回归 147 项通过。请按我接下来指定的功能继续。
+> 请继续开发 `D:\Agent\AllProjects\LTalk`。先按 `AGENTS.md` 阅读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。当前功能基线为 `f89dc23`，本机完整回归 147 项通过，SQLite 已在 Oracle Cloud 建库启动并完成双设备公网基本验证。请按我接下来指定的功能继续。
 
 ## 当前功能
 
@@ -74,14 +74,14 @@
 
 ## 云端测试交接
 
-- 用户于 2026-11-18 反馈，阶段 36（`96e6bd0`）的当前功能在局域网和云端服务器均可正常使用。该反馈未逐项列举验证步骤。阶段 37 之后的变更待新版多设备和云端复测，SQLite 部署使用新数据目录。阶段 28 在 Oracle Cloud 的私网和公网 TLS 验收另有记录。[测试报告](test-report.md#oracle-cloud-私网与公网验收)
-- 公网服务由 `ltalk.service` 管理，使用 `/opt/ltalk/ltalk-1.0.0.jar`、`/var/lib/ltalk` 和 `/etc/ltalk/server.p12`。用户计划停掉服务并保留云端 `ltalk-public-test` 的 TCP 9000 测试入站规则。复测先核对进程状态、来源 IP、Ubuntu 临时防火墙规则和证书有效期。更换版本时让服务端和测试客户端使用同版 JAR。[部署手册](deployment.md#更新-jar-与复测)
-- 不同物理设备和独立接入网络、长期证书续签、实际云规格的百人容量仍待验收。当前反馈足以接续新功能开发。
+- 2026-11-18，用户将 Oracle Cloud 上的文件版服务切换到 SQLite 版。截图显示 TLS 服务监听 TCP 9000，并已创建 `/var/lib/ltalk/ltalk.db`。用户报告在局域网试用以及用两台设备通过公网测试时均未发现问题。[云端验证范围](test-report.md#sqlite-云端部署与双设备验证)
+- 公网服务由 `ltalk.service` 管理，使用 `/opt/ltalk/ltalk-1.0.0.jar`、`/var/lib/ltalk` 和 `/etc/ltalk/server.p12`。关停后复测可核对进程状态、来源 IP、Ubuntu 防火墙规则和证书有效期。更换版本时让服务端和测试客户端使用同版 JAR。[部署手册](deployment.md#更新-jar-与复测)
+- 云端基本验证已完成。逐项功能范围、两台设备是否使用独立接入网络、云端停服重启后的数据恢复、长期证书续签和实际云规格的百人容量待单独核对。旧版本的 Oracle Cloud 私网和公网验收另有记录。[旧版验收](test-report.md#oracle-cloud-私网与公网验收)
 
 ## 已有验证与后续核对
 
 - SQLite 启动简化于 2026-11-18 完整离线打包，**147 项通过，0 失败、错误或跳过**，约 2:21。打包 JAR 在独立目录用短命令恢复账号与历史，并在 Java 25 严格原生访问模式下成功启动。日志 `.tools/sqlite-startup-final.log`。[测试报告](test-report.md#sqlite-启动简化2026-11-18阶段-42)
-- SQLite 服务端存储于 2026-11-18 完整离线打包，**146 项通过，0 失败、错误或跳过**，约 2:18。验证新库和版本检查、事务回滚、权限及备份恢复，并使用打包 JAR 在独立目录验证注册、发消息和进程重启后恢复。日志 `.tools/sqlite-final.log`。Ubuntu 云端及独立 Java 17 运行时待验证。[测试报告](test-report.md#sqlite-存储2026-11-18阶段-41)
+- SQLite 服务端存储于 2026-11-18 完整离线打包，**146 项通过，0 失败、错误或跳过**，约 2:18。验证新库和版本检查、事务回滚、权限及备份恢复，并使用打包 JAR 在独立目录验证注册、发消息和进程重启后恢复。日志 `.tools/sqlite-final.log`。独立 Java 17 回归待验证。[测试报告](test-report.md#sqlite-存储2026-11-18阶段-41)
 - 信息卡片和会话导航于 2026-11-18 执行 `build.ps1 -o package`，**143 项通过，0 失败、错误或跳过**。验证覆盖群成员分页和权限、上下线与退群刷新、好友申请和删除、会话分类、旧记录入口、回到最新消息箭头，以及宽屏浅色与窄屏深色预览。日志 `.tools/conversation-details-package.log`。本阶段真实高 DPI 和跨设备、云端操作待复测。[测试报告](test-report.md)
 - 发送确认及用户搜索于 2026-11-18 执行 `build.ps1 -o package`，**141 项通过，0 失败、错误或跳过**。图片与文件均验证选择后等待确认、取消后无附件消息、明确发送后完成上传。日志 `.tools/user-search-upload-confirm.log`。[测试报告](test-report.md)
 - 用户搜索于 2026-11-18 完成本机专项 **4 项通过**，覆盖昵称和用户名片段、24 项分页及从结果发送好友申请。日志 `.tools/user-search.log`。[测试报告](test-report.md)

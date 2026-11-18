@@ -57,7 +57,7 @@ java -jar target/ltalk-1.0.0.jar 9000 0.0.0.0 20
 要使用其他目录，在 `-jar` 前传入 `-Dltalk.dataDir`。含依赖 JAR 已为 SQLite 驱动声明 Java 原生库访问权限，常规启动使用上面的短命令即可。
 
 ```powershell
-java "-Dltalk.dataDir=D:\Agent\AllProjects\LTalk\data-sqlite" -jar target/ltalk-1.0.0.jar
+java "-Dltalk.dataDir=D:\Agent\AllProjects\LTalk\target\demo-data" -jar target/ltalk-1.0.0.jar
 ```
 
 当前示例启动局域网模式，默认监听所有网卡的 TCP **9000** 端口，最多 **20** 个连接。按 Ctrl+C 关闭。TLS 模式默认最多 **140** 个连接，其中最多 **24** 个未认证连接。两种模式的初始握手期限均为 **10 秒**。TLS 模式完成 HELLO 后有 **60 秒**完成认证。
@@ -171,7 +171,7 @@ java "-Dltalk.discovery.enabled=false" -jar target/ltalk-1.0.0.jar
 
 ## 测试
 
-最近一次完整功能回归为 2026-11-18 的 `build.ps1 -o package`。**147 项通过，0 失败、错误或跳过**。覆盖 SQLite 数据目录选择、空库初始化、重启恢复、事务回滚，以及原有 Swing、聊天、TLS、附件和导出流程。另以打包 JAR 验证短命令启动、账号与历史恢复及 Java 原生访问。云端 SQLite 版本待复测。[测试报告](docs/test-report.md#sqlite-启动简化2026-11-18阶段-42)
+最近一次完整功能回归为 2026-11-18 的 `build.ps1 -o package`。**147 项通过，0 失败、错误或跳过**。覆盖 SQLite 数据目录选择、空库初始化、重启恢复、事务回滚，以及原有 Swing、聊天、TLS、附件和导出流程。另以打包 JAR 验证短命令启动、账号与历史恢复及 Java 原生访问。SQLite 版已在 Oracle Cloud 建库启动，用户用两台设备通过公网进行了基本验证。[测试报告](docs/test-report.md#sqlite-启动简化2026-11-18阶段-42) · [云端反馈](docs/test-report.md#sqlite-云端部署与双设备验证)
 
 运行完整测试需允许本机回环 TCP，并提供图形桌面环境。平时回归可使用 `build.ps1 test` 或 `mvn test`。
 

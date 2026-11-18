@@ -139,9 +139,9 @@ nickname strip 后 1～40 char；userId 沿用 1～20 ASCII 字母/数字/下划
 
 新增错误：MISSING_FIELD 缺必填参数；INVALID_NICKNAME 昵称越界；INVALID_PASSWORD 密码长度非法；INVALID_USER_ID 用户名非法；USER_EXISTS 注册重名或已有在线会话；LOGIN_FAILED 统一用户名或密码错误（不区分不存在与密码错误）；NOT_AUTHENTICATED 未认证；FORBIDDEN 他人历史或无效/过期/跨连接游标；STORAGE_ERROR 服务端存储失败；EXPORT_FAILED 历史读取失败。原 BAD_MESSAGE 继续处理未知模式、方向/类型/帧错误。客户端本地文件错误或逐页响应超时也提示 EXPORT_FAILED，不自动重试或断开健康聊天连接。
 
-record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC、GROUP:群组 UUID 或 PRIVATE:按用户名排序的双方）、sender、recipient（群聊为 null）、content、messageType、sentAt（ISO 8601 UTC）。聊天回显另增加 messageId/conversationId。新版服务端给新消息分配递增时间，时钟回拨或重复时在上次时间上增加一纳秒。所有已认证账号都可读取公共共享归档，包含登录前和离线期间的消息，旧版公共记录沿用原权限。独立群组按入群、退群和本人删除范围查询。私聊归档仅双方可读，向离线陌生人发送返回 USER_OFFLINE。
+record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC、GROUP:群组 UUID 或 PRIVATE:按用户名排序的双方）、sender、recipient（群聊为 null）、content、messageType、sentAt（ISO 8601 UTC）。聊天回显也携带 messageId 和 conversationId。服务端给新消息分配递增时间，时钟回拨或重复时在上次时间上增加一纳秒。已认证账号可按本人删除状态读取公共共享归档，包含登录前和离线期间的消息。独立群组按入群、退群和本人删除状态查询。私聊归档仅双方可读，向离线陌生人发送返回 USER_OFFLINE。
 
-游标为原认证连接私有的随机标识，开始时固定文件末尾，新消息不进入该快照。导出和历史查询各有一个独立快照，同类新请求替换旧游标，完成或连接结束时关闭。客户端消费一页后再请求下一页。导出为 JSON UTF-8 数组（保留 null recipient），或带七列表头和双引号转义的 CSV。客户端负责本地文件路径，发布失败会清理临时文件。
+游标为原认证连接私有的随机标识。打开快照时固定当时的消息序号上界，独立群组还固定当时已获授权的区间。导出和历史查询各有一个独立快照，同类新请求替换旧游标，完成或连接结束时关闭。客户端消费一页后再请求下一页。导出为 JSON UTF-8 数组（保留 null recipient），或带七列表头和双引号转义的 CSV。客户端负责本地文件路径，发布失败会清理临时文件。
 
 历史与导出共享当前账号的可见范围和删除状态。
 
@@ -149,7 +149,7 @@ record 字段为 messageId（服务端 UUID）、conversationId（GROUP:PUBLIC�
 
 EXPORT_REQUEST 可增加 conversationId，由服务端按本人权限过滤。省略字段时使用公共与本人私聊归档，独立群组须指定会话。客户端提供当前会话导出。
 
-首次请求固定会话范围和文件末尾；每次翻页须携带相同 conversationId 和 cursor，改变范围返回 FORBIDDEN。无记录直接 EXPORT_END。非法/非本人会话拒绝，过滤不改变时间顺序、流式写出或文件失败清理语义。
+首次请求为该会话建立快照。每次翻页须携带相同 conversationId 和 cursor，改变范围返回 FORBIDDEN。空快照直接返回 EXPORT_END。有效记录按顺序流式返回，发布失败会清理临时文件。
 
 ## 分离连接认证与本人资料（2026-10-30）
 

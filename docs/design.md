@@ -76,6 +76,8 @@ MessageRouter 对所有业务统一检查 ready（HELLO 与握手后的 PING/PON
 
 ChatServer 独占数据目录文件锁。`SqliteDatabase` 初始化 `ltalk.db`，用应用标识和表结构版本检查数据库，启用外键和 WAL。写事务经同一连接串行提交，查询使用独立读连接。[SQLite WAL](https://sqlite.org/wal.html)
 
+表结构在 `src/main/resources/cn/ltalk/server/sqlite-schema-v1.sql`。命令行优先使用显式 `-Dltalk.dataDir`，省略时默认使用当前目录的 `data-sqlite/`。若 `data-sqlite/` 下尚无数据库，而 `data/ltalk.db` 已存在，则沿用早期 SQLite 库。云端 systemd 单元显式使用 `/var/lib/ltalk`。[启动说明](../README.md#启动与操作)
+
 ChatArchive 对每条消息保存一个 UUID 和内部递增序号，另保存供客户端显示的 UTC 时间。消息提交后才进行实时投递。公共消息由认证账号按本人删除规则读取。私聊在同一事务内写入消息及双方的可见记录。独立群历史按成员授权区间和本人删除规则查询。
 
 每个历史或导出游标固定消息序号上界和当时的群授权区间数。服务端按序号分块读取，每次读取后释放查询连接，客户端仍逐条消费。HistoryExport 逐条写 JSON/CSV。ChatClient 按 requestId 关联导出，逐页计时，经回调执行器通知 EDT。

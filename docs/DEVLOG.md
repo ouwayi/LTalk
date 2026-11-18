@@ -365,3 +365,9 @@
 - 从 `2f56c09` 接续。用户截图显示 Java 25 在 SQLite JDBC 加载原生库时提示权限，服务端随后启动且账号登录成功。给含依赖 JAR 添加 `Enable-Native-Access: ALL-UNNAMED`，由 `java -jar` 启动时应用。[Java JAR 规范](https://docs.oracle.com/en/java/javase/25/docs/specs/jar/jar.html)
 - 无显式目录时优先使用工作目录下的 `data-sqlite/`。该目录尚无数据库且早期 SQLite 默认位置有 `data/ltalk.db` 时，沿用早期数据库。显式 `-Dltalk.dataDir` 优先。本机核对了原文件版目录和当前 SQLite 数据库的位置，验证使用独立目录。
 - 完整 `build.ps1 -o package` **147 项通过，0 失败、错误或跳过**，约 2:21。用打包 JAR 验证显式启动后改用短命令可恢复同账号、同消息，早期 SQLite 库可回退使用，旧文件数据留在原位置。Java 25 严格原生访问模式启动成功，日志没有截图中的警告。Windows 重定向日志采用本地编码，启动检查改用 ASCII 标识；Ubuntu 和独立 Java 17 运行时仍待验证。[测试报告](test-report.md#sqlite-启动简化2026-11-18阶段-42)
+
+## 阶段 43 SQLite 云端切换与基本验收（2026-11-18，用户反馈整理）
+
+- 阶段 42 的 JAR 部署到 Oracle Cloud。用户切换前保留文件版备份。FinalShell 截图显示新版 TLS 服务启动、监听 TCP 9000，并创建 `/var/lib/ltalk/ltalk.db`。截图中的旧进程退出日志与本次启动日志按日期和进程号区分。
+- 用户报告局域网试用正常，并使用两台设备通过公网连接、试用多项功能，未发现问题。记录为 SQLite 接入的基本验收。逐项操作、两台设备的网络环境和云端停服重启后的数据恢复尚无专项记录。[云端验证范围](test-report.md#sqlite-云端部署与双设备验证)
+- 复核仓库文档，按当前代码更新 SQLite 默认目录、归档游标、演示与换版步骤。部署手册补入经本次切换使用的命令、已有 SQLite 库的检查和按时间识别新旧日志的方法。检查 Markdown 本地链接与锚点，并对手册中的 11 段 Bash 命令做语法检查。147 项回归为阶段 42 的结果。

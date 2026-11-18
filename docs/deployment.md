@@ -1,6 +1,6 @@
 # LTalk 单机云部署
 
-同一台服务端保管账号和历史。连接同一台服务端的用户共享公共聊天室。本手册使用 Linux、Java 17+、systemd 247+ 和项目打包的 JAR。首次部署从下节开始，已部署的测试机直接看[更新 JAR 与复测](#更新-jar-与复测)。
+同一台服务端保管账号和历史。连接同一台服务端的用户共享公共聊天室。本手册使用 Linux、Java 17+、systemd 247+ 和项目打包的 JAR，SQLite 随 JAR 提供。根据服务器现有版本选择相应步骤。[更新 SQLite 版 JAR](#更新-jar-与复测) · [从文件版切换到 SQLite](#从文件版切换到-sqlite)
 
 ## 首次准备
 
@@ -10,7 +10,7 @@
 sudo apt update
 sudo apt install -y openjdk-17-jre-headless openssl
 sudo useradd --system --user-group --home-dir /var/lib/ltalk --shell /usr/sbin/nologin ltalk
-sudo install -d -m 0750 -o ltalk -g ltalk /var/lib/ltalk
+sudo install -d -m 0700 -o ltalk -g ltalk /var/lib/ltalk
 sudo install -d -m 0755 /opt/ltalk
 sudo install -m 0644 /home/ubuntu/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar
 ```
@@ -74,7 +74,7 @@ sudo journalctl -u ltalk -n 20 --no-pager
 
 云控制台添加有状态入站规则 `ltalk-public-test`，目标端口 TCP `9000`，来源 CIDR 填测试电脑的公网 IPv4 加 `/32`。从这台电脑直连实例公网 IP 的 SSH 会话里，`echo "$SSH_CONNECTION"` 的第一列为服务端看到的来源 IP。Ubuntu 按下节的方式检查并放行 TCP 9000。公网客户端断开 Tailscale，填写证书对应的域名或公网 IP，端口 `9000`，勾选「使用 TLS 加密连接」。使用私有 CA 时，需要给客户端 Java 配置信任库。 [Oracle JSSE 文档](https://docs.oracle.com/en/java/javase/17/security/java-secure-socket-extension-jsse-reference-guide.html)
 
-验收时登录两个账号，检查公共群聊、已获许可的私聊、历史恢复及断线重连。证书与输入地址不匹配时应拒绝连接。用不同接入网络复测时，确保来源地址已获得访问权限。[已完成的云端验收](test-report.md#oracle-cloud-私网与公网验收)
+验收时登录两个账号，检查公共群聊、已获许可的私聊、历史恢复及断线重连。证书与输入地址不匹配时应拒绝连接。用不同接入网络复测时，确保来源地址已获得访问权限。[SQLite 公网基本验证](test-report.md#sqlite-云端部署与双设备验证) · [早期私网与公网验收](test-report.md#oracle-cloud-私网与公网验收)
 
 ## 更新 JAR 与复测
 
@@ -87,8 +87,11 @@ sudo journalctl -u ltalk -n 20 --no-pager
    sudo cp -p /opt/ltalk/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar.bak
    sudo install -m 0644 /home/ubuntu/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar
    sudo systemctl start ltalk
+   sudo systemctl is-active ltalk
    sudo journalctl -u ltalk -n 20 --no-pager
    ```
+
+   `is-active` 显示 `active` 后，在日志中找本次的「LTalk TLS 已启动」。最近 20 条日志可能同时显示上一轮的启动或退出记录，可按时间和进程号核对。
 
    如果需要回退，停服务后用 `sudo install -m 0644 /opt/ltalk/ltalk-1.0.0.jar.bak /opt/ltalk/ltalk-1.0.0.jar` 装回旧 JAR。各版本使用对应的数据目录。服务文件有更新时，安装后先运行 `sudo systemctl daemon-reload`。
 
@@ -104,9 +107,9 @@ sudo journalctl -u ltalk -n 20 --no-pager
    sudo openssl pkcs12 -in /etc/ltalk/server.p12 -passin file:/etc/ltalk/server.password -clcerts -nokeys | openssl x509 -noout -enddate
    ```
 
-4. Windows 宿主机和虚拟机都退出旧客户端，将各自的 JAR 换成同一份新版，再双击 `start-client.cmd`。连接失败时，先在 Windows PowerShell 执行 `Test-NetConnection -ComputerName <公网地址> -Port 9000`（将 `<公网地址>` 换成实际地址）。如果 TCP 已通，继续检查证书有效期、地址匹配和客户端 TLS 选项。
+4. 测试设备退出旧客户端，换用同一份新版 JAR。Windows 可双击 `start-client.cmd`。连接失败时，在 Windows PowerShell 执行 `Test-NetConnection -ComputerName <公网地址> -Port 9000`（将 `<公网地址>` 换成实际地址）。如果 TCP 已通，继续检查证书有效期、地址匹配和客户端 TLS 选项。
 
-5. 用演示账号复测以下场景，并记录服务端与客户端所用提交、网络环境、复现步骤和耗时。已完成的旧版公网验收见 [测试报告](test-report.md#oracle-cloud-私网与公网验收)。
+5. 用演示账号复测以下场景，并记录服务端与客户端所用提交、网络环境、复现步骤和耗时。[当前公网验证范围](test-report.md#sqlite-云端部署与双设备验证)
 
    - 登录后记录首批公共消息出现的时间。核对离线好友留言、首条未读、引用定位和输入框右上方的返回箭头。
    - 用昵称和用户名片段查找账号。切换「公共聊天室」和「好友与群聊」，查看独立群的在线人数、离线成员和用户资料。成员上下线或退群后核对名单，退群后从「历史会话」核对原有历史权限。
@@ -117,9 +120,24 @@ sudo journalctl -u ltalk -n 20 --no-pager
 
 ## 从文件版切换到 SQLite
 
-1. 本地用新数据目录验证新版 JAR。确认云端切换时间后，停止 `ltalk.service`，完整备份原 `/var/lib/ltalk`，同时保留文件版 JAR。[备份与恢复演练](#备份与恢复演练)
-2. 将原目录改名保留，例如 `/var/lib/ltalk-file-backup`，使用前确认备份名称可用。为现有服务创建同名空目录 `/var/lib/ltalk`，归属 `ltalk:ltalk`，权限 `0750`。安装新版 JAR 并启动，检查服务日志和新建的 `ltalk.db`。
-3. 用新版客户端重新注册测试账号，按上节验证收发与重启恢复。新库从空库开始。若回退文件版，停服后分别保留新库目录和 JAR，再把旧目录及旧 JAR 恢复到服务配置中的位置。
+1. 本地用新数据目录验证新版 JAR，然后用 FinalShell 将 JAR 上传到 `/home/ubuntu/ltalk-1.0.0.jar`。运行 `sudo systemctl --no-pager cat ltalk`，确认 `ExecStart` 的 JAR 路径是 `/opt/ltalk/ltalk-1.0.0.jar`，数据目录是 `/var/lib/ltalk`。如果服务路径不同，按实际配置调整命令。
+2. 确认切换时间后执行以下命令。命令先保留旧 JAR 和原数据目录，再为现有服务创建空目录。如果已经存在 `/var/lib/ltalk/ltalk.db`，请走常规的 SQLite 版更新步骤。
+
+   ```bash
+   test -s /home/ubuntu/ltalk-1.0.0.jar &&
+   sudo test ! -e /var/lib/ltalk/ltalk.db &&
+   sudo systemctl stop ltalk &&
+   ltalk_backup=$(sudo mktemp -d /var/backups/ltalk-file.XXXXXX) &&
+   sudo cp -p /opt/ltalk/ltalk-1.0.0.jar "$ltalk_backup/" &&
+   sudo mv -T /var/lib/ltalk "$ltalk_backup/data" &&
+   sudo install -d -m 0700 -o ltalk -g ltalk /var/lib/ltalk &&
+   sudo install -m 0644 /home/ubuntu/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar &&
+   echo "旧版备份在 $ltalk_backup" &&
+   sudo systemctl start ltalk
+   ```
+
+3. 运行 `sudo systemctl is-active ltalk` 和 `sudo journalctl -u ltalk -n 20 --no-pager`。看到本次 TLS 启动成功后，用 `sudo ls -l /var/lib/ltalk/ltalk.db` 确认完成建库。用新版客户端重新注册测试账号，再验证收发与重启恢复。
+4. 如需回退文件版，先停服并保留新版数据目录和 JAR，再从第 2 步输出的备份目录恢复旧数据和旧 JAR。恢复到服务配置所用位置后启动。[备份与恢复演练](#备份与恢复演练)
 
 ## 容量与限制
 

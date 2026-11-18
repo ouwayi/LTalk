@@ -103,7 +103,7 @@ AppearanceSettings 分别保存浅色和深色背景色，模式切换不覆盖�
 
 ## 运行与验收
 
-按 README 构建 `powershell -NoProfile -File .\build.ps1`，然后分别运行服务端和 `cn.ltalk.client.ChatWindow`。客户端先连接服务器，再注册或登录。登录后显示本人授权历史和实时消息。
+按 README 构建，在项目根目录执行 `java -jar target/ltalk-1.0.0.jar`。Windows 可双击构建产物中的 `start-client.cmd`。首次连接新库时先完成注册。登录后加载会话摘要和当前会话最近一页，切换会话后按需加载其本人可见历史。[启动与操作](../README.md#启动与操作)
 
 自动化生成的界面预览位于 `target/ui-preview/ui-desktop.png`、`ui-narrow-chat.png`、`ui-narrow-list.png`，它们使用测试会话数据，不提交 Git。真实 Windows 窗口的 computer-use 验收过程与最终测试数见 [测试报告](test-report.md)。
 
@@ -143,7 +143,7 @@ ConnectionPanel 新增密码输入与注册按钮；注册弹窗填写昵称，�
 
 会话菜单导出直接进入保存窗口，不先选格式；同窗选择 JSON/CSV 与文件名/位置。Windows 用 IFileSaveDialog，其他系统用 Swing 保存窗口；按类型整理扩展名并对最终路径确认覆盖，确认前不开始写出。
 
-## 登录历史、删除和保存（2026-11-01）
+## 登录历史、删除和保存（2026-11-01，历史阶段）
 
 登录成功即分页加载本人历史，状态区显示加载进度/完成/失败；历史私聊对象离线仍显示记录且禁发。加载中可继续收发，消息 ID 合并避免重复，历史不算新未读。会话菜单提供重新加载，确认完成后可清空本人当前会话记录；右键消息可单条删除本人副本，删除确认说明不影响对方。删除失败不清界面，成功后重载核对；草稿不删除。
 

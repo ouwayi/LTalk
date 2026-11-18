@@ -15,7 +15,7 @@
 | R-09 桌面响应 | 后台连接/收发、EDT 更新、连接中禁重复提交、断线禁发送 | ChatClientTest + Swing 人工验收 |
 | R-10 目标离线保护 | 好友可留离线消息。陌生人离线时只可查看旧记录与草稿，重新上线后重选会话 | ConversationStoreTest、ChatWindowTest、SocialIntegrationTest |
 | R-11 资源限制 | 局域网模式默认 20 连接；TLS 模式默认 140 个总连接、24 个未认证连接和单独的认证期限。初始握手 10 秒，HELLO 后心跳保活，逐连接有界发送队列 | ChatServerTest、LoadTest、PublicCapacityTest |
-| R-12 局域网交付 | 跨系统群聊、私聊、上下线；说明真实环境与证据来源 | docs/test-report.md 的 Q16，宿主机＋虚拟机人工通过（用户反馈）；双物理设备未测 |
+| R-12 局域网交付 | 跨系统群聊、私聊和上下线验收，说明环境与证据来源 | [验收记录](test-report.md)中的 Q16 和[SQLite 版本试用反馈](test-report.md#sqlite-云端部署与双设备验证) |
 | X1 心跳与失联 | HELLO 或直接登录成功后双向 PING/PONG，间隔/响应期限可配置，正常空闲不踢，静默失联清理并允许手动重连 | HeartbeatIntegrationTest / HeartbeatSettingsTest 本机通过；2026-10-28 用户反馈虚拟机断网后自动检测断开正常，实际测试日期/配置/精确耗时未提供 |
 | X2 当前会话导出 | 从群聊信息卡片或私聊更多菜单选择 JSON/CSV、文件名和位置，覆盖旧文件需确认 | AuthenticationExportTest、HistoryExportTest、FileDialogsTest |
 | X3 账号与资料 | 注册登录、资料编辑与同步、本人改密。改密成功后当前会话继续，下次用新密码登录 | AccountFlowTest、ProfileConnectionTest、PasswordChangeTest、ChatWindowTest |
@@ -56,7 +56,9 @@ stateDiagram-v2
 
 ## 验收条件
 
-自动化测试使用 alice/bob/carol，另外用 10 个 load 用户观察课程负载。测试层直接检查第三方 Socket 收包，不能用“界面没显示”代替私聊隔离证据。用户已用宿主机＋虚拟机完成心跳前的跨系统人工测试，历史分布为宿主机服务端＋alice、虚拟机 bob＋carol；X1 后续有本机真实 TCP 代理单向丢包验证，另于 2026-10-28 收到用户虚拟机断网自动检测正常的补充反馈。实际测试日期与精确耗时未提供，报告区分用户反馈、代理自动化与未进行的双物理设备测试，不相互替代。
+自动化测试用隔离数据目录和本机回环连接，通过第三方 Socket 的收包验证私聊隔离，并用 10 个客户端进行课程规模短负载测试。SQLite 回归验证空库初始化、事务失败回滚、按本人权限读取，以及用同一目录重启后恢复账号和聊天历史。
+
+用户已报告 SQLite 版本的局域网试用和双设备公网基本试用。心跳前的宿主机与虚拟机人工测试、后续的单向丢包自动化和虚拟机断网反馈各有独立记录。[测试报告](test-report.md)
 
 ## 账号与导出验收（2026-10-29，历史阶段）
 
