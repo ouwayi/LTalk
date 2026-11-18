@@ -7,6 +7,7 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.event.*;
 import java.awt.*;
+import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.*;
 import java.io.IOException;
@@ -20,6 +21,7 @@ import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /** Swing presentation adapter; account and export operations stay in the background client. */
 public final class ChatWindow extends JFrame implements ClientSessions.Listener {
@@ -97,7 +99,8 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private final JButton requestPrivate = ChatTheme.pill("申请私聊");
     private final JPanel sidebar = new JPanel(new BorderLayout());
     private final ChatContent chatContent = new ChatContent();
-    private final ConversationInfoPanel info = new ConversationInfoPanel(this::closeInfo, this::showGroupInfo, this::showUserInfo);
+    private final ConversationInfoPanel info = new ConversationInfoPanel(this::closeInfo, this::showGroupInfo, this::showUserInfo,
+            this::copyInfoIdentifier);
     private final JPanel chatArea = new JPanel(null) {
         @Override public void doLayout() { layoutChatArea(); }
     };
@@ -114,6 +117,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     private boolean refreshingList, restoringDraft;
     private final AppearancePreferences appearancePreferences;
     private final UploadPicker uploadPicker;
+    private final Supplier<Clipboard> clipboard;
     private AppearanceSettings appearance;
     private final WallpaperPanel background;
 
@@ -129,8 +133,14 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
     ChatWindow(String initialHost, String initialPort, String initialUser, Path appearanceFile,
                Callable<List<DiscoveryClient.Candidate>> discover, UploadPicker uploadPicker) {
+        this(initialHost, initialPort, initialUser, appearanceFile, discover, uploadPicker,
+                () -> Toolkit.getDefaultToolkit().getSystemClipboard());
+    }
+    ChatWindow(String initialHost, String initialPort, String initialUser, Path appearanceFile,
+               Callable<List<DiscoveryClient.Candidate>> discover, UploadPicker uploadPicker, Supplier<Clipboard> clipboard) {
         super("LTalk · 局域网聊天室");
         this.uploadPicker = uploadPicker;
+        this.clipboard = clipboard;
         appearancePreferences = new AppearancePreferences(appearanceFile); appearance = appearancePreferences.load();
         connection = new ConnectionPanel(initialHost, initialPort);
         serverSelection = new ServerSelection(connection, new RecentServers(appearanceFile.resolveSibling("recent-servers.properties")),
@@ -591,12 +601,21 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
     }
 
     private void copyBody(String text) {
+        copyText(text, "已复制正文", this::feedback);
+    }
+
+    private void copyInfoIdentifier(String text) {
+        copyText(text, "已复制到剪贴板", info::feedback);
+    }
+
+    private void copyText(String text, String success, BiConsumer<String, Boolean> showFeedback) {
         try {
-            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
-            feedback("已复制正文", false);
+            clipboard.get().setContents(new StringSelection(text), null);
         } catch (IllegalStateException | SecurityException ex) {
-            feedback("无法写入剪贴板，请稍后重试", true);
+            showFeedback.accept("无法写入剪贴板，请稍后重试", true);
+            return;
         }
+        showFeedback.accept(success, false);
     }
 
     private void refreshQuoteDraft() {
@@ -1507,7 +1526,7 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
             String detail = store.online(user) ? "在线" : "离线";
             if (store.self().equals(user)) detail += " · 你";
             else if (store.friend(user)) detail += " · 好友";
-            info.showUser(new ConversationInfoPanel.Identity(name, "@" + user, detail,
+            info.showUser(new ConversationInfoPanel.Identity(name, "@" + user, user, detail,
                             ProfileAvatar.contact(store.profile(user), name, 72)),
                     userActions(user), groupRoster != null, resetScroll);
         } else if (groupRoster != null) {
@@ -1538,8 +1557,9 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
                     status = "正在加载成员…";
                 }
             }
-            info.showGroup(new ConversationInfoPanel.Identity(name, publicRoom ? "公共聊天室无固定群号" : "群号 " + id.key(),
-                    counts, new Avatar(name, true, 72)), actions, members, status, resetScroll);
+            String groupNumber = publicRoom ? null : id.key();
+            info.showGroup(new ConversationInfoPanel.Identity(name, publicRoom ? "公共聊天室无固定群号" : "群号 " + groupNumber,
+                    groupNumber, counts, new Avatar(name, true, 72)), actions, members, status, resetScroll);
         }
     }
 

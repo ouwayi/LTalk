@@ -8,7 +8,7 @@ import java.util.function.Consumer;
 
 /** Details for the current group or a user selected from the chat. */
 public final class ConversationInfoPanel extends ChatTheme.RoundedPanel {
-    public record Identity(String name, String identifier, String detail, Icon avatar) { }
+    public record Identity(String name, String identifier, String copyValue, String detail, Icon avatar) { }
     public record Action(String id, String label, boolean enabled, Runnable run) { }
     public record Member(String user, String name, String detail, Icon avatar) { }
 
@@ -18,10 +18,13 @@ public final class ConversationInfoPanel extends ChatTheme.RoundedPanel {
     private final Body body = new Body();
     private final JScrollPane scroll = new JScrollPane(body);
     private final Consumer<String> openMember;
+    private final Consumer<String> copyIdentifier;
 
-    public ConversationInfoPanel(Runnable close, Runnable backToGroup, Consumer<String> openMember) {
+    public ConversationInfoPanel(Runnable close, Runnable backToGroup, Consumer<String> openMember,
+                                 Consumer<String> copyIdentifier) {
         super(new BorderLayout(), 24, Color.WHITE, true);
         this.openMember = openMember;
+        this.copyIdentifier = copyIdentifier;
         setName("conversationInfo");
         setBorder(new EmptyBorder(8, 12, 10, 12));
         JButton closeButton = ChatTheme.iconButton(LineIcon.Kind.CLOSE, "关闭信息卡片");
@@ -39,6 +42,7 @@ public final class ConversationInfoPanel extends ChatTheme.RoundedPanel {
         ChatTheme.scroll(scroll, true);
         scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         add(scroll);
+        feedback.setName("infoFeedback");
         feedback.setBorder(new EmptyBorder(4, 5, 2, 5));
         feedback.setVisible(false);
         add(feedback, BorderLayout.SOUTH);
@@ -52,7 +56,7 @@ public final class ConversationInfoPanel extends ChatTheme.RoundedPanel {
     }
 
     public void showGroup(Identity identity, List<Action> actions, List<Member> members, String rosterStatus, boolean resetScroll) {
-        showDetails("群聊信息", identity, actions, false);
+        showDetails("群聊信息", "群号", identity, actions, false);
         body.add(Box.createVerticalStrut(18));
         body.add(line("群成员", "infoMembersHeading", 14, ChatTheme.INK, true));
         body.add(Box.createVerticalStrut(6));
@@ -62,11 +66,11 @@ public final class ConversationInfoPanel extends ChatTheme.RoundedPanel {
     }
 
     public void showUser(Identity identity, List<Action> actions, boolean fromGroup, boolean resetScroll) {
-        showDetails("用户信息", identity, actions, fromGroup);
+        showDetails("用户信息", "用户名", identity, actions, fromGroup);
         finish(resetScroll);
     }
 
-    private void showDetails(String title, Identity identity, List<Action> actions, boolean showBack) {
+    private void showDetails(String title, String identifierType, Identity identity, List<Action> actions, boolean showBack) {
         heading.setText(title);
         back.setVisible(showBack);
         body.removeAll();
@@ -76,7 +80,7 @@ public final class ConversationInfoPanel extends ChatTheme.RoundedPanel {
         body.add(Box.createVerticalStrut(12));
         body.add(line(identity.name(), "infoName", 18, ChatTheme.INK, true));
         body.add(Box.createVerticalStrut(4));
-        body.add(line(identity.identifier(), "infoIdentifier", 11, ChatTheme.MUTED, false));
+        body.add(identifierLine(identity, identifierType));
         body.add(Box.createVerticalStrut(4));
         body.add(line(identity.detail(), "infoDetail", 12, ChatTheme.MUTED, false));
         if (!actions.isEmpty()) body.add(Box.createVerticalStrut(16));
@@ -97,6 +101,27 @@ public final class ConversationInfoPanel extends ChatTheme.RoundedPanel {
             body.add(row);
             body.add(Box.createVerticalStrut(6));
         }
+    }
+
+    private JComponent identifierLine(Identity identity, String type) {
+        if (identity.copyValue() == null) return line(identity.identifier(), "infoIdentifier", 11, ChatTheme.MUTED, false);
+        String action = "复制" + type;
+        JButton button = ChatTheme.iconButton(LineIcon.Kind.COPY, action);
+        button.setName("infoIdentifier");
+        button.setText(identity.identifier());
+        button.setIcon(new LineIcon(LineIcon.Kind.COPY, ChatTheme.MUTED, 12));
+        button.setHorizontalTextPosition(SwingConstants.LEADING);
+        button.setFont(ChatTheme.FONT.deriveFont(11f));
+        button.setBorder(new EmptyBorder(3, 6, 3, 6));
+        button.setPreferredSize(null);
+        Dimension size = button.getPreferredSize();
+        // Swing may measure margins and text differently when printing or scaling.
+        button.setMaximumSize(new Dimension(size.width + 12, size.height));
+        button.setAlignmentX(CENTER_ALIGNMENT);
+        ChatTheme.foreground(button, ThemePalette.Role.ACCENT);
+        button.getAccessibleContext().setAccessibleName(action + " " + identity.copyValue());
+        button.addActionListener(e -> copyIdentifier.accept(identity.copyValue()));
+        return button;
     }
 
     private JButton memberButton(Member member) {

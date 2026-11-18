@@ -19,6 +19,8 @@ import javax.imageio.ImageIO;
 import javax.swing.*;
 import javax.swing.text.JTextComponent;
 import java.awt.*;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.DataFlavor;
 import java.awt.event.MouseEvent;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
@@ -31,6 +33,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
@@ -1055,6 +1058,8 @@ class ChatWindowTest {
     @Test @Timeout(35)
     void chatInformationCardsAndSidebarFollowMembershipPresenceAndFriendship() throws Exception {
         AtomicReference<ChatWindow> ref = new AtomicReference<>();
+        Clipboard clipboard = new Clipboard("info-card-test");
+        AtomicBoolean clipboardBusy = new AtomicBoolean();
         try (ChatServer server = new ChatServer("127.0.0.1", 0)) {
             server.start();
             server.accounts().register("alice", "Alice", "test123!", false);
@@ -1071,12 +1076,17 @@ class ChatWindowTest {
                     }
                     bob.users(1);
                 }
-                onEdt(() -> ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice", appearanceDirectory.resolve("info.properties"))));
+                onEdt(() -> ref.set(new ChatWindow("127.0.0.1", Integer.toString(server.port()), "alice",
+                        appearanceDirectory.resolve("info.properties"), List::of, new FileDialogs()::choose, () -> {
+                            if (clipboardBusy.get()) throw new IllegalStateException("Clipboard busy");
+                            return clipboard;
+                        })));
                 ChatWindow window = ref.get();
                 login(window);
                 awaitEdt(() -> sidebarIds(window).equals(List.of(ConversationId.PUBLIC, ConversationId.privateWith("bob"))));
                 onEdt(() -> {
                     button(window, "conversationIdentity").doClick();
+                    assertEquals("公共聊天室无固定群号", label(window, "infoIdentifier").getText());
                     assertEquals("2 位成员 · 2 人在线", label(window, "infoDetail").getText());
                     assertNotNull(find(window, "groupMember-alice"));
                     assertNull(find(window, "groupLeave"));
@@ -1093,7 +1103,11 @@ class ChatWindowTest {
                 });
                 awaitEdt(() -> "3 位成员 · 2 人在线".equals(label(window, "infoDetail").getText()));
                 onEdt(() -> {
-                    assertEquals("群号 " + group.id(), label(window, "infoIdentifier").getText());
+                    JButton identifier = button(window, "infoIdentifier");
+                    assertEquals("群号 " + group.id(), identifier.getText());
+                    identifier.doClick();
+                    assertEquals(group.id(), assertDoesNotThrow(() -> clipboard.getData(DataFlavor.stringFlavor)));
+                    assertEquals("已复制到剪贴板", label(window, "infoFeedback").getText());
                     assertTrue(button(window, "infoExport").isEnabled());
                     assertTrue(button(window, "infoClearHistory").isEnabled());
                     assertTrue(button(window, "groupLeave").isEnabled());
@@ -1103,7 +1117,11 @@ class ChatWindowTest {
                     assertTrue(find(window, "conversationInfo").getX() > find(window, "chatContent").getWidth());
                     button(window, "groupMember-carol").doClick();
                     assertEquals("离线成员", label(window, "infoName").getText());
-                    assertEquals("@carol", label(window, "infoIdentifier").getText());
+                    assertFalse(label(window, "infoFeedback").isVisible());
+                    JButton username = button(window, "infoIdentifier");
+                    assertEquals("@carol", username.getText());
+                    username.doClick();
+                    assertEquals("carol", assertDoesNotThrow(() -> clipboard.getData(DataFlavor.stringFlavor)));
                     assertEquals("离线", label(window, "infoDetail").getText());
                     assertTrue(button(window, "infoRequestFriend").isEnabled());
                     button(window, "backToGroupInfo").doClick();
@@ -1116,7 +1134,15 @@ class ChatWindowTest {
                     onEdt(() -> {
                         render(window, 1280, 760, "group-before-avatar.png");
                         clickMessageAvatar(window, "头像打开资料");
-                        assertEquals("@bob", label(window, "infoIdentifier").getText());
+                        JButton username = button(window, "infoIdentifier");
+                        assertEquals("@bob", username.getText());
+                        clipboardBusy.set(true);
+                        username.doClick();
+                        assertEquals("无法写入剪贴板，请稍后重试", label(window, "infoFeedback").getText());
+                        assertEquals("carol", assertDoesNotThrow(() -> clipboard.getData(DataFlavor.stringFlavor)));
+                        clipboardBusy.set(false);
+                        username.doClick();
+                        assertEquals("bob", assertDoesNotThrow(() -> clipboard.getData(DataFlavor.stringFlavor)));
                         assertEquals("小波", label(window, "infoName").getText());
                         button(window, "infoSendMessage").doClick();
                         assertEquals("小波", label(window, "conversationTitle").getText());
