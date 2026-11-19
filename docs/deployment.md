@@ -80,24 +80,34 @@ sudo journalctl -u ltalk -n 20 --no-pager
 
 同一版本复测时执行 `sudo systemctl start ltalk`，然后从第 2 步核对网络和证书。换版本时从第 1 步开始。
 
-已记录的 Oracle Cloud 双设备基本试用使用 `f89dc23`（协议 v6、SQLite 表结构 v1）。若仍运行该版，更新到当前 v7 时同时更换服务端和测试客户端 JAR。构建前用 Git 核对功能版本，文件名 `ltalk-1.0.0.jar` 在这两版相同。[验证范围](test-report.md#sqlite-云端部署与双设备验证)
+应用协议为 v7，SQLite 表结构为 v2。换版时同时更换服务端和测试客户端 JAR。各版本沿用文件名 `ltalk-1.0.0.jar`，上传后可用本机 `Get-FileHash target/ltalk-1.0.0.jar -Algorithm SHA256` 对照云端 `sha256sum /home/ubuntu/ltalk-1.0.0.jar`，并记录对应提交。[新版云端试用](test-report.md#新版云端试用) · [旧版双设备验证](test-report.md#sqlite-云端部署与双设备验证)
 
-1. Windows 构建新版并上传 `target/ltalk-1.0.0.jar` 到 `/home/ubuntu/`。SQLite 表结构 v1 升到 v2 会在首次启动时自动更换旧群号，保留原群成员、请求和历史。先停服备份完整数据目录，再换 JAR。首次从文件版切换时，先按专节准备新数据目录。[从文件版切换到 SQLite](#从文件版切换到-sqlite)
+1. Windows 构建新版并上传 `target/ltalk-1.0.0.jar` 到 `/home/ubuntu/`。用 `sudo systemctl cat ltalk` 核对 JAR 安装路径和数据目录，按实际路径执行。SQLite 表结构 v1 升到 v2 会在首次启动时自动更换旧群号，保留原群成员、请求和历史。以下命令要求上传的 JAR 与现有数据库均存在，每次停服备份完整数据和旧 JAR 后才安装新版。从文件版切换时走独立流程。[从文件版切换到 SQLite](#从文件版切换到-sqlite)
 
    ```bash
-   sudo systemctl stop ltalk
-   sudo install -d -m 0700 /var/backups/ltalk
-   sudo tar -C /var/lib -czf "/var/backups/ltalk/ltalk-before-upgrade-$(date +%Y%m%d-%H%M%S).tar.gz" ltalk
-   sudo cp -p /opt/ltalk/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar.bak
-   sudo install -m 0644 /home/ubuntu/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar
+   test -s /home/ubuntu/ltalk-1.0.0.jar &&
+   sudo test -s /var/lib/ltalk/ltalk.db &&
+   sudo systemctl stop ltalk &&
+   sudo install -d -m 0700 /var/backups/ltalk &&
+   ltalk_backup=$(sudo mktemp -d /var/backups/ltalk/before-upgrade.XXXXXX) &&
+   sudo tar -C /var/lib -czf "$ltalk_backup/data.tar.gz" ltalk &&
+   sudo tar -tzf "$ltalk_backup/data.tar.gz" >/dev/null &&
+   sudo cp -p /opt/ltalk/ltalk-1.0.0.jar "$ltalk_backup/" &&
+   printf '升级前备份 %s\n' "$ltalk_backup" &&
+   sudo install -m 0644 /home/ubuntu/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar &&
    sudo systemctl start ltalk
+   ```
+
+   换版命令中任一步失败时先检查该步及当前服务状态。启动后再执行：
+
+   ```bash
    sudo systemctl is-active ltalk
    sudo journalctl -u ltalk -n 20 --no-pager
    ```
 
    `is-active` 显示 `active` 后，在日志中找本次的「LTalk TLS 已启动」。最近 20 条日志可能同时显示上一轮的启动或退出记录，可按时间和进程号核对。
 
-   如果需要回退，停服务后用 `sudo install -m 0644 /opt/ltalk/ltalk-1.0.0.jar.bak /opt/ltalk/ltalk-1.0.0.jar` 装回旧 JAR。跨表结构版本回退时，先将升级后的数据目录移到独立位置留存，再恢复升级前备份目录。恢复出的库只包含备份时的数据。服务文件有更新时，安装后先运行 `sudo systemctl daemon-reload`。
+   如果需要回退，先停服务，从本次命令输出的备份目录装回旧 JAR。跨表结构版本回退时，还要将升级后的 `/var/lib/ltalk` 移到独立位置留存，把同一备份目录里的 `data.tar.gz` 解压到 `/var/lib`，再启动旧版服务。恢复出的库只包含备份时的数据。服务文件有更新时，安装后先运行 `sudo systemctl daemon-reload`。
 
 2. 核对云端 TCP 9000 入站规则的来源地址。Ubuntu 的测试规则是临时的，实例重启后可用下面一行先检查再添加。
 
@@ -113,8 +123,9 @@ sudo journalctl -u ltalk -n 20 --no-pager
 
 4. 测试设备退出旧客户端，换用同一份新版 JAR。Windows 可双击 `start-client.cmd`。连接失败时，在 Windows PowerShell 执行 `Test-NetConnection -ComputerName <公网地址> -Port 9000`（将 `<公网地址>` 换成实际地址）。如果 TCP 已通，继续检查证书有效期、地址匹配和客户端 TLS 选项。
 
-5. 用演示账号复测以下场景，并记录服务端与客户端所用提交、网络环境、复现步骤和耗时。[当前公网验证范围](test-report.md#sqlite-云端部署与双设备验证)
+5. 复测以下场景，并记录客户端与服务端版本、网络环境和操作结果。[当前云端记录](test-report.md#新版云端试用)
 
+   - 从 SQLite v1 升级时，先用原账号打开一个升级前已有的群。核对 10 位新群号、原成员及旧消息，记录新群号并在重启后确认一致。
    - 登录后记录首批公共消息出现的时间。核对离线好友留言、首条未读、引用定位和输入框右上方的返回箭头。
    - 用昵称和用户名片段查找账号。切换「公共聊天室」和「好友与群聊」，查看独立群的 10 位群号和在线、离线成员。成员上下线或退群后核对名单，从「列表外的会话」核对退群后的历史权限。
    - 用演示群从卡片复制群号和用户名，核对粘贴结果。管理员打开「转让管理员」，检查完整成员名单及用户名搜索，先取消一次，再确认转让并核对双方角色。

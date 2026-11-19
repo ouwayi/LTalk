@@ -2,7 +2,7 @@
 
 更新于 **2026-11-19（Asia/Shanghai）**。工作目录为 `D:\Agent\AllProjects\LTalk`，核对时分支为 `master`，未配置远端。使用 **Java 17 目标字节码、Swing、Maven、SQLite 表结构 v2、TCP 协议 v7 和 UDP 发现 v1**，提供可选 TLS 公网模式。接续时先核对 Git 状态和提交。
 
-当前版本在阶段 47 的功能提交 `8bc1f94` 基础上，增加阶段 51 的启动页填写说明。本机完整离线回归 **152 项通过**。近期功能包括 60 秒撤回、10 位群号、信息卡片复制群号和用户名，以及从完整群成员名单筛选和选择新管理员。完整构建使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。[启动页更新记录](DEVLOG.md#阶段-51-启动页填写说明2026-11-19本轮记录)
+最近功能提交为 `2b69ce1`（阶段 51，启动页连接与账号填写说明），本机完整离线回归 **152 项通过**。近期功能包括 60 秒撤回、10 位群号、信息卡片复制群号和用户名，以及从完整群成员名单筛选和选择新管理员。完整构建使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。[近期桌面交互回归](test-report.md#近期桌面交互回归)
 
 课程交付包含可独立分享的 [Java 多人聊天室开发与验证技能](../.agents/skills/java-chatroom-engineering/SKILL.md)。阶段 50 将它移入 Codex 的项目技能目录。开发流程可用于其他 Java 聊天室，随附的 LTalk 案例提供真实类名、通信约束和评测入口。
 
@@ -16,7 +16,7 @@
 
 新对话可以直接发送：
 
-> 请继续开发 `D:\Agent\AllProjects\LTalk`。按 `AGENTS.md` 先读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。当前版本已加入启动页 TLS 和账号填写说明（阶段 51），本机完整回归 152 项通过。当前协议为 v7，SQLite 表结构为 v2，已记录的 Oracle Cloud 双设备基本试用对应较早的 `f89dc23`（v6）。请按我接下来指定的功能继续。
+> 请继续开发 `D:\Agent\AllProjects\LTalk`。按 `AGENTS.md` 先读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。最近功能提交为 `2b69ce1`，本机完整回归 152 项通过。当前协议为 v7，SQLite 表结构为 v2。用户反馈本轮云端试用暂未发现问题，逐项结果待补记。请按我接下来指定的功能继续。
 
 ## 当前功能
 
@@ -52,7 +52,7 @@
 - 默认监听 `0.0.0.0:9000`。局域网模式最多 20 个连接，TLS 模式默认最多 140 个总连接、24 个未认证连接。初始期限 10 秒，TLS 模式 HELLO 后认证期限默认 60 秒。默认心跳间隔 10 秒、响应期限 20 秒。
 - 登录态绑定 TCP。账号保存随机盐与 PBKDF2-HMAC-SHA256 散列，服务端持有数据目录锁。保存结果在 SQLite 事务提交后发布，历史和导出按认证账号隔离。
 - 背景保持可选纯色或渐变，浅深色与窄屏均可用。外观只写 `${user.home}/.ltalk/appearance.properties`，项目采用自身的中性描述。
-- 最近服务器单独保存于 `${user.home}/.ltalk/recent-servers.properties`，内容为服务器地址、端口和 TLS 选项。
+- 最近连接记录单独保存于 `${user.home}/.ltalk/recent-servers.properties`，内容为服务器地址、端口和 TLS 选项。
 
 ## 代码入口
 
@@ -77,9 +77,10 @@
 
 ## 云端测试交接
 
+- 2026-11-19，用户在收到新版换版步骤后反馈已在云服务器运行测试，暂未发现问题。本轮提供的 JAR 对应 `2b69ce1`（v7、SQLite 表结构 v2）。服务器实际 JAR 校验值、连接设备数和逐项结果待补记。[新版云端试用](test-report.md#新版云端试用)
 - 2026-11-18，用户在 Oracle Cloud 将文件版切换到 `f89dc23`（协议 v6、SQLite 表结构 v1）。截图显示 TLS 服务监听 TCP 9000，已创建 `/var/lib/ltalk/ltalk.db`。用户报告局域网试用及双设备公网基本试用正常。[云端验证范围](test-report.md#sqlite-云端部署与双设备验证)
 - 公网服务由 `ltalk.service` 管理，使用 `/opt/ltalk/ltalk-1.0.0.jar`、`/var/lib/ltalk` 和 `/etc/ltalk/server.p12`。关停后复测可核对进程状态、来源 IP、Ubuntu 防火墙规则和证书有效期。更换版本时让服务端和测试客户端使用同版 JAR。[部署手册](deployment.md#更新-jar-与复测)
-- 当前 v7 的云端部署及双设备复测仍待记录，包括旧群换号、重启恢复、消息撤回和管理员转让。历史反馈中的逐项功能范围与设备接入网络未单独记录。长期证书续签和实际云规格的百人容量待专项验收。[旧版验收](test-report.md#oracle-cloud-私网与公网验收)
+- 云端旧群换号、重启恢复、双设备撤回和管理员转让待专项记录。长期证书续签和实际云规格的百人容量待验收。[部署手册复测清单](deployment.md#更新-jar-与复测)
 
 ## 已有验证与后续核对
 
@@ -104,6 +105,6 @@
 - 公共历史补齐于 2026-11-16 执行 `build.ps1 -o package`，**109 项通过，0 失败、错误或跳过**，约 1:29。覆盖晚登录、离线期间公共消息、重启、旧归档、个人删除和私聊隔离。日志为 `.tools/public-history-final.log`，已更新 `target/ltalk-1.0.0.jar`。使用本机回环、隔离数据与 Swing 组件验证。
 - 发送反馈和重连于 2026-11-16 执行 `powershell -NoProfile -File .\build.ps1 -o package`，**107 项通过，0 失败、错误或跳过**，约 1:25。Windows、JDK 25.0.4、Maven 3.9.9，以 release 17 编译。验证使用回环 TCP、临时数据与 Swing 组件。构建产物为 `target/ltalk-1.0.0.jar`，本机日志为 `.tools/chat-experience-final.log`。
 - 此前功能提交包括 `74aa291` 改密、`d629d5e` 高清头像、`c4840f3` 资料同步、`984cb5b` 消息组头像裁切。各阶段的结果与历史人工反馈见 [测试报告](test-report.md)。
-- 当前 v7 的多设备资料同步和撤回、云端旧群换号、独立 JDK 17 自动化回归、各档 DPI、其他客户端系统和长时间负载仍待验收。早期宿主机＋虚拟机的局域网反馈保持原版本归属。
+- 当前 v7 的多设备资料同步、独立 JDK 17 自动化回归、各档 DPI、其他客户端系统和长时间负载仍待专项验收。早期宿主机与虚拟机的局域网反馈见对应版本的测试记录。
 - 私聊消息和双方可见记录在同一事务提交。按会话翻页和定位使用 SQLite 索引，关键词搜索仍可能扫描较长范围。停服后备份包含 `ltalk.db`、存在的 SQLite 日志和 `attachments/` 的完整目录。附件随历史保留，默认总配额 1 GiB。改密、资料、历史删除、社交操作或上传确认超时可能已生效，可刷新或重登核对。
 - 云部署或多设备复测时同步更新两端 JAR，复测昵称查找、图片和文件的发送确认，以及独立群成员名单与会话分类。首屏历史、离线留言、群历史权限、首条未读与引用定位继续沿用部署手册中的回归步骤。[部署手册](deployment.md#更新-jar-与复测)

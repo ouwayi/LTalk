@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | R-01 配置并启动 | CLI 端口/IP/连接上限，默认 9000/0.0.0.0/20 | ChatServerTest.occupiedPortAndShutdownAreObservable |
 | R-02 账号注册登录 | 昵称/用户名/密码，或随机用户名；密码验证后加入。用户名 strip 后 `[A-Za-z0-9_]{1,20}`；重名保留原会话；LOGIN_OK 最先返回 | duplicateLogin / concurrentSameName 测试 |
+| 启动页填写说明 | TLS 由用户选择，旁边常驻公网直连与局域网或 VPN 的说明。登录和注册显示用户名与密码填写规则，注册另有确认密码提示。可从「最近连接的服务器」重用地址和 TLS 选项 | ChatWindowTest、ThemeRenderingTest |
 | R-03 在线列表 | 上下线推送全量快照，版本递增，重连重置本地版本。公共聊天室分类显示公共会话与其他在线账号 | ChatServerTest、ChatWindowTest |
 | R-04 群聊 | 公共消息发给所有就绪账号，独立群消息只发给就绪的当前成员，均含发送者回显。公共归档可查登录前和离线期间的共享记录 | ChatServerTest、HistoryPersistenceTest、SocialIntegrationTest |
 | R-05 私聊 | 已有好友关系，或已获私聊许可且对方在线时允许发送。在线投递只涉及发送者和目标，离线好友从本人历史查阅 | ChatServerTest、SocialIntegrationTest |
@@ -59,7 +60,7 @@ stateDiagram-v2
 
 自动化测试用隔离数据目录和本机回环连接，通过第三方 Socket 的收包验证私聊隔离，并用 10 个客户端进行课程规模短负载测试。SQLite 回归验证空库初始化、事务失败回滚、按本人权限读取，以及用同一目录重启后恢复账号和聊天历史。
 
-用户报告的 SQLite 局域网试用和双设备公网基本试用对应 `f89dc23`（v6）。当前 v7 的验证来源为本机回归。心跳前的宿主机与虚拟机人工测试、后续的单向丢包自动化和虚拟机断网反馈按各自版本记录。[测试报告](test-report.md)
+当前 v7 的逐项验证来自本机回归。用户报告本轮云端试用暂未发现问题，具体功能和设备范围待补记。早期 SQLite 局域网试用与双设备公网基本试用对应 `f89dc23`（v6）。[新版云端试用](test-report.md#新版云端试用) · [旧版双设备验证](test-report.md#sqlite-云端部署与双设备验证)
 
 ## 账号与导出验收（2026-10-29，历史阶段）
 

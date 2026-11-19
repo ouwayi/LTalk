@@ -54,7 +54,7 @@ java -jar target/ltalk-1.0.0.jar 9000 0.0.0.0 20
 
 在项目根目录运行上面的短命令，服务端会打开 `data-sqlite/ltalk.db`，首次启动时自动创建。如果早期 SQLite 版本已在 `data/` 建库，且 `data-sqlite/` 中还没有数据库，服务端会继续使用 `data/ltalk.db`。从文件版切换时在新库重新注册。
 
-已有 SQLite 版升级时，先停服备份整个数据目录，再同步更新客户端和服务端 JAR。服务端首次启动会为已有独立群组换发 10 位数字群号，并保留其成员、请求、历史和权限。[更新 JAR 与复测](docs/deployment.md#更新-jar-与复测)
+已有 SQLite 版升级时，先停服备份整个数据目录和旧 JAR，再同步更新客户端和服务端。SQLite 表结构从 v1 升到 v2 时，服务端首次启动会为已有独立群组换发 10 位数字群号，并保留其成员、请求、历史和权限。[更新 JAR 与复测](docs/deployment.md#更新-jar-与复测)
 
 要使用其他目录，在 `-jar` 前传入 `-Dltalk.dataDir`。含依赖 JAR 已为 SQLite 驱动声明 Java 原生库访问权限，常规启动使用上面的短命令即可。
 
@@ -175,7 +175,7 @@ java "-Dltalk.discovery.enabled=false" -jar target/ltalk-1.0.0.jar
 
 ## 测试
 
-功能基线 `8bc1f94` 于 2026-11-18 完成离线 `build.ps1 -o package`，**152 项通过，0 失败、错误或跳过**。新增验证覆盖转让管理员时的多页名单、用户名筛选、离线接任和退群刷新。已记录的 Oracle Cloud 双设备公网基本试用对应较早的 `f89dc23`（v6）。当前 v7 以本机回归为验证依据。[当前测试报告](docs/test-report.md#近期桌面交互回归) · [云端反馈](docs/test-report.md#sqlite-云端部署与双设备验证)
+功能基线 `2b69ce1` 于 2026-11-19 完成离线 `build.ps1 -o package`，**152 项通过，0 失败、错误或跳过**。最近一次变更的回归覆盖 TLS 与账号填写说明、最近连接列表和窄屏注册。用户报告本轮云服务器试用暂未发现问题，具体功能和设备范围待补记。[当前测试报告](docs/test-report.md#近期桌面交互回归) · [新版云端试用](docs/test-report.md#新版云端试用)
 
 运行完整测试需允许本机回环 TCP，并提供图形桌面环境。平时回归可使用 `build.ps1 test` 或 `mvn test`。
 
@@ -211,6 +211,7 @@ docs/                   需求、协议、设计、测试与演示
 - [架构、线程与关键设计](docs/design.md)
 - [测试结果、证据与待验收项](docs/test-report.md)
 - [课程报告与演示脚本](docs/course-report.md)
+- [Java 多人聊天室开发与验证技能](.agents/skills/java-chatroom-engineering/SKILL.md)
 - [桌面 UI 设计、改动清单与扩展接入位置](docs/ui-design.md)
 
 ## 常见问题与边界

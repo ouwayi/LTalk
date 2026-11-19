@@ -46,11 +46,9 @@ ClientSession 用 AtomicBoolean 保证清理一次。取消登录期限，关闭
 
 `common/HeartbeatSettings` 保存本端间隔与响应期限，可从 JVM 系统属性读取，已有构造入口保留，另提供显式配置构造入口供测试/嵌入使用。`common/Heartbeat` 每连接持有独立单线程调度器，只维护一个待响应编号、相对时间期限及下一轮探测；只有匹配 PONG 才完成本轮并安排下一轮。PING/PONG 在网络层消费，沿原回调执行器传播的只有连接状态变化，不接触 Swing、ConversationStore 或聊天路由。
 
-客户端心跳写入共用原有 64 项后台发送队列；服务端每会话增加一个后台心跳写执行器（8 项有界等待队列），写入仍经 ClientSession.send 的同一写锁。两端每连接都有独立 watchdog，定时线程不执行心跳帧写入，探测期限在入队前开始；因此同连接读线程卡在不完整帧、写线程或写锁等待时仍能关闭 Socket。队列拒绝同样关闭该连接，避免悄悄丢失控制帧。
+客户端心跳复用 64 项后台发送队列。服务端通过 `ChatServer.deliver` 将心跳帧交给本连接的 `SessionOutput`，与聊天事件共用有界 FIFO 和写线程。心跳定时器只负责计时和提交，探测期限从入队前开始。读取未完成的帧、发送积压或写阻塞时，定时器仍可触发关闭。
 
-心跳超时沿用幂等关闭，取消定时任务并停止心跳写执行器；先关闭 Socket 打断该连接的阻塞读写，再释放名称/名额并推列表。关闭后的 monitor 无法重新启动，旧 Connection 的定时回调仅引用自身，不能关闭重连 Socket。服务端停止时有界等待所收集会话的心跳线程退出。每个已登录服务端会话最多增加两个线程，桌面客户端每连接增加一个 watchdog，适用既定课程规模；不是大规模连接优化方案。
-
-服务端心跳与业务共用逐连接发送队列。每条连接的独立 watchdog 监测该连接的心跳，其他连接继续发消息。默认期限和非法与过期 PONG 处理见 [协议](protocol.md)。
+超时或队列拒绝时清理对应连接。幂等关闭取消计时任务，关闭发送队列和 Socket，再释放名称与名额。只有已就绪会话退出才推新在线列表。旧客户端连接的定时回调仅作用于原连接。服务端停止时有界等待心跳定时器与发送线程退出。默认期限和非法与过期 PONG 处理见 [协议](protocol.md)。
 
 在线列表由 ChatClient 按版本单调更新并在重连时重置。ConversationStore 在 EDT 保存分会话历史、草稿、未读及社交状态。已获许可的陌生人离线后保留会话与草稿，重新上线后重选会话。好友离线时允许归档留言。
 
@@ -88,7 +86,7 @@ ArchiveView 在同一个读事务中校验 UUID 锚点并查询页面。会话�
 
 ChatClient 新增 SERVER_CONNECTED（仅完成 HELLO）与 AUTHENTICATING；保留旧 connect 直登入口供现有调用。连接对象隔离所有状态/资料回调；注册成功只触发下一次 LOGIN，只有 LOGIN_OK 将会话置为 CONNECTED。认证响应超时关闭 Socket，错密码/重名则回到 SERVER_CONNECTED；握手后心跳先于身份启动，不赋予聊天、资料或导出权限。
 
-ChatWindow 通过 CardLayout 在 WelcomePanel 与 ResponsiveShell 之间切换；ConnectionPanel 只负责地址/端口，AuthenticationPanel 管理登录/注册表单，WelcomePanel 桌面分栏、窄屏纵向滚动。UserIdentityButton、ProfilePanel、ProfileAvatar 独立呈现本人资料，避免把会话展示元数据和路由用户名混用。显式退出清除 Store 身份及草稿；切换账号改由下节 ClientSessions 延迟交接，故障重连保留原有窗口历史策略。
+ChatWindow 通过 CardLayout 在 WelcomePanel 与 ResponsiveShell 之间切换。ConnectionPanel 管理服务器地址、端口、TLS 和服务器选择，AuthenticationPanel 管理登录与注册表单。WelcomePanel 桌面分栏、窄屏纵向滚动。UserIdentityButton、ProfilePanel、ProfileAvatar 独立呈现本人资料，避免把会话展示元数据和路由用户名混用。显式退出清除 Store 身份及草稿。切换账号由 ClientSessions 延迟交接，故障重连按原有窗口历史策略恢复。
 
 本人资料修改先提交数据库事务，再更新内存账号。AvatarImporter 在 SwingWorker 内限制原图大小和像素，并按原图短边选择 256 或 512 像素方形输出，AvatarData 再校验尺寸、格式和长度。展示资料另行同步，注册时间通过本人资料响应提供。改密请求验证当前密码，生成新盐及散列后提交，原会话继续使用。改密和资料响应各自计时，客户端会忽略对应的迟到回执。
 
