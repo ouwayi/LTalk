@@ -11,7 +11,7 @@ public final class ConnectionPanel extends ChatTheme.RoundedPanel {
     public final JButton connect = ChatTheme.primary("连接服务器");
     public final JButton disconnect = ChatTheme.pill("断开连接");
     public final JButton discover = ChatTheme.pill("查找局域网服务器");
-    public final JButton recent = ChatTheme.pill("最近服务器");
+    public final JButton recent = ChatTheme.pill("最近连接的服务器");
     public final JCheckBox tls = new JCheckBox("使用 TLS 加密连接");
     public final JLabel status = ChatTheme.label("尚未连接服务器", 12, ChatTheme.MUTED, false);
     public final JComboBox<ServerChoice> choices = new JComboBox<>();
@@ -39,7 +39,11 @@ public final class ConnectionPanel extends ChatTheme.RoundedPanel {
         addRow(ChatTheme.label("连接设置", 21, ChatTheme.INK, true), c);
         addRow(ChatTheme.label("服务端 IP 或主机名", 12, ChatTheme.MUTED, false), c); addRow(this.host, c);
         addRow(ChatTheme.label("端口", 12, ChatTheme.MUTED, false), c); addRow(this.port, c);
-        addRow(tls, c);
+        JPanel tlsRow = new JPanel(new BorderLayout(0, 4));
+        tlsRow.setOpaque(false);
+        tlsRow.add(tls, BorderLayout.NORTH);
+        tlsRow.add(ChatTheme.formHint(tls, "公网直连请勾选。", "局域网或 VPN 请按服务端设置选择。"));
+        addRow(tlsRow, c);
         addRow(connect, c); addRow(disconnect, c); addRow(discover, c); addRow(recent, c);
         ChatTheme.surface(choices); ChatTheme.foreground(choices, ThemePalette.Role.TEXT);
         choices.setPrototypeDisplayValue(new ServerChoice("局域网服务器", "192.168.0.1", 9000, false));

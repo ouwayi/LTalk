@@ -25,19 +25,27 @@ public final class AuthenticationPanel extends JPanel {
         ChatTheme.foreground(random, ThemePalette.Role.TEXT);
         submit.setName("connect"); switchMode.setName("register"); feedback.setName("authFeedback");
         GridBagConstraints c = new GridBagConstraints(); c.gridx = 0; c.weightx = 1; c.fill = GridBagConstraints.HORIZONTAL;
-        addRow(heading, c); addRow(field("用户名", user), c);
+        addRow(heading, c);
+        addRow(field("用户名", user, user, "1～20 位英文字母、数字或下划线。", "区分大小写。"), c);
         randomRow = new JPanel(new BorderLayout()); randomRow.setOpaque(false); randomRow.add(random); addRow(randomRow, c);
-        nicknameRow = field("昵称", nickname); addRow(nicknameRow, c);
-        addRow(field("密码", passwordInput), c); confirmationRow = field("确认密码", confirmationInput); addRow(confirmationRow, c);
+        nicknameRow = field("昵称", nickname, nickname); addRow(nicknameRow, c);
+        addRow(field("密码", passwordInput, password, "6～128 个字符，可含空格和符号。"), c);
+        confirmationRow = field("确认密码", confirmationInput, confirmation, "请再次输入相同的密码。");
+        addRow(confirmationRow, c);
         addRow(submit, c);
         JPanel links = new JPanel(new FlowLayout(FlowLayout.CENTER, 5, 0)); links.setOpaque(false);
         links.add(switchHint); links.add(switchMode); addRow(links, c); addRow(feedback, c);
         switchMode.addActionListener(e -> setRegistering(!registering)); random.addActionListener(e -> update());
         setRegistering(false);
     }
-    private static JPanel field(String title, JComponent input) {
+    private static JPanel field(String title, JComponent input, JTextField control, String... hint) {
         JPanel row = new JPanel(new BorderLayout(0, 6)); row.setOpaque(false);
-        row.add(ChatTheme.label(title, 12, ChatTheme.MUTED, false), BorderLayout.NORTH); row.add(input); return row;
+        JLabel label = ChatTheme.label(title, 12, ChatTheme.MUTED, false);
+        label.setLabelFor(control);
+        row.add(label, BorderLayout.NORTH);
+        row.add(input);
+        if (hint.length > 0) row.add(ChatTheme.formHint(control, hint), BorderLayout.SOUTH);
+        return row;
     }
     private void addRow(Component component, GridBagConstraints c) { c.gridy++; c.insets = new Insets(6, 0, 6, 0); add(component, c); }
     public boolean registering() { return registering; }

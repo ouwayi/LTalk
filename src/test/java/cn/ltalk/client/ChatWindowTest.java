@@ -209,10 +209,12 @@ class ChatWindowTest {
             awaitEdt(() -> label(reopened, "serverStatus").getText().contains("未找到"));
             onEdt(() -> {
                 assertTrue(button(reopened, "connectServer").isEnabled());
+                assertEquals("最近连接的服务器", button(reopened, "recentServers").getText());
                 button(reopened, "recentServers").doClick();
             });
             awaitEdt(() -> serverChoices(reopened).getItemCount() == 1);
             onEdt(() -> {
+                assertEquals("最近连接的服务器", serverChoices(reopened).getAccessibleContext().getAccessibleName());
                 serverChoices(reopened).setSelectedIndex(0);
                 assertEquals(Integer.toString(server.port()), text(reopened, "port").getText());
                 assertFalse(button(reopened, "connect").isEnabled());
@@ -687,6 +689,12 @@ class ChatWindowTest {
                 assertFalse(button(window, "infoExport").isEnabled());
                 button(window, "closeConversationInfo").doClick();
                 render(window, 1000, 760, "welcome-login.png");
+                assertEquals("", text(window, "userId").getText());
+                assertNull(text(window, "userId").getClientProperty("placeholder"));
+                assertFalse(find(window, "passwordConfirmationHint").getParent().isVisible());
+                assertFormHint(window, "useTls", "公网直连请勾选。", "局域网或 VPN 请按服务端设置选择。");
+                assertFormHint(window, "userId", "1～20 位英文字母、数字或下划线。", "区分大小写。");
+                assertFormHint(window, "password", "6～128 个字符，可含空格和符号。");
             });
             ChatWindow window = ref.get(); awaitEdt(() -> button(window, "connect").isEnabled());
             onEdt(() -> {
@@ -696,11 +704,15 @@ class ChatWindowTest {
                 text(window, "password").setText("pass!12"); text(window, "passwordConfirmation").setText("wrong!12");
                 button(window, "connect").doClick(); assertTrue(label(window, "authFeedback").getText().contains("不一致"));
                 text(window, "passwordConfirmation").setText("pass!12");
-                render(window, 1000, 760, "welcome-register.png"); render(window, 420, 700, "welcome-narrow.png");
+                render(window, 1000, 760, "welcome-register.png"); render(window, 344, 700, "welcome-narrow.png");
+                assertFormHint(window, "useTls", "公网直连请勾选。", "局域网或 VPN 请按服务端设置选择。");
+                assertFormHint(window, "userId", "1～20 位英文字母、数字或下划线。", "区分大小写。");
+                assertFormHint(window, "password", "6～128 个字符，可含空格和符号。");
+                assertFormHint(window, "passwordConfirmation", "请再次输入相同的密码。");
                 JScrollPane scroll = (JScrollPane) find(window, "welcomeScroll");
                 assertTrue(scroll.getViewport().getViewSize().height > scroll.getViewport().getExtentSize().height);
                 scroll.getVerticalScrollBar().setValue(scroll.getVerticalScrollBar().getMaximum());
-                render(window, 420, 700, "welcome-narrow-bottom.png");
+                render(window, 344, 700, "welcome-narrow-bottom.png");
                 assertTrue(scroll.getViewport().getViewRect().intersects(SwingUtilities.convertRectangle(button(window, "connect").getParent(), button(window, "connect").getBounds(), (Container) scroll.getViewport().getView())));
                 window.applyAppearance(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK), false);
                 assertEquals(ThemePalette.of(AppearanceSettings.defaults().withMode(AppearanceSettings.Mode.DARK)).text(), find(window, "randomUsername").getForeground());
@@ -1624,6 +1636,18 @@ class ChatWindowTest {
     private static JTextComponent area(ChatWindow window, String name) { return (JTextComponent) find(window, name); }
     private static JLabel label(ChatWindow window, String name) { return (JLabel) find(window, name); }
     @SuppressWarnings("unchecked") private static JList<ConversationStore.Summary> list(ChatWindow window) { return (JList<ConversationStore.Summary>) find(window, "conversations"); }
+
+    private static void assertFormHint(ChatWindow window, String controlName, String... lines) {
+        JPanel hint = (JPanel) find(window, controlName + "Hint");
+        assertTrue(hint.isVisible() && hint.getParent().isVisible(), controlName);
+        assertEquals(lines.length, hint.getComponentCount());
+        for (int i = 0; i < lines.length; i++) {
+            JLabel line = (JLabel) hint.getComponent(i);
+            assertEquals(lines[i], line.getText());
+            assertTrue(hint.getWidth() >= line.getPreferredSize().width, line.getText());
+            assertTrue(line.getHeight() >= line.getPreferredSize().height, line.getText());
+        }
+    }
 
     private static void renderComponentPreview(ChatWindow window) {
         render(window, 960, 680, "chat-window.png");

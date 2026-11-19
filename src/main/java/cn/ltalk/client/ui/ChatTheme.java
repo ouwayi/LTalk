@@ -77,6 +77,19 @@ public final class ChatTheme {
         if (role(color) != null) label.putClientProperty(FOREGROUND, role(color));
         return label;
     }
+    static JPanel formHint(JComponent control, String... lines) {
+        JPanel hint = new JPanel();
+        hint.setLayout(new BoxLayout(hint, BoxLayout.PAGE_AXIS));
+        hint.setOpaque(false);
+        hint.setName(control.getName() + "Hint");
+        for (String line : lines) {
+            JLabel text = label(line, 12, INK, false);
+            text.setAlignmentX(Component.LEFT_ALIGNMENT);
+            hint.add(text);
+        }
+        control.getAccessibleContext().setAccessibleDescription(String.join(" ", lines));
+        return hint;
+    }
     public static JButton iconButton(LineIcon.Kind kind, String tooltip) {
         JButton button = new JButton(new LineIcon(kind, MUTED, 22));
         button.setToolTipText(tooltip); button.getAccessibleContext().setAccessibleName(tooltip);

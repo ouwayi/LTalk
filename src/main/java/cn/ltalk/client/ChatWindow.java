@@ -167,7 +167,6 @@ public final class ChatWindow extends JFrame implements ClientSessions.Listener 
         chatSearch.setName("chatSearch"); more.setName("chatMore");
         buildSidebar();
         search.putClientProperty("placeholder", "搜索");
-        authentication.user.putClientProperty("placeholder", "例如 alice");
 
         header = new ChatTheme.RoundedPanel(new BorderLayout(8, 0), 24, Color.WHITE, true);
         header.setBorder(new EmptyBorder(10, 10, 10, 12));

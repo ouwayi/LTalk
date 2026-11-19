@@ -48,7 +48,7 @@ final class ServerSelection {
     void startDiscovery() {
         if (!available.getAsBoolean() || scan != null) return;
         if (panel.tls.isSelected()) {
-            panel.feedback("TLS 模式请填写服务器地址，或选择最近服务器");
+            panel.feedback("请填写地址，或选择最近连接的服务器");
             return;
         }
         revision++;
@@ -122,10 +122,10 @@ final class ServerSelection {
             SwingUtilities.invokeLater(() -> {
                 if (request != revision || !available.getAsBoolean()) return;
                 if (addresses.isEmpty()) {
-                    panel.feedback("暂无最近连接过的服务器");
+                    panel.feedback("暂无最近连接的服务器");
                 } else {
-                    panel.showChoices("最近连接过的服务器", addresses.stream().map(address -> choice("", address)).toList());
-                    panel.feedback("请选择最近连接过的服务器");
+                    panel.showChoices("最近连接的服务器", addresses.stream().map(address -> choice("", address)).toList());
+                    panel.feedback("请选择最近连接的服务器");
                 }
             });
         });
