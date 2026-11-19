@@ -1,10 +1,10 @@
 # LTalk 当前状态与开发交接
 
-更新于 **2026-11-19（Asia/Shanghai）**。工作目录为 `D:\Agent\AllProjects\LTalk`，核对时分支为 `master`，未配置远端。使用 **Java 17 目标字节码、Swing、Maven、SQLite 表结构 v2、TCP 协议 v7 和 UDP 发现 v1**，提供可选 TLS 公网模式。接续时先核对 Git 状态和提交。
+更新于 **2026-11-19（Asia/Shanghai）**。工作目录为 `D:\Agent\AllProjects\LTalk`，核对时分支为 `master`，跟踪 `origin/master`。使用 **Java 17 目标字节码、Swing、Maven、SQLite 表结构 v2、TCP 协议 v7 和 UDP 发现 v1**，提供可选 TLS 公网模式。接续时先核对 Git 状态和提交。
 
 最近功能提交为 `2b69ce1`（阶段 51，启动页连接与账号填写说明），本机完整离线回归 **152 项通过**。近期功能包括 60 秒撤回、10 位群号、信息卡片复制群号和用户名，以及从完整群成员名单筛选和选择新管理员。完整构建使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。[近期桌面交互回归](test-report.md#近期桌面交互回归)
 
-课程交付包含可独立分享的 [Java 多人聊天室开发与验证技能](../.agents/skills/java-chatroom-engineering/SKILL.md)。阶段 50 将它移入 Codex 的项目技能目录。开发流程可用于其他 Java 聊天室，随附的 LTalk 案例提供真实类名、通信约束和评测入口。
+课程交付包含可独立分享的 [Java 多人聊天室开发与验证技能](../.agents/skills/java-chatroom-engineering/SKILL.md)。阶段 53 根据课程要求与开发对话补充了 [规格和评测模板](../.agents/skills/java-chatroom-engineering/references/evaluation-playbook.md) 及 [15 个 LTalk 案例](../.agents/skills/java-chatroom-engineering/references/ltalk-example.md)。仓库内技能与独立副本均通过校验。本轮重新执行本机完整离线回归，152 项通过，云端与真实高 DPI 仍按原验证范围记录。详见 [阶段 53 开发日志](DEVLOG.md#阶段-53-充实课程规格驱动开发技能2026-11-19本轮记录)。
 
 ## 从哪里接手
 
