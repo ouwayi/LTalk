@@ -46,7 +46,6 @@
 | README.md | 更新：新界面的操作、快捷键、窄屏导航和本说明入口 |
 | docs/design.md | 更新：界面状态与组件分工 |
 | docs/test-report.md | 更新：新增 UI 回归与真实窗口验收记录，保留先前验收结果 |
-| docs/course-report.md | 更新：当前测试数与真实窗口 UI 验证结论 |
 | docs/ui-design.md | 新增：本说明 |
 
 ## 交互规则
@@ -107,7 +106,7 @@ AppearanceSettings 分别保存浅色和深色背景色，模式切换不覆盖�
 
 ## 运行与验收
 
-按 README 构建，在项目根目录执行 `java -jar target/ltalk-1.0.0.jar`。Windows 可双击构建产物中的 `start-client.cmd`。首次连接新库时先完成注册。登录后加载会话摘要和当前会话最近一页，切换会话后按需加载其本人可见历史。[启动与操作](../README.md#启动与操作)
+按 [README 快速开始](../README.md#快速开始)在隔离数据目录中启动服务端和客户端，首次连接新库时先完成注册。登录后加载会话摘要和当前会话最近一页，切换会话后按需加载本人可见历史。[用户指南](user-guide.md)
 
 自动化生成的界面预览位于 `target/ui-preview/ui-desktop.png`、`ui-narrow-chat.png`、`ui-narrow-list.png`，它们使用测试会话数据，不提交 Git。真实 Windows 窗口的 computer-use 验收过程与最终测试数见 [测试报告](test-report.md)。
 

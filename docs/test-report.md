@@ -1,5 +1,32 @@
 # 测试报告与验收记录
 
+## 如何运行测试
+
+在项目根目录执行 `mvn test`，或在 Windows PowerShell 执行 `powershell -NoProfile -File .\build.ps1 test`。首次准备依赖需要联网，已有缓存可将 `-o` 放在 `test` 前。完整回归需允许本机回环 TCP，并提供 Swing 图形桌面环境。JUnit 报告写入 `target/surefire-reports/`，后续运行可能覆盖已有报告。
+
+常规回归包含 10 个客户端的短负载测试。单独复跑 10 分钟观察可执行以下任一命令。
+
+```powershell
+powershell -NoProfile -File .\build.ps1 '-Dtest=LoadTest' '-Dltalk.soak.seconds=600' test
+```
+
+```sh
+mvn -Dtest=LoadTest -Dltalk.soak.seconds=600 test
+```
+
+测试使用本机回环和隔离数据。单机 TLS 百人场景见[部署手册的本机压测](deployment.md#本机压测)。跨设备和云端证据见下文相应阶段。
+
+## 桌面手动复验
+
+使用 [README 快速开始](../README.md#快速开始)的独立演示数据目录，在三个客户端窗口分别登录 `alice`、`bob`、`carol`。执行结果按实际版本与环境另行记录。
+
+| 场景 | 操作与通过条件 |
+| --- | --- |
+| 公共消息与私聊隔离 | 先发一条含中文、Emoji 和换行的公共消息，三个窗口各收到一次。Alice 与 Bob 成为好友后互发私聊，Bob 对其中一条引用回复。Carol 保持在线并能收到之后的公共消息，私聊内容只出现在双方窗口。Alice 导出该私聊的 JSON，核对双方私聊及引用均在其中，范围限于当前会话。 |
+| 重名与本人恢复 | 在额外窗口用在线的 `alice` 登录，确认该次登录被拒绝，原窗口可继续聊天。在服务端终端按 Ctrl+C，观察断线提示，再用同一条命令启动。客户端手动重连并登录，核对公共消息及有权读取的私聊历史。 |
+
+复验静默失联时，可在项目根目录运行 `mvn "-Dtest=HeartbeatIntegrationTest" test`。测试用独立的回环代理保持 TCP 连接打开并停止一个方向的数据传输，核对心跳超时、连接清理和重连。配置与超时容差见[心跳阶段](#x1-心跳阶段2026-10-27)。
+
 ## 近期桌面交互回归
 
 最近功能基线 `2b69ce1` 于 2026-11-19 在 Windows、JDK 25.0.4 和 Maven 3.9.9 下以 Java 17 为目标编译。完整离线 `build.ps1 -o package` 用时 2:27，**152 项通过，0 失败、错误或跳过**，其中 19 项为 `ChatWindowTest`。验证使用本机 Swing 和回环服务。

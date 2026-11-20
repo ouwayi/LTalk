@@ -1,22 +1,28 @@
 # LTalk 当前状态与开发交接
 
-更新于 **2026-11-19（Asia/Shanghai）**。工作目录为 `D:\Agent\AllProjects\LTalk`，核对时分支为 `master`，跟踪 `origin/master`。使用 **Java 17 目标字节码、Swing、Maven、SQLite 表结构 v2、TCP 协议 v7 和 UDP 发现 v1**，提供可选 TLS 公网模式。接续时先核对 Git 状态和提交。
+更新于 **2026-11-20（Asia/Shanghai）**。核对时分支为 `master`，跟踪 `origin/master`。使用 **Java 17 目标字节码、Swing、Maven、SQLite 表结构 v2、TCP 协议 v7 和 UDP 发现 v1**，提供可选 TLS 公网模式。接续时在仓库根目录核对 Git 状态和提交。
 
 最近功能提交为 `2b69ce1`（阶段 51，启动页连接与账号填写说明），本机完整离线回归 **152 项通过**。近期功能包括 60 秒撤回、10 位群号、信息卡片复制群号和用户名，以及从完整群成员名单筛选和选择新管理员。完整构建使用 `powershell -NoProfile -File .\build.ps1 -o package`，产物为 `target/ltalk-1.0.0.jar`。[近期桌面交互回归](test-report.md#近期桌面交互回归)
 
-课程交付包含可独立分享的 [Java 多人聊天室开发与验证技能](../.agents/skills/java-chatroom-engineering/SKILL.md)。阶段 53 根据课程要求与开发对话补充了 [规格和评测模板](../.agents/skills/java-chatroom-engineering/references/evaluation-playbook.md) 及 [15 个 LTalk 案例](../.agents/skills/java-chatroom-engineering/references/ltalk-example.md)。仓库内技能与独立副本均通过校验。本轮重新执行本机完整离线回归，152 项通过，云端与真实高 DPI 仍按原验证范围记录。详见 [阶段 53 开发日志](DEVLOG.md#阶段-53-充实课程规格驱动开发技能2026-11-19本轮记录)。
+课程交付包含可独立分享的 [Java 多人聊天室开发与验证技能](../.agents/skills/java-chatroom-engineering/SKILL.md)。阶段 53 根据课程要求与开发对话补充了 [规格和评测模板](../.agents/skills/java-chatroom-engineering/references/evaluation-playbook.md) 及 [15 个 LTalk 案例](../.agents/skills/java-chatroom-engineering/references/ltalk-example.md)。仓库内技能与独立副本均通过校验。阶段 53 的本机完整离线回归为 152 项通过，云端与真实高 DPI 仍按原验证范围记录。详见 [阶段 53 开发日志](DEVLOG.md#阶段-53-充实课程规格驱动开发技能2026-11-19本轮记录)。
 
 ## 从哪里接手
 
-1. 阅读 [AGENTS.md](../AGENTS.md) 和本页，再看 [README](../README.md) 的构建与操作。用 `git status --short --branch` 和 `git log -5 --oneline` 核对分支、工作区和功能基线。
+1. 阅读 [AGENTS.md](../AGENTS.md) 和本页，再看 [README 快速开始](../README.md#快速开始)。实际操作见[用户指南](user-guide.md)。用 `git status --short --branch` 和 `git log -5 --oneline` 核对分支、工作区和功能基线。
 2. 改功能前按需查 [需求与用户流程](requirements.md)、[架构](design.md)、[界面设计](ui-design.md) 和 [协议](protocol.md)，再核对对应代码与测试。
-3. [测试报告](test-report.md) 以日期和阶段区分证据，[开发日志](DEVLOG.md) 保留决策与变更详情。根目录的[任务拆解](../局域网聊天项目任务拆解.md)和[早期草稿](devlog-early-draft.md)属于历史资料。
-4. `target/`、`.tools/`、`data/` 和 `data-sqlite/` 为本机构建、证据或数据目录。验证使用独立临时目录。在项目根目录运行 `java -jar target/ltalk-1.0.0.jar` 默认使用 `data-sqlite/`；有早期 SQLite 库时按兼容规则找到 `data/ltalk.db`。显式 `-Dltalk.dataDir` 优先。[启动说明](../README.md#启动与操作)
+3. [测试报告](test-report.md) 以日期和阶段区分证据，[开发日志](DEVLOG.md) 保留决策与变更详情。[任务拆解](局域网聊天项目任务拆解.md)记录最初的课程项目范围和验收计划。
+4. `target/`、`.tools/`、`data/` 和 `data-sqlite/` 为本机构建、证据或数据目录。README 的同机演示使用 `target/demo-data/`，其他验证也使用隔离目录。[本地启动参数与默认数据目录](deployment.md#数据目录与运行参数)
 5. 选择下一项开发工作时，查阅 [后续开发路线图](ROADMAP.md)。下一项功能由用户指定。云端复测按[更新 JAR 与复测](deployment.md#更新-jar-与复测)操作。
+
+阶段 54 整理了文档目录和路径示例。早期草稿的来源可从 [开发日志](DEVLOG.md#记录口径与来源) 查到。部署示例使用 SSH 登录账号的主目录接收上传文件，systemd 仍使用固定的安装、数据和证书路径。
+
+阶段 55 将 README 改为项目入口，客户端操作移至[用户指南](user-guide.md)，本地运行、局域网和日志参数归入[运行与部署](deployment.md#本地与局域网运行)，复验命令由[测试报告](test-report.md#如何运行测试)维护。
+
+阶段 56 将演示摘要并入 README 的「快速开始」。三窗口私聊隔离、重名和停服重连的通过条件见[桌面手动复验](test-report.md#桌面手动复验)，静默失联另有本机心跳专项。
 
 新对话可以直接发送：
 
-> 请继续开发 `D:\Agent\AllProjects\LTalk`。按 `AGENTS.md` 先读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。最近功能提交为 `2b69ce1`，本机完整回归 152 项通过。当前协议为 v7，SQLite 表结构为 v2。用户反馈本轮云端试用暂未发现问题，逐项结果待补记。请按我接下来指定的功能继续。
+> 请在当前 LTalk 仓库继续开发。按 `AGENTS.md` 先读 `docs/STATUS.md`，再读 `README.md`、`docs/DEVLOG.md` 和 `docs/ROADMAP.md` 的相关部分，并核对 Git 状态。最近功能提交为 `2b69ce1`，本机完整回归 152 项通过。当前协议为 v7，SQLite 表结构为 v2。用户反馈新版云端试用暂未发现问题，逐项结果待补记。请按我接下来指定的功能继续。
 
 ## 当前功能
 

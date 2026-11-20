@@ -1,10 +1,39 @@
-# LTalk 单机云部署
+# LTalk 运行与单机云部署
 
-同一台服务端保管账号和历史。连接同一台服务端的用户共享公共聊天室。本手册使用 Linux、Java 17+、systemd 247+ 和项目打包的 JAR，SQLite 随 JAR 提供。根据服务器现有版本选择相应步骤。[更新 SQLite 版 JAR](#更新-jar-与复测) · [从文件版切换到 SQLite](#从文件版切换到-sqlite)
+同一台服务端保管账号和历史，连接到它的用户共享公共聊天室。先按 [README 快速开始](../README.md#快速开始) 构建含依赖的 JAR，或准备现有的同版 JAR。桌面操作见[用户指南](user-guide.md)。
+
+部署和分发使用含运行依赖的 `target/ltalk-1.0.0.jar`。`target/original-ltalk-1.0.0.jar` 是打包时的中间产物。
+
+## 本地与局域网运行
+
+在项目根目录运行，服务端默认监听所有网卡的 TCP 9000，最多接收 20 个连接（含未登录连接）。
+
+```sh
+java -jar target/ltalk-1.0.0.jar
+```
+
+按 Ctrl+C 停止。可在 JAR 文件名后依次指定端口、监听地址和连接上限，例如 `java -jar target/ltalk-1.0.0.jar 9002 0.0.0.0 20`。若端口已被占用，停止对应实例或改用其他端口，并在客户端填同一端口。
+
+同一局域网的客户端可填服务端设备的 IPv4 地址和实际 TCP 端口。Windows 服务端可用 `ipconfig` 查地址；客户端可用 `Test-NetConnection -ComputerName <服务端地址> -Port 9000` 排查连通性，将占位符替换为实际地址。检查设备间能否互访、入站防火墙与无线客户端隔离。局域网模式使用明文 TCP，适用于可信局域网或受 VPN 保护的连接；公网直连使用[下文的 TLS 模式](#启动公网-tls-服务)。
+
+IPv4 自动发现默认使用 UDP 9001，聊天仍走 TCP。允许相关入站端口后，客户端可发现名称和实际聊天地址。不同子网、广播受限或发现端口被占用时可手动连接。服务端可在 `-jar` 前加 `-Dltalk.discovery.name=名称` 设置服务名，或加 `-Dltalk.discovery.enabled=false` 关闭发现。更换发现端口时，两端均用 JVM 参数 `-Dltalk.discovery.port=端口`。[发现协议](protocol.md#ipv4-局域网发现)
+
+Windows 可将 `target/start-client.cmd` 和 `target/ltalk-1.0.0.jar` 一并复制到其他装有 Java 17+ 的设备。启动器通过 `JAVA_HOME` 或 `PATH` 查找 `javaw.exe`；其他桌面系统可用 `java -cp ltalk-1.0.0.jar cn.ltalk.client.ChatWindow` 启动。服务端和客户端使用同版 JAR。
+
+### 数据目录与运行参数
+
+- 默认在当前工作目录创建或打开 `data-sqlite/ltalk.db`。如果该文件尚不存在且已有 `data/ltalk.db`，沿用早期 SQLite 目录。显式 `-Dltalk.dataDir=路径` 优先；路径可以相对于启动目录。文件版升级使用新的 SQLite 目录，旧数据另行保存。
+- 升级已有 SQLite 库前先停服，按[备份与恢复演练](#备份与恢复演练)备份完整目录与旧 JAR。SQLite 表结构 v1 升到 v2 时会为旧群换发群号并保留相关记录。一个数据目录由一个服务端实例独占，启动报占用时先检查并停止原实例。
+- 两端默认每轮间隔 10 秒探测，响应期限 20 秒。用 `-Dltalk.heartbeat.intervalMillis` 和 `-Dltalk.heartbeat.timeoutMillis` 分别配置正整数毫秒值，并将参数放在 `-jar` 或 `-cp` 前。静默失联后的检测时间还受队列、写入和调度影响。[心跳协议](protocol.md#心跳与失联期限)
+- 需要连接和路由调试日志时，在项目根目录运行 `java -Djava.util.logging.config.file=docs/logging.properties -jar target/ltalk-1.0.0.jar`。日志记录请求类型和路由错误，聊天正文留在归档内。
+
+## 云端部署前提
+
+以下云端步骤使用 Linux、Java 17+、systemd 247+ 和项目打包的 JAR，SQLite 随 JAR 提供。根据服务器现有版本选择相应步骤。[更新 SQLite 版 JAR](#更新-jar-与复测) · [从文件版切换到 SQLite](#从文件版切换到-sqlite)
 
 ## 首次准备
 
-在 Windows 构建项目，将 `target/ltalk-1.0.0.jar` 和 [ltalk.service](../deploy/ltalk.service) 上传到 Ubuntu 的 `/home/ubuntu/`。在 FinalShell 的终端逐行执行，长命令自动折行时按一次回车即可。若有报错，先处理该行再继续。
+在 Windows 构建项目，将 `target/ltalk-1.0.0.jar` 和 [ltalk.service](../deploy/ltalk.service) 上传到服务器上 SSH 登录账号的主目录（`~/`）。在 FinalShell 的终端逐行执行，长命令自动折行时按一次回车即可。若有报错，先处理该行再继续。
 
 ```bash
 sudo apt update
@@ -12,7 +41,7 @@ sudo apt install -y openjdk-17-jre-headless openssl
 sudo useradd --system --user-group --home-dir /var/lib/ltalk --shell /usr/sbin/nologin ltalk
 sudo install -d -m 0700 -o ltalk -g ltalk /var/lib/ltalk
 sudo install -d -m 0755 /opt/ltalk
-sudo install -m 0644 /home/ubuntu/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar
+sudo install -m 0644 "$HOME/ltalk-1.0.0.jar" /opt/ltalk/ltalk-1.0.0.jar
 ```
 
 SQLite 服务端首次启动会在数据目录创建 `ltalk.db`。已有 SQLite 账号和历史时，使用同一目录。换机器时先验证备份副本，再交给 `ltalk` 系统用户。文件版升级从空库开始。[备份与恢复演练](#备份与恢复演练) · [从文件版切换到 SQLite](#从文件版切换到-sqlite)
@@ -64,7 +93,7 @@ sudo mv -fT /etc/ltalk/server.p12.new /etc/ltalk/server.p12
 首次安装服务时执行以下命令。日志显示「LTalk TLS 已启动」后再开放聊天端口。
 
 ```bash
-sudo install -m 0644 /home/ubuntu/ltalk.service /etc/systemd/system/ltalk.service
+sudo install -m 0644 "$HOME/ltalk.service" /etc/systemd/system/ltalk.service
 sudo systemctl daemon-reload
 sudo systemctl start ltalk
 sudo journalctl -u ltalk -n 20 --no-pager
@@ -80,12 +109,12 @@ sudo journalctl -u ltalk -n 20 --no-pager
 
 同一版本复测时执行 `sudo systemctl start ltalk`，然后从第 2 步核对网络和证书。换版本时从第 1 步开始。
 
-应用协议为 v7，SQLite 表结构为 v2。换版时同时更换服务端和测试客户端 JAR。各版本沿用文件名 `ltalk-1.0.0.jar`，上传后可用本机 `Get-FileHash target/ltalk-1.0.0.jar -Algorithm SHA256` 对照云端 `sha256sum /home/ubuntu/ltalk-1.0.0.jar`，并记录对应提交。[新版云端试用](test-report.md#新版云端试用) · [旧版双设备验证](test-report.md#sqlite-云端部署与双设备验证)
+应用协议为 v7，SQLite 表结构为 v2。换版时同时更换服务端和测试客户端 JAR。各版本沿用文件名 `ltalk-1.0.0.jar`，上传后可用本机 `Get-FileHash target/ltalk-1.0.0.jar -Algorithm SHA256` 对照云端 `sha256sum "$HOME/ltalk-1.0.0.jar"`，并记录对应提交。[新版云端试用](test-report.md#新版云端试用) · [旧版双设备验证](test-report.md#sqlite-云端部署与双设备验证)
 
-1. Windows 构建新版并上传 `target/ltalk-1.0.0.jar` 到 `/home/ubuntu/`。用 `sudo systemctl cat ltalk` 核对 JAR 安装路径和数据目录，按实际路径执行。SQLite 表结构 v1 升到 v2 会在首次启动时自动更换旧群号，保留原群成员、请求和历史。以下命令要求上传的 JAR 与现有数据库均存在，每次停服备份完整数据和旧 JAR 后才安装新版。从文件版切换时走独立流程。[从文件版切换到 SQLite](#从文件版切换到-sqlite)
+1. Windows 构建新版并上传 `target/ltalk-1.0.0.jar` 到 SSH 登录账号的主目录（`~/`）。用 `sudo systemctl cat ltalk` 核对 JAR 安装路径和数据目录，按实际路径执行。SQLite 表结构 v1 升到 v2 会在首次启动时自动更换旧群号，保留原群成员、请求和历史。以下命令要求上传的 JAR 与现有数据库均存在，每次停服备份完整数据和旧 JAR 后才安装新版。从文件版切换时走独立流程。[从文件版切换到 SQLite](#从文件版切换到-sqlite)
 
    ```bash
-   test -s /home/ubuntu/ltalk-1.0.0.jar &&
+   test -s "$HOME/ltalk-1.0.0.jar" &&
    sudo test -s /var/lib/ltalk/ltalk.db &&
    sudo systemctl stop ltalk &&
    sudo install -d -m 0700 /var/backups/ltalk &&
@@ -94,7 +123,7 @@ sudo journalctl -u ltalk -n 20 --no-pager
    sudo tar -tzf "$ltalk_backup/data.tar.gz" >/dev/null &&
    sudo cp -p /opt/ltalk/ltalk-1.0.0.jar "$ltalk_backup/" &&
    printf '升级前备份 %s\n' "$ltalk_backup" &&
-   sudo install -m 0644 /home/ubuntu/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar &&
+   sudo install -m 0644 "$HOME/ltalk-1.0.0.jar" /opt/ltalk/ltalk-1.0.0.jar &&
    sudo systemctl start ltalk
    ```
 
@@ -137,18 +166,18 @@ sudo journalctl -u ltalk -n 20 --no-pager
 
 ## 从文件版切换到 SQLite
 
-1. 本地用新数据目录验证新版 JAR，然后用 FinalShell 将 JAR 上传到 `/home/ubuntu/ltalk-1.0.0.jar`。运行 `sudo systemctl --no-pager cat ltalk`，确认 `ExecStart` 的 JAR 路径是 `/opt/ltalk/ltalk-1.0.0.jar`，数据目录是 `/var/lib/ltalk`。如果服务路径不同，按实际配置调整命令。
+1. 本地用新数据目录验证新版 JAR，然后用 FinalShell 将 JAR 上传到登录账号的 `~/ltalk-1.0.0.jar`。运行 `sudo systemctl --no-pager cat ltalk`，确认 `ExecStart` 的 JAR 路径是 `/opt/ltalk/ltalk-1.0.0.jar`，数据目录是 `/var/lib/ltalk`。如果服务路径不同，按实际配置调整命令。
 2. 确认切换时间后执行以下命令。命令先保留旧 JAR 和原数据目录，再为现有服务创建空目录。如果已经存在 `/var/lib/ltalk/ltalk.db`，请走常规的 SQLite 版更新步骤。
 
    ```bash
-   test -s /home/ubuntu/ltalk-1.0.0.jar &&
+   test -s "$HOME/ltalk-1.0.0.jar" &&
    sudo test ! -e /var/lib/ltalk/ltalk.db &&
    sudo systemctl stop ltalk &&
    ltalk_backup=$(sudo mktemp -d /var/backups/ltalk-file.XXXXXX) &&
    sudo cp -p /opt/ltalk/ltalk-1.0.0.jar "$ltalk_backup/" &&
    sudo mv -T /var/lib/ltalk "$ltalk_backup/data" &&
    sudo install -d -m 0700 -o ltalk -g ltalk /var/lib/ltalk &&
-   sudo install -m 0644 /home/ubuntu/ltalk-1.0.0.jar /opt/ltalk/ltalk-1.0.0.jar &&
+   sudo install -m 0644 "$HOME/ltalk-1.0.0.jar" /opt/ltalk/ltalk-1.0.0.jar &&
    echo "旧版备份在 $ltalk_backup" &&
    sudo systemctl start ltalk
    ```
